@@ -388,11 +388,26 @@ async def get_content_by_app(target_date: Optional[str] = None):
     # 合并每个应用的内容为完整文本
     result = []
     for app_name, data in sorted(app_contents.items(), key=lambda x: -x[1]["total_chars"]):
-        # 合并所有 session 的内容
+        # 合并所有 session 的内容（智能处理空格和换行）
         full_content = ""
         for session in data["sessions"]:
-            if session["content"]:
-                full_content += session["content"]
+            content = session["content"] or ""
+            if content:
+                # 如果当前内容以换行开头或上一个内容以换行结尾，直接拼接
+                # 否则检查是否需要添加空格（英文之间）或直接拼接（中文）
+                if full_content and not full_content.endswith('\n') and not content.startswith('\n'):
+                    # 检查是否都是 ASCII（英文），如果是则加空格
+                    last_char = full_content[-1] if full_content else ''
+                    first_char = content[0] if content else ''
+                    
+                    # 如果都是 ASCII 字母/数字，可能需要空格
+                    # 如果有一方是中文，不加空格
+                    if last_char.isascii() and first_char.isascii() and last_char.isalnum() and first_char.isalnum():
+                        full_content += " " + content
+                    else:
+                        full_content += content
+                else:
+                    full_content += content
         
         result.append({
             "app_name": data["app_name"],

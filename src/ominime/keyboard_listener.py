@@ -127,6 +127,7 @@ class RimeLogWatcher:
     """
     监听 Rime 输入法日志文件
     用于获取中文输入内容
+    新格式: [时间]文字[时间]文字...（连续，无空格）
     """
     
     RIME_LOG_PATH = Path.home() / ".ominime" / "rime_input.log"
@@ -147,6 +148,18 @@ class RimeLogWatcher:
         if not self.RIME_LOG_PATH.exists():
             self.RIME_LOG_PATH.touch()
     
+    def _parse_content(self, content: str):
+        """
+        解析日志内容
+        格式: [2024-01-08 12:00:00]你好[2024-01-08 12:00:01]世界
+        提取: 你好世界
+        """
+        import re
+        # 移除时间戳标记，只保留文字
+        # 匹配 [YYYY-MM-DD HH:MM:SS] 格式
+        text = re.sub(r'\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]', '', content)
+        return text
+    
     def _watch_loop(self):
         """监听循环"""
         self._ensure_log_file()
@@ -161,7 +174,6 @@ class RimeLogWatcher:
         
         while self._running:
             try:
-                # 检查文件是否有变化
                 try:
                     current_mtime = self.RIME_LOG_PATH.stat().st_mtime
                 except:
@@ -177,16 +189,11 @@ class RimeLogWatcher:
                         new_content = f.read()
                         self._last_position = f.tell()
                     
-                    # 解析新行
-                    for line in new_content.strip().split('\n'):
-                        if line and '\t' in line:
-                            try:
-                                timestamp_str, text = line.split('\t', 1)
-                                timestamp = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
-                                if self.callback and text:
-                                    self.callback(text, timestamp)
-                            except:
-                                pass
+                    if new_content:
+                        # 解析并提取纯文字
+                        text = self._parse_content(new_content)
+                        if text and self.callback:
+                            self.callback(text, datetime.now())
                 
                 time.sleep(0.1)
             except Exception as e:
