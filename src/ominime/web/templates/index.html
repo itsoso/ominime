@@ -1,0 +1,949 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OmniMe - 输入追踪仪表板</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --bg-primary: #0a0a0f;
+            --bg-secondary: #12121a;
+            --bg-card: #1a1a24;
+            --bg-hover: #242430;
+            --text-primary: #f0f0f5;
+            --text-secondary: #8888a0;
+            --text-muted: #555566;
+            --accent-primary: #6366f1;
+            --accent-secondary: #818cf8;
+            --accent-glow: rgba(99, 102, 241, 0.3);
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --border: #2a2a3a;
+            --gradient-1: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+            --gradient-2: linear-gradient(135deg, #3b82f6 0%, #06b6d4 100%);
+            --gradient-3: linear-gradient(135deg, #10b981 0%, #34d399 100%);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+
+        /* 背景装饰 */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: 
+                radial-gradient(ellipse 80% 50% at 20% -20%, rgba(99, 102, 241, 0.15) 0%, transparent 50%),
+                radial-gradient(ellipse 60% 40% at 80% 100%, rgba(139, 92, 246, 0.1) 0%, transparent 50%);
+            pointer-events: none;
+            z-index: -1;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        /* 顶部导航 */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px 0;
+            margin-bottom: 30px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo-icon {
+            font-size: 32px;
+            filter: drop-shadow(0 0 10px var(--accent-glow));
+        }
+
+        .logo h1 {
+            font-size: 24px;
+            font-weight: 700;
+            background: var(--gradient-1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .logo span {
+            font-size: 12px;
+            color: var(--text-muted);
+            display: block;
+        }
+
+        .date-nav {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .date-nav button {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 14px;
+        }
+
+        .date-nav button:hover {
+            background: var(--bg-hover);
+            color: var(--text-primary);
+            border-color: var(--accent-primary);
+        }
+
+        .date-nav input[type="date"] {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: inherit;
+        }
+
+        .date-nav input[type="date"]::-webkit-calendar-picker-indicator {
+            filter: invert(1);
+        }
+
+        /* 概览卡片 */
+        .overview-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 24px;
+            position: relative;
+            overflow: hidden;
+            transition: all 0.3s;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-2px);
+            border-color: var(--accent-primary);
+            box-shadow: 0 8px 30px -10px var(--accent-glow);
+        }
+
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: var(--gradient-1);
+        }
+
+        .stat-card:nth-child(2)::before {
+            background: var(--gradient-2);
+        }
+
+        .stat-card:nth-child(3)::before {
+            background: var(--gradient-3);
+        }
+
+        .stat-card:nth-child(4)::before {
+            background: linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%);
+        }
+
+        .stat-label {
+            font-size: 13px;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .stat-value {
+            font-size: 32px;
+            font-weight: 700;
+            font-family: 'JetBrains Mono', monospace;
+            margin-bottom: 4px;
+        }
+
+        .stat-change {
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .stat-change.positive {
+            color: var(--success);
+        }
+
+        .stat-change.negative {
+            color: var(--danger);
+        }
+
+        /* 主内容区 */
+        .main-content {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 24px;
+        }
+
+        @media (max-width: 1024px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 24px;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .card-title {
+            font-size: 16px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .card-title .icon {
+            font-size: 18px;
+        }
+
+        /* 图表区域 */
+        .chart-container {
+            position: relative;
+            height: 300px;
+            margin-bottom: 20px;
+        }
+
+        /* 应用统计列表 */
+        .app-list {
+            list-style: none;
+        }
+
+        .app-item {
+            display: flex;
+            align-items: center;
+            padding: 14px 0;
+            border-bottom: 1px solid var(--border);
+            gap: 14px;
+        }
+
+        .app-item:last-child {
+            border-bottom: none;
+        }
+
+        .app-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            background: var(--bg-hover);
+        }
+
+        .app-info {
+            flex: 1;
+        }
+
+        .app-name {
+            font-weight: 500;
+            margin-bottom: 4px;
+        }
+
+        .app-stats {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .app-percentage {
+            text-align: right;
+        }
+
+        .percentage-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .progress-bar {
+            width: 100px;
+            height: 6px;
+            background: var(--bg-hover);
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 4px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: var(--gradient-1);
+            border-radius: 3px;
+            transition: width 0.5s ease;
+        }
+
+        /* 活动和总结 */
+        .activities {
+            margin-bottom: 24px;
+        }
+
+        .activity-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 12px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .activity-item:last-child {
+            border-bottom: none;
+        }
+
+        .activity-number {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            background: var(--gradient-1);
+            color: white;
+            font-size: 12px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .activity-text {
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+
+        .summary-box {
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+
+        .summary-text {
+            font-size: 14px;
+            line-height: 1.8;
+            color: var(--text-secondary);
+        }
+
+        .suggestions {
+            list-style: none;
+        }
+
+        .suggestion-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 10px 0;
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+
+        .suggestion-icon {
+            flex-shrink: 0;
+        }
+
+        /* 记录列表 */
+        .records-section {
+            margin-top: 24px;
+        }
+
+        .records-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .records-table th {
+            text-align: left;
+            padding: 12px;
+            font-size: 12px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .records-table td {
+            padding: 14px 12px;
+            border-bottom: 1px solid var(--border);
+            font-size: 14px;
+        }
+
+        .records-table tr:hover td {
+            background: var(--bg-hover);
+        }
+
+        .record-time {
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--text-muted);
+            font-size: 12px;
+        }
+
+        .record-app {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            background: var(--bg-hover);
+            border-radius: 6px;
+            font-size: 12px;
+        }
+
+        .record-content {
+            max-width: 400px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            color: var(--text-secondary);
+        }
+
+        .record-chars {
+            font-family: 'JetBrains Mono', monospace;
+            text-align: right;
+        }
+
+        /* 加载和空状态 */
+        .loading {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 60px;
+            color: var(--text-muted);
+        }
+
+        .loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid var(--border);
+            border-top-color: var(--accent-primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 16px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px;
+            color: var(--text-muted);
+        }
+
+        .empty-state .icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+
+        /* 页脚 */
+        .footer {
+            text-align: center;
+            padding: 40px 0;
+            color: var(--text-muted);
+            font-size: 12px;
+        }
+
+        /* 动画 */
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .fade-in {
+            animation: fadeIn 0.5s ease forwards;
+        }
+
+        .fade-in-delay-1 { animation-delay: 0.1s; opacity: 0; }
+        .fade-in-delay-2 { animation-delay: 0.2s; opacity: 0; }
+        .fade-in-delay-3 { animation-delay: 0.3s; opacity: 0; }
+        .fade-in-delay-4 { animation-delay: 0.4s; opacity: 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- 顶部导航 -->
+        <header class="header">
+            <div class="logo">
+                <span class="logo-icon">⌨️</span>
+                <div>
+                    <h1>OmniMe</h1>
+                    <span>输入追踪仪表板</span>
+                </div>
+            </div>
+            <div class="date-nav">
+                <button onclick="changeDate(-1)">← 前一天</button>
+                <input type="date" id="datePicker" onchange="loadData()">
+                <button onclick="changeDate(1)">后一天 →</button>
+                <button onclick="goToToday()">今天</button>
+            </div>
+        </header>
+
+        <!-- 概览卡片 -->
+        <div class="overview-grid">
+            <div class="stat-card fade-in fade-in-delay-1">
+                <div class="stat-label">📝 今日字符</div>
+                <div class="stat-value" id="todayChars">-</div>
+                <div class="stat-change" id="todayChange">
+                    <span>较昨日</span>
+                </div>
+            </div>
+            <div class="stat-card fade-in fade-in-delay-2">
+                <div class="stat-label">📱 使用应用</div>
+                <div class="stat-value" id="todayApps">-</div>
+                <div class="stat-change">
+                    <span id="appCount">个应用</span>
+                </div>
+            </div>
+            <div class="stat-card fade-in fade-in-delay-3">
+                <div class="stat-label">🔢 会话数</div>
+                <div class="stat-value" id="todaySessions">-</div>
+                <div class="stat-change">
+                    <span>输入会话</span>
+                </div>
+            </div>
+            <div class="stat-card fade-in fade-in-delay-4">
+                <div class="stat-label">⏱️ 活跃时间</div>
+                <div class="stat-value" id="todayTime">-</div>
+                <div class="stat-change">
+                    <span>小时</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 主内容区 -->
+        <div class="main-content">
+            <!-- 左侧：图表和记录 -->
+            <div class="left-column">
+                <!-- 每小时分布图 -->
+                <div class="card fade-in">
+                    <div class="card-header">
+                        <h2 class="card-title">
+                            <span class="icon">📊</span>
+                            每小时输入分布
+                        </h2>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="hourlyChart"></canvas>
+                    </div>
+                </div>
+
+                <!-- 最近记录 -->
+                <div class="card records-section fade-in">
+                    <div class="card-header">
+                        <h2 class="card-title">
+                            <span class="icon">📋</span>
+                            输入记录
+                        </h2>
+                    </div>
+                    <div id="recordsContainer">
+                        <div class="loading">
+                            <div class="loading-spinner"></div>
+                            <span>加载中...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 右侧：应用统计和总结 -->
+            <div class="right-column">
+                <!-- 应用统计 -->
+                <div class="card fade-in">
+                    <div class="card-header">
+                        <h2 class="card-title">
+                            <span class="icon">📱</span>
+                            应用分布
+                        </h2>
+                    </div>
+                    <ul class="app-list" id="appList">
+                        <div class="loading">
+                            <div class="loading-spinner"></div>
+                        </div>
+                    </ul>
+                </div>
+
+                <!-- 主线活动 -->
+                <div class="card fade-in" style="margin-top: 24px;">
+                    <div class="card-header">
+                        <h2 class="card-title">
+                            <span class="icon">🎯</span>
+                            今日主线
+                        </h2>
+                    </div>
+                    <div class="activities" id="activities">
+                        <div class="loading">
+                            <div class="loading-spinner"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 总结和建议 -->
+                <div class="card fade-in" style="margin-top: 24px;">
+                    <div class="card-header">
+                        <h2 class="card-title">
+                            <span class="icon">📝</span>
+                            总结
+                        </h2>
+                    </div>
+                    <div class="summary-box">
+                        <p class="summary-text" id="summaryText">加载中...</p>
+                    </div>
+                    <h3 class="card-title" style="margin-bottom: 12px;">
+                        <span class="icon">💡</span>
+                        建议
+                    </h3>
+                    <ul class="suggestions" id="suggestions">
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- 页脚 -->
+        <footer class="footer">
+            <p>OmniMe v0.1.0 - 所有数据仅存储在本地</p>
+        </footer>
+    </div>
+
+    <script>
+        // 全局变量
+        let currentDate = new Date();
+        let hourlyChart = null;
+
+        // 应用图标映射
+        const appIcons = {
+            '微信': '💬',
+            'Cursor': '💻',
+            'Obsidian': '📝',
+            'Kim': '📚',
+            'Safari': '🌐',
+            'Chrome': '🌐',
+            'VS Code': '💻',
+            '终端': '⬛',
+            'iTerm': '⬛',
+            '邮件': '📧',
+            '备忘录': '📒',
+            '飞书': '🐦',
+            '钉钉': '💼',
+            'Slack': '💬',
+            'Notion': '📓',
+            'default': '📱'
+        };
+
+        // 初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            initDatePicker();
+            loadData();
+        });
+
+        // 初始化日期选择器
+        function initDatePicker() {
+            const picker = document.getElementById('datePicker');
+            picker.value = formatDate(currentDate);
+        }
+
+        // 格式化日期
+        function formatDate(date) {
+            return date.toISOString().split('T')[0];
+        }
+
+        // 切换日期
+        function changeDate(delta) {
+            currentDate.setDate(currentDate.getDate() + delta);
+            document.getElementById('datePicker').value = formatDate(currentDate);
+            loadData();
+        }
+
+        // 跳转到今天
+        function goToToday() {
+            currentDate = new Date();
+            document.getElementById('datePicker').value = formatDate(currentDate);
+            loadData();
+        }
+
+        // 加载所有数据
+        async function loadData() {
+            const dateStr = document.getElementById('datePicker').value;
+            currentDate = new Date(dateStr);
+
+            try {
+                // 并行加载数据
+                const [report, hourlyStats, records] = await Promise.all([
+                    fetch(`/api/report/${dateStr}`).then(r => r.json()),
+                    fetch(`/api/stats/hourly?target_date=${dateStr}`).then(r => r.json()),
+                    fetch(`/api/records?target_date=${dateStr}&limit=50`).then(r => r.json())
+                ]);
+
+                // 更新概览
+                updateOverview(report.overview);
+
+                // 更新应用列表
+                updateAppList(report.app_stats);
+
+                // 更新图表
+                updateHourlyChart(hourlyStats);
+
+                // 更新活动和总结
+                updateActivities(report.main_activities);
+                updateSummary(report.summary, report.suggestions);
+
+                // 更新记录
+                updateRecords(records.records);
+
+            } catch (error) {
+                console.error('加载数据失败:', error);
+            }
+        }
+
+        // 更新概览卡片
+        function updateOverview(overview) {
+            document.getElementById('todayChars').textContent = overview.total_chars.toLocaleString();
+            document.getElementById('todayApps').textContent = overview.total_apps;
+            document.getElementById('todaySessions').textContent = overview.total_sessions;
+            
+            const hours = Math.floor(overview.total_time_minutes / 60);
+            const mins = Math.round(overview.total_time_minutes % 60);
+            document.getElementById('todayTime').textContent = hours > 0 ? `${hours}h${mins}m` : `${mins}m`;
+        }
+
+        // 更新应用列表
+        function updateAppList(apps) {
+            const container = document.getElementById('appList');
+            
+            if (!apps || apps.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="icon">📭</div>
+                        <p>暂无应用数据</p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = apps.slice(0, 8).map(app => `
+                <li class="app-item">
+                    <div class="app-icon">${appIcons[app.display_name] || appIcons.default}</div>
+                    <div class="app-info">
+                        <div class="app-name">${app.display_name}</div>
+                        <div class="app-stats">${app.total_chars.toLocaleString()} 字符 · ${app.session_count} 会话</div>
+                    </div>
+                    <div class="app-percentage">
+                        <div class="percentage-value">${app.percentage}%</div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" style="width: ${app.percentage}%"></div>
+                        </div>
+                    </div>
+                </li>
+            `).join('');
+        }
+
+        // 更新每小时图表
+        function updateHourlyChart(data) {
+            const ctx = document.getElementById('hourlyChart').getContext('2d');
+            
+            const labels = data.map(d => `${d.hour}:00`);
+            const values = data.map(d => d.chars);
+
+            if (hourlyChart) {
+                hourlyChart.destroy();
+            }
+
+            hourlyChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: '字符数',
+                        data: values,
+                        backgroundColor: 'rgba(99, 102, 241, 0.6)',
+                        borderColor: 'rgba(99, 102, 241, 1)',
+                        borderWidth: 1,
+                        borderRadius: 4,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        },
+                        tooltip: {
+                            backgroundColor: 'rgba(26, 26, 36, 0.95)',
+                            titleColor: '#f0f0f5',
+                            bodyColor: '#8888a0',
+                            borderColor: 'rgba(99, 102, 241, 0.5)',
+                            borderWidth: 1,
+                            padding: 12,
+                            displayColors: false,
+                            callbacks: {
+                                label: (context) => `${context.raw.toLocaleString()} 字符`
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            grid: {
+                                color: 'rgba(42, 42, 58, 0.5)',
+                            },
+                            ticks: {
+                                color: '#555566',
+                                maxRotation: 0,
+                                callback: (value, index) => index % 3 === 0 ? labels[index] : ''
+                            }
+                        },
+                        y: {
+                            grid: {
+                                color: 'rgba(42, 42, 58, 0.5)',
+                            },
+                            ticks: {
+                                color: '#555566',
+                                callback: (value) => value >= 1000 ? `${value/1000}k` : value
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // 更新主线活动
+        function updateActivities(activities) {
+            const container = document.getElementById('activities');
+            
+            if (!activities || activities.length === 0) {
+                container.innerHTML = '<p style="color: var(--text-muted);">暂无活动记录</p>';
+                return;
+            }
+
+            container.innerHTML = activities.map((act, i) => `
+                <div class="activity-item">
+                    <span class="activity-number">${i + 1}</span>
+                    <span class="activity-text">${act}</span>
+                </div>
+            `).join('');
+        }
+
+        // 更新总结和建议
+        function updateSummary(summary, suggestions) {
+            document.getElementById('summaryText').textContent = summary || '暂无总结';
+            
+            const container = document.getElementById('suggestions');
+            if (!suggestions || suggestions.length === 0) {
+                container.innerHTML = '<li class="suggestion-item">暂无建议</li>';
+                return;
+            }
+
+            container.innerHTML = suggestions.map(sug => `
+                <li class="suggestion-item">
+                    <span class="suggestion-icon">→</span>
+                    <span>${sug}</span>
+                </li>
+            `).join('');
+        }
+
+        // 更新记录列表
+        function updateRecords(records) {
+            const container = document.getElementById('recordsContainer');
+            
+            if (!records || records.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="icon">📭</div>
+                        <p>暂无输入记录</p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = `
+                <table class="records-table">
+                    <thead>
+                        <tr>
+                            <th>时间</th>
+                            <th>应用</th>
+                            <th>内容</th>
+                            <th>字符</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${records.map(r => `
+                            <tr>
+                                <td class="record-time">${formatTime(r.timestamp)}</td>
+                                <td><span class="record-app">${appIcons[r.display_name] || '📱'} ${r.display_name}</span></td>
+                                <td class="record-content" title="${escapeHtml(r.content)}">${escapeHtml(r.content)}</td>
+                                <td class="record-chars">${r.char_count}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
+        }
+
+        // 格式化时间
+        function formatTime(isoString) {
+            const date = new Date(isoString);
+            return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+        }
+
+        // HTML 转义
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>
