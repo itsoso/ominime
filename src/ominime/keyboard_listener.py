@@ -2,11 +2,14 @@
 键盘监听模块
 
 使用 CGEventTap 监听全局键盘事件
+支持中文输入法
 需要用户授予辅助功能权限
 """
 
 import threading
 import time
+import ctypes
+import ctypes.util
 from typing import Callable, Optional
 from dataclasses import dataclass
 from datetime import datetime
@@ -32,7 +35,7 @@ from Quartz import (
     kCGEventFlagMaskCommand,
     CGEventGetFlags,
 )
-from AppKit import NSWorkspace
+from AppKit import NSWorkspace, NSEvent
 import Quartz
 
 
@@ -47,22 +50,8 @@ class KeyEvent:
     modifiers: dict  # shift, ctrl, alt, cmd
 
 
-# 键码到字符的映射表
-KEYCODE_MAP = {
-    # 字母键
-    0: 'a', 1: 's', 2: 'd', 3: 'f', 4: 'h', 5: 'g', 6: 'z', 7: 'x',
-    8: 'c', 9: 'v', 11: 'b', 12: 'q', 13: 'w', 14: 'e', 15: 'r',
-    16: 'y', 17: 't', 18: '1', 19: '2', 20: '3', 21: '4', 22: '6',
-    23: '5', 24: '=', 25: '9', 26: '7', 27: '-', 28: '8', 29: '0',
-    30: ']', 31: 'o', 32: 'u', 33: '[', 34: 'i', 35: 'p', 37: 'l',
-    38: 'j', 39: "'", 40: 'k', 41: ';', 42: '\\', 43: ',', 44: '/',
-    45: 'n', 46: 'm', 47: '.', 50: '`',
-    
-    # 数字小键盘
-    65: '.', 67: '*', 69: '+', 71: 'clear', 75: '/', 76: 'enter',
-    78: '-', 81: '=', 82: '0', 83: '1', 84: '2', 85: '3', 86: '4',
-    87: '5', 88: '6', 89: '7', 91: '8', 92: '9',
-    
+# 特殊键码映射（这些键不需要通过输入法转换）
+SPECIAL_KEYCODE_MAP = {
     # 特殊键
     36: '\n',     # Return
     48: '\t',     # Tab
@@ -77,14 +66,19 @@ KEYCODE_MAP = {
     # 功能键
     122: 'F1', 120: 'F2', 99: 'F3', 118: 'F4', 96: 'F5', 97: 'F6',
     98: 'F7', 100: 'F8', 101: 'F9', 109: 'F10', 103: 'F11', 111: 'F12',
+    
+    # 数字小键盘特殊键
+    71: 'clear', 76: '\n',  # clear, keypad enter
 }
 
-# Shift 键时的字符映射
-SHIFT_KEYCODE_MAP = {
-    18: '!', 19: '@', 20: '#', 21: '$', 22: '^', 23: '%',
-    24: '+', 25: '(', 26: '&', 27: '_', 28: '*', 29: ')',
-    30: '}', 33: '{', 39: '"', 41: ':', 42: '|', 43: '<',
-    44: '?', 47: '>', 50: '~',
+# 忽略的键码（修饰键等）
+IGNORED_KEYCODES = {
+    54, 55,   # Command
+    56, 60,   # Shift
+    58, 61,   # Option/Alt
+    59, 62,   # Control
+    57,       # Caps Lock
+    63,       # fn
 }
 
 
@@ -93,6 +87,7 @@ class KeyboardListener:
     全局键盘监听器
     
     使用 CGEventTap 监听所有键盘事件
+    支持中文输入法
     """
     
     def __init__(self, callback: Callable[[KeyEvent], None]):
@@ -119,15 +114,24 @@ class KeyboardListener:
             )
         return ("Unknown", "unknown")
     
-    def _keycode_to_char(self, keycode: int, shift: bool) -> str:
-        """将键码转换为字符"""
-        if shift and keycode in SHIFT_KEYCODE_MAP:
-            return SHIFT_KEYCODE_MAP[keycode]
+    def _get_unicode_string(self, event) -> str:
+        """
+        从 CGEvent 获取 Unicode 字符串（支持中文）
         
-        char = KEYCODE_MAP.get(keycode, '')
-        if shift and char.isalpha():
-            return char.upper()
-        return char
+        使用 NSEvent 来获取经过输入法处理后的字符
+        """
+        try:
+            # 将 CGEvent 转换为 NSEvent
+            ns_event = NSEvent.eventWithCGEvent_(event)
+            if ns_event:
+                # 获取字符（经过输入法处理）
+                chars = ns_event.characters()
+                if chars and len(chars) > 0:
+                    return chars
+        except Exception as e:
+            pass
+        
+        return ""
     
     def _event_callback(self, proxy, event_type, event, refcon):
         """CGEventTap 回调函数"""
@@ -135,6 +139,10 @@ class KeyboardListener:
             try:
                 # 获取键码
                 keycode = CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode)
+                
+                # 忽略修饰键
+                if keycode in IGNORED_KEYCODES:
+                    return event
                 
                 # 获取修饰键状态
                 flags = CGEventGetFlags(event)
@@ -145,8 +153,19 @@ class KeyboardListener:
                     "cmd": bool(flags & kCGEventFlagMaskCommand),
                 }
                 
-                # 转换为字符
-                character = self._keycode_to_char(keycode, modifiers["shift"])
+                # 获取字符
+                character = ""
+                
+                # 首先检查是否是特殊键
+                if keycode in SPECIAL_KEYCODE_MAP:
+                    character = SPECIAL_KEYCODE_MAP[keycode]
+                else:
+                    # 使用 NSEvent 获取实际输入的字符（支持中文）
+                    character = self._get_unicode_string(event)
+                
+                # 如果没有获取到字符，跳过
+                if not character:
+                    return event
                 
                 # 获取当前活跃应用
                 app_name, app_bundle_id = self._get_active_app()
@@ -201,7 +220,7 @@ class KeyboardListener:
         # 启用 tap
         CGEventTapEnable(self._tap, True)
         
-        print("✅ 键盘监听已启动")
+        print("✅ 键盘监听已启动（支持中文输入）")
         
         # 运行事件循环
         CFRunLoopRun()
@@ -276,19 +295,28 @@ if __name__ == "__main__":
         exit(1)
     
     print("✅ 已获得辅助功能权限")
+    print("🇨🇳 已启用中文输入支持")
     
     def on_key(event: KeyEvent):
         char = event.character if event.character else f"[{event.keycode}]"
-        print(f"[{event.app_name}] {char}", end="", flush=True)
+        # 特殊字符处理
+        if char == '\n':
+            print()
+        elif char == '\b':
+            print('\b \b', end='', flush=True)
+        elif char in ['esc', '←', '→', '↑', '↓', 'del']:
+            pass  # 忽略这些键
+        else:
+            print(f"{char}", end="", flush=True)
     
     listener = KeyboardListener(on_key)
     listener.start()
     
-    print("按 Ctrl+C 停止监听...")
+    print("\n按 Ctrl+C 停止监听...")
+    print("-" * 40)
     try:
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
         listener.stop()
         print("\n已停止")
-
