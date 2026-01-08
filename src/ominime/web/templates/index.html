@@ -29,11 +29,7 @@
             --gradient-3: linear-gradient(135deg, #10b981 0%, #34d399 100%);
         }
 
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
 
         body {
             font-family: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -43,14 +39,10 @@
             line-height: 1.6;
         }
 
-        /* 背景装饰 */
         body::before {
             content: '';
             position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
+            top: 0; left: 0; right: 0; bottom: 0;
             background: 
                 radial-gradient(ellipse 80% 50% at 20% -20%, rgba(99, 102, 241, 0.15) 0%, transparent 50%),
                 radial-gradient(ellipse 60% 40% at 80% 100%, rgba(139, 92, 246, 0.1) 0%, transparent 50%);
@@ -58,13 +50,8 @@
             z-index: -1;
         }
 
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-            padding: 20px;
-        }
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
 
-        /* 顶部导航 */
         .header {
             display: flex;
             justify-content: space-between;
@@ -72,70 +59,54 @@
             padding: 20px 0;
             margin-bottom: 30px;
             border-bottom: 1px solid var(--border);
+            flex-wrap: wrap;
+            gap: 16px;
         }
 
-        .logo {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-
-        .logo-icon {
-            font-size: 32px;
-            filter: drop-shadow(0 0 10px var(--accent-glow));
-        }
-
+        .logo { display: flex; align-items: center; gap: 12px; }
+        .logo-icon { font-size: 32px; filter: drop-shadow(0 0 10px var(--accent-glow)); }
         .logo h1 {
             font-size: 24px;
             font-weight: 700;
             background: var(--gradient-1);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
-            background-clip: text;
+        }
+        .logo span { font-size: 12px; color: var(--text-muted); display: block; }
+
+        .nav-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+
+        .tab-buttons { display: flex; gap: 4px; background: var(--bg-card); padding: 4px; border-radius: 10px; }
+        .tab-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+        .tab-btn:hover { color: var(--text-primary); }
+        .tab-btn.active {
+            background: var(--accent-primary);
+            color: white;
         }
 
-        .logo span {
-            font-size: 12px;
-            color: var(--text-muted);
-            display: block;
-        }
-
-        .date-nav {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-
-        .date-nav button {
+        .date-nav { display: flex; align-items: center; gap: 8px; }
+        .date-nav button, .date-nav input[type="date"] {
             background: var(--bg-card);
             border: 1px solid var(--border);
             color: var(--text-secondary);
             padding: 8px 16px;
             border-radius: 8px;
             cursor: pointer;
+            font-size: 14px;
             transition: all 0.2s;
-            font-size: 14px;
         }
-
-        .date-nav button:hover {
-            background: var(--bg-hover);
-            color: var(--text-primary);
-            border-color: var(--accent-primary);
-        }
-
-        .date-nav input[type="date"] {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            color: var(--text-primary);
-            padding: 8px 16px;
-            border-radius: 8px;
-            font-size: 14px;
-            font-family: inherit;
-        }
-
-        .date-nav input[type="date"]::-webkit-calendar-picker-indicator {
-            filter: invert(1);
-        }
+        .date-nav button:hover { background: var(--bg-hover); color: var(--text-primary); border-color: var(--accent-primary); }
+        .date-nav input[type="date"] { color: var(--text-primary); font-family: inherit; }
+        .date-nav input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(1); }
 
         /* 概览卡片 */
         .overview-grid {
@@ -154,368 +125,128 @@
             overflow: hidden;
             transition: all 0.3s;
         }
+        .stat-card:hover { transform: translateY(-2px); border-color: var(--accent-primary); box-shadow: 0 8px 30px -10px var(--accent-glow); }
+        .stat-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: var(--gradient-1); }
+        .stat-card:nth-child(2)::before { background: var(--gradient-2); }
+        .stat-card:nth-child(3)::before { background: var(--gradient-3); }
+        .stat-card:nth-child(4)::before { background: linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%); }
 
-        .stat-card:hover {
-            transform: translateY(-2px);
-            border-color: var(--accent-primary);
-            box-shadow: 0 8px 30px -10px var(--accent-glow);
-        }
+        .stat-label { font-size: 13px; color: var(--text-secondary); margin-bottom: 8px; }
+        .stat-value { font-size: 32px; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
 
-        .stat-card::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 3px;
-            background: var(--gradient-1);
-        }
+        /* 标签页内容 */
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
 
-        .stat-card:nth-child(2)::before {
-            background: var(--gradient-2);
-        }
-
-        .stat-card:nth-child(3)::before {
-            background: var(--gradient-3);
-        }
-
-        .stat-card:nth-child(4)::before {
-            background: linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%);
-        }
-
-        .stat-label {
-            font-size: 13px;
-            color: var(--text-secondary);
-            margin-bottom: 8px;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-
-        .stat-value {
-            font-size: 32px;
-            font-weight: 700;
-            font-family: 'JetBrains Mono', monospace;
-            margin-bottom: 4px;
-        }
-
-        .stat-change {
-            font-size: 12px;
-            display: flex;
-            align-items: center;
-            gap: 4px;
-        }
-
-        .stat-change.positive {
-            color: var(--success);
-        }
-
-        .stat-change.negative {
-            color: var(--danger);
-        }
-
-        /* 主内容区 */
-        .main-content {
-            display: grid;
-            grid-template-columns: 2fr 1fr;
-            gap: 24px;
-        }
-
-        @media (max-width: 1024px) {
-            .main-content {
-                grid-template-columns: 1fr;
-            }
-        }
-
+        /* 卡片 */
         .card {
             background: var(--bg-card);
             border: 1px solid var(--border);
             border-radius: 16px;
             padding: 24px;
+            margin-bottom: 24px;
+        }
+        .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .card-title { font-size: 16px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+
+        /* 应用内容展示 */
+        .app-content-list { display: flex; flex-direction: column; gap: 20px; }
+
+        .app-content-item {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
         }
 
-        .card-header {
+        .app-content-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 20px;
-        }
-
-        .card-title {
-            font-size: 16px;
-            font-weight: 600;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .card-title .icon {
-            font-size: 18px;
-        }
-
-        /* 图表区域 */
-        .chart-container {
-            position: relative;
-            height: 300px;
-            margin-bottom: 20px;
-        }
-
-        /* 应用统计列表 */
-        .app-list {
-            list-style: none;
-        }
-
-        .app-item {
-            display: flex;
-            align-items: center;
-            padding: 14px 0;
+            padding: 16px 20px;
+            background: var(--bg-card);
             border-bottom: 1px solid var(--border);
-            gap: 14px;
+            cursor: pointer;
+            transition: background 0.2s;
         }
+        .app-content-header:hover { background: var(--bg-hover); }
 
-        .app-item:last-child {
-            border-bottom: none;
-        }
-
-        .app-icon {
-            width: 40px;
-            height: 40px;
+        .app-content-info { display: flex; align-items: center; gap: 12px; }
+        .app-content-icon {
+            width: 40px; height: 40px;
             border-radius: 10px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 18px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 20px;
             background: var(--bg-hover);
         }
+        .app-content-name { font-weight: 600; font-size: 16px; }
+        .app-content-stats { font-size: 13px; color: var(--text-secondary); }
 
-        .app-info {
-            flex: 1;
+        .app-content-toggle {
+            font-size: 20px;
+            color: var(--text-muted);
+            transition: transform 0.3s;
         }
+        .app-content-item.expanded .app-content-toggle { transform: rotate(180deg); }
 
-        .app-name {
-            font-weight: 500;
-            margin-bottom: 4px;
-        }
-
-        .app-stats {
-            font-size: 12px;
-            color: var(--text-secondary);
-        }
-
-        .app-percentage {
-            text-align: right;
-        }
-
-        .percentage-value {
-            font-family: 'JetBrains Mono', monospace;
-            font-weight: 600;
-            font-size: 14px;
-        }
-
-        .progress-bar {
-            width: 100px;
-            height: 6px;
-            background: var(--bg-hover);
-            border-radius: 3px;
+        .app-content-body {
+            max-height: 0;
             overflow: hidden;
-            margin-top: 4px;
+            transition: max-height 0.3s ease-out;
         }
+        .app-content-item.expanded .app-content-body { max-height: 2000px; }
 
-        .progress-fill {
-            height: 100%;
-            background: var(--gradient-1);
-            border-radius: 3px;
-            transition: width 0.5s ease;
-        }
-
-        /* 活动和总结 */
-        .activities {
-            margin-bottom: 24px;
-        }
-
-        .activity-item {
-            display: flex;
-            align-items: flex-start;
-            gap: 12px;
-            padding: 12px 0;
-            border-bottom: 1px solid var(--border);
-        }
-
-        .activity-item:last-child {
-            border-bottom: none;
-        }
-
-        .activity-number {
-            width: 24px;
-            height: 24px;
-            border-radius: 50%;
-            background: var(--gradient-1);
-            color: white;
-            font-size: 12px;
-            font-weight: 600;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            flex-shrink: 0;
-        }
-
-        .activity-text {
-            font-size: 14px;
-            color: var(--text-secondary);
-        }
-
-        .summary-box {
-            background: var(--bg-secondary);
-            border-radius: 12px;
-            padding: 16px;
-            margin-bottom: 16px;
-        }
-
-        .summary-text {
+        .content-text {
+            padding: 20px;
+            font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
             font-size: 14px;
             line-height: 1.8;
+            white-space: pre-wrap;
+            word-break: break-all;
             color: var(--text-secondary);
+            background: var(--bg-primary);
+            border-radius: 0 0 12px 12px;
+            max-height: 400px;
+            overflow-y: auto;
         }
 
-        .suggestions {
-            list-style: none;
-        }
+        .content-text::-webkit-scrollbar { width: 8px; }
+        .content-text::-webkit-scrollbar-track { background: var(--bg-secondary); }
+        .content-text::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 
-        .suggestion-item {
-            display: flex;
-            align-items: flex-start;
-            gap: 10px;
-            padding: 10px 0;
-            font-size: 14px;
-            color: var(--text-secondary);
-        }
+        /* 图表 */
+        .chart-container { position: relative; height: 300px; }
 
-        .suggestion-icon {
-            flex-shrink: 0;
-        }
+        /* 应用列表 */
+        .app-list { list-style: none; }
+        .app-item { display: flex; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border); gap: 14px; }
+        .app-item:last-child { border-bottom: none; }
+        .app-icon { width: 40px; height: 40px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 18px; background: var(--bg-hover); }
+        .app-info { flex: 1; }
+        .app-name { font-weight: 500; margin-bottom: 4px; }
+        .app-stats-text { font-size: 12px; color: var(--text-secondary); }
+        .percentage-value { font-family: 'JetBrains Mono', monospace; font-weight: 600; font-size: 14px; }
+        .progress-bar { width: 100px; height: 6px; background: var(--bg-hover); border-radius: 3px; overflow: hidden; margin-top: 4px; }
+        .progress-fill { height: 100%; background: var(--gradient-1); border-radius: 3px; }
 
-        /* 记录列表 */
-        .records-section {
-            margin-top: 24px;
-        }
+        /* 空状态 */
+        .empty-state { text-align: center; padding: 60px; color: var(--text-muted); }
+        .empty-state .icon { font-size: 48px; margin-bottom: 16px; opacity: 0.5; }
 
-        .records-table {
-            width: 100%;
-            border-collapse: collapse;
-        }
+        .loading { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 60px; color: var(--text-muted); }
+        .loading-spinner { width: 40px; height: 40px; border: 3px solid var(--border); border-top-color: var(--accent-primary); border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 16px; }
+        @keyframes spin { to { transform: rotate(360deg); } }
 
-        .records-table th {
-            text-align: left;
-            padding: 12px;
-            font-size: 12px;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            border-bottom: 1px solid var(--border);
-        }
+        .footer { text-align: center; padding: 40px 0; color: var(--text-muted); font-size: 12px; }
 
-        .records-table td {
-            padding: 14px 12px;
-            border-bottom: 1px solid var(--border);
-            font-size: 14px;
+        @media (max-width: 768px) {
+            .header { flex-direction: column; align-items: flex-start; }
+            .nav-controls { width: 100%; justify-content: space-between; }
         }
-
-        .records-table tr:hover td {
-            background: var(--bg-hover);
-        }
-
-        .record-time {
-            font-family: 'JetBrains Mono', monospace;
-            color: var(--text-muted);
-            font-size: 12px;
-        }
-
-        .record-app {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 4px 10px;
-            background: var(--bg-hover);
-            border-radius: 6px;
-            font-size: 12px;
-        }
-
-        .record-content {
-            max-width: 400px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            color: var(--text-secondary);
-        }
-
-        .record-chars {
-            font-family: 'JetBrains Mono', monospace;
-            text-align: right;
-        }
-
-        /* 加载和空状态 */
-        .loading {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            padding: 60px;
-            color: var(--text-muted);
-        }
-
-        .loading-spinner {
-            width: 40px;
-            height: 40px;
-            border: 3px solid var(--border);
-            border-top-color: var(--accent-primary);
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-            margin-bottom: 16px;
-        }
-
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-
-        .empty-state {
-            text-align: center;
-            padding: 60px;
-            color: var(--text-muted);
-        }
-
-        .empty-state .icon {
-            font-size: 48px;
-            margin-bottom: 16px;
-            opacity: 0.5;
-        }
-
-        /* 页脚 */
-        .footer {
-            text-align: center;
-            padding: 40px 0;
-            color: var(--text-muted);
-            font-size: 12px;
-        }
-
-        /* 动画 */
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        .fade-in {
-            animation: fadeIn 0.5s ease forwards;
-        }
-
-        .fade-in-delay-1 { animation-delay: 0.1s; opacity: 0; }
-        .fade-in-delay-2 { animation-delay: 0.2s; opacity: 0; }
-        .fade-in-delay-3 { animation-delay: 0.3s; opacity: 0; }
-        .fade-in-delay-4 { animation-delay: 0.4s; opacity: 0; }
     </style>
 </head>
 <body>
     <div class="container">
-        <!-- 顶部导航 -->
         <header class="header">
             <div class="logo">
                 <span class="logo-icon">⌨️</span>
@@ -524,230 +255,147 @@
                     <span>输入追踪仪表板</span>
                 </div>
             </div>
-            <div class="date-nav">
-                <button onclick="changeDate(-1)">← 前一天</button>
-                <input type="date" id="datePicker" onchange="loadData()">
-                <button onclick="changeDate(1)">后一天 →</button>
-                <button onclick="goToToday()">今天</button>
+            <div class="nav-controls">
+                <div class="tab-buttons">
+                    <button class="tab-btn active" onclick="switchTab('overview')">📊 概览</button>
+                    <button class="tab-btn" onclick="switchTab('content')">📝 内容</button>
+                </div>
+                <div class="date-nav">
+                    <button onclick="changeDate(-1)">←</button>
+                    <input type="date" id="datePicker" onchange="loadData()">
+                    <button onclick="changeDate(1)">→</button>
+                    <button onclick="goToToday()">今天</button>
+                </div>
             </div>
         </header>
 
         <!-- 概览卡片 -->
         <div class="overview-grid">
-            <div class="stat-card fade-in fade-in-delay-1">
-                <div class="stat-label">📝 今日字符</div>
+            <div class="stat-card">
+                <div class="stat-label">📝 总字符</div>
                 <div class="stat-value" id="todayChars">-</div>
-                <div class="stat-change" id="todayChange">
-                    <span>较昨日</span>
-                </div>
             </div>
-            <div class="stat-card fade-in fade-in-delay-2">
-                <div class="stat-label">📱 使用应用</div>
+            <div class="stat-card">
+                <div class="stat-label">📱 应用数</div>
                 <div class="stat-value" id="todayApps">-</div>
-                <div class="stat-change">
-                    <span id="appCount">个应用</span>
-                </div>
             </div>
-            <div class="stat-card fade-in fade-in-delay-3">
+            <div class="stat-card">
                 <div class="stat-label">🔢 会话数</div>
                 <div class="stat-value" id="todaySessions">-</div>
-                <div class="stat-change">
-                    <span>输入会话</span>
-                </div>
             </div>
-            <div class="stat-card fade-in fade-in-delay-4">
+            <div class="stat-card">
                 <div class="stat-label">⏱️ 活跃时间</div>
                 <div class="stat-value" id="todayTime">-</div>
-                <div class="stat-change">
-                    <span>小时</span>
-                </div>
             </div>
         </div>
 
-        <!-- 主内容区 -->
-        <div class="main-content">
-            <!-- 左侧：图表和记录 -->
-            <div class="left-column">
-                <!-- 每小时分布图 -->
-                <div class="card fade-in">
+        <!-- 概览标签页 -->
+        <div id="tab-overview" class="tab-content active">
+            <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 24px;">
+                <div class="card">
                     <div class="card-header">
-                        <h2 class="card-title">
-                            <span class="icon">📊</span>
-                            每小时输入分布
-                        </h2>
+                        <h2 class="card-title">📊 每小时分布</h2>
                     </div>
                     <div class="chart-container">
                         <canvas id="hourlyChart"></canvas>
                     </div>
                 </div>
-
-                <!-- 最近记录 -->
-                <div class="card records-section fade-in">
+                <div class="card">
                     <div class="card-header">
-                        <h2 class="card-title">
-                            <span class="icon">📋</span>
-                            输入记录
-                        </h2>
-                    </div>
-                    <div id="recordsContainer">
-                        <div class="loading">
-                            <div class="loading-spinner"></div>
-                            <span>加载中...</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 右侧：应用统计和总结 -->
-            <div class="right-column">
-                <!-- 应用统计 -->
-                <div class="card fade-in">
-                    <div class="card-header">
-                        <h2 class="card-title">
-                            <span class="icon">📱</span>
-                            应用分布
-                        </h2>
+                        <h2 class="card-title">📱 应用分布</h2>
                     </div>
                     <ul class="app-list" id="appList">
-                        <div class="loading">
-                            <div class="loading-spinner"></div>
-                        </div>
-                    </ul>
-                </div>
-
-                <!-- 主线活动 -->
-                <div class="card fade-in" style="margin-top: 24px;">
-                    <div class="card-header">
-                        <h2 class="card-title">
-                            <span class="icon">🎯</span>
-                            今日主线
-                        </h2>
-                    </div>
-                    <div class="activities" id="activities">
-                        <div class="loading">
-                            <div class="loading-spinner"></div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- 总结和建议 -->
-                <div class="card fade-in" style="margin-top: 24px;">
-                    <div class="card-header">
-                        <h2 class="card-title">
-                            <span class="icon">📝</span>
-                            总结
-                        </h2>
-                    </div>
-                    <div class="summary-box">
-                        <p class="summary-text" id="summaryText">加载中...</p>
-                    </div>
-                    <h3 class="card-title" style="margin-bottom: 12px;">
-                        <span class="icon">💡</span>
-                        建议
-                    </h3>
-                    <ul class="suggestions" id="suggestions">
+                        <div class="loading"><div class="loading-spinner"></div></div>
                     </ul>
                 </div>
             </div>
         </div>
 
-        <!-- 页脚 -->
+        <!-- 内容标签页 -->
+        <div id="tab-content" class="tab-content">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">📝 按应用查看完整输入内容</h2>
+                </div>
+                <div class="app-content-list" id="appContentList">
+                    <div class="loading"><div class="loading-spinner"></div><span>加载中...</span></div>
+                </div>
+            </div>
+        </div>
+
         <footer class="footer">
             <p>OmniMe v0.1.0 - 所有数据仅存储在本地</p>
         </footer>
     </div>
 
     <script>
-        // 全局变量
         let currentDate = new Date();
         let hourlyChart = null;
+        let currentTab = 'overview';
 
-        // 应用图标映射
         const appIcons = {
-            '微信': '💬',
-            'Cursor': '💻',
-            'Obsidian': '📝',
-            'Kim': '📚',
-            'Safari': '🌐',
-            'Chrome': '🌐',
-            'VS Code': '💻',
-            '终端': '⬛',
-            'iTerm': '⬛',
-            '邮件': '📧',
-            '备忘录': '📒',
-            '飞书': '🐦',
-            '钉钉': '💼',
-            'Slack': '💬',
-            'Notion': '📓',
-            'default': '📱'
+            '微信': '💬', 'Cursor': '💻', 'Obsidian': '📝', 'Kim': '📚',
+            'Safari': '🌐', 'Chrome': '🌐', 'VS Code': '💻', '终端': '⬛',
+            'iTerm': '⬛', '邮件': '📧', '备忘录': '📒', '飞书': '🐦',
+            '钉钉': '💼', 'Slack': '💬', 'Notion': '📓', 'default': '📱'
         };
 
-        // 初始化
         document.addEventListener('DOMContentLoaded', () => {
-            initDatePicker();
+            document.getElementById('datePicker').value = formatDate(currentDate);
             loadData();
         });
 
-        // 初始化日期选择器
-        function initDatePicker() {
-            const picker = document.getElementById('datePicker');
-            picker.value = formatDate(currentDate);
-        }
-
-        // 格式化日期
         function formatDate(date) {
             return date.toISOString().split('T')[0];
         }
 
-        // 切换日期
         function changeDate(delta) {
             currentDate.setDate(currentDate.getDate() + delta);
             document.getElementById('datePicker').value = formatDate(currentDate);
             loadData();
         }
 
-        // 跳转到今天
         function goToToday() {
             currentDate = new Date();
             document.getElementById('datePicker').value = formatDate(currentDate);
             loadData();
         }
 
-        // 加载所有数据
+        function switchTab(tab) {
+            currentTab = tab;
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+            
+            document.querySelector(`[onclick="switchTab('${tab}')"]`).classList.add('active');
+            document.getElementById(`tab-${tab}`).classList.add('active');
+            
+            if (tab === 'content') {
+                loadContentByApp();
+            }
+        }
+
         async function loadData() {
             const dateStr = document.getElementById('datePicker').value;
             currentDate = new Date(dateStr);
 
             try {
-                // 并行加载数据
-                const [report, hourlyStats, records] = await Promise.all([
+                const [report, hourlyStats] = await Promise.all([
                     fetch(`/api/report/${dateStr}`).then(r => r.json()),
-                    fetch(`/api/stats/hourly?target_date=${dateStr}`).then(r => r.json()),
-                    fetch(`/api/records?target_date=${dateStr}&limit=50`).then(r => r.json())
+                    fetch(`/api/stats/hourly?target_date=${dateStr}`).then(r => r.json())
                 ]);
 
-                // 更新概览
                 updateOverview(report.overview);
-
-                // 更新应用列表
                 updateAppList(report.app_stats);
-
-                // 更新图表
                 updateHourlyChart(hourlyStats);
 
-                // 更新活动和总结
-                updateActivities(report.main_activities);
-                updateSummary(report.summary, report.suggestions);
-
-                // 更新记录
-                updateRecords(records.records);
-
+                if (currentTab === 'content') {
+                    loadContentByApp();
+                }
             } catch (error) {
                 console.error('加载数据失败:', error);
             }
         }
 
-        // 更新概览卡片
         function updateOverview(overview) {
             document.getElementById('todayChars').textContent = overview.total_chars.toLocaleString();
             document.getElementById('todayApps').textContent = overview.total_apps;
@@ -758,17 +406,10 @@
             document.getElementById('todayTime').textContent = hours > 0 ? `${hours}h${mins}m` : `${mins}m`;
         }
 
-        // 更新应用列表
         function updateAppList(apps) {
             const container = document.getElementById('appList');
-            
             if (!apps || apps.length === 0) {
-                container.innerHTML = `
-                    <div class="empty-state">
-                        <div class="icon">📭</div>
-                        <p>暂无应用数据</p>
-                    </div>
-                `;
+                container.innerHTML = '<div class="empty-state"><div class="icon">📭</div><p>暂无数据</p></div>';
                 return;
             }
 
@@ -777,28 +418,22 @@
                     <div class="app-icon">${appIcons[app.display_name] || appIcons.default}</div>
                     <div class="app-info">
                         <div class="app-name">${app.display_name}</div>
-                        <div class="app-stats">${app.total_chars.toLocaleString()} 字符 · ${app.session_count} 会话</div>
+                        <div class="app-stats-text">${app.total_chars.toLocaleString()} 字符</div>
                     </div>
-                    <div class="app-percentage">
+                    <div>
                         <div class="percentage-value">${app.percentage}%</div>
-                        <div class="progress-bar">
-                            <div class="progress-fill" style="width: ${app.percentage}%"></div>
-                        </div>
+                        <div class="progress-bar"><div class="progress-fill" style="width: ${app.percentage}%"></div></div>
                     </div>
                 </li>
             `).join('');
         }
 
-        // 更新每小时图表
         function updateHourlyChart(data) {
             const ctx = document.getElementById('hourlyChart').getContext('2d');
-            
             const labels = data.map(d => `${d.hour}:00`);
             const values = data.map(d => d.chars);
 
-            if (hourlyChart) {
-                hourlyChart.destroy();
-            }
+            if (hourlyChart) hourlyChart.destroy();
 
             hourlyChart = new Chart(ctx, {
                 type: 'bar',
@@ -816,128 +451,56 @@
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
-                    plugins: {
-                        legend: {
-                            display: false
-                        },
-                        tooltip: {
-                            backgroundColor: 'rgba(26, 26, 36, 0.95)',
-                            titleColor: '#f0f0f5',
-                            bodyColor: '#8888a0',
-                            borderColor: 'rgba(99, 102, 241, 0.5)',
-                            borderWidth: 1,
-                            padding: 12,
-                            displayColors: false,
-                            callbacks: {
-                                label: (context) => `${context.raw.toLocaleString()} 字符`
-                            }
-                        }
-                    },
+                    plugins: { legend: { display: false } },
                     scales: {
-                        x: {
-                            grid: {
-                                color: 'rgba(42, 42, 58, 0.5)',
-                            },
-                            ticks: {
-                                color: '#555566',
-                                maxRotation: 0,
-                                callback: (value, index) => index % 3 === 0 ? labels[index] : ''
-                            }
-                        },
-                        y: {
-                            grid: {
-                                color: 'rgba(42, 42, 58, 0.5)',
-                            },
-                            ticks: {
-                                color: '#555566',
-                                callback: (value) => value >= 1000 ? `${value/1000}k` : value
-                            }
-                        }
+                        x: { grid: { color: 'rgba(42, 42, 58, 0.5)' }, ticks: { color: '#555566', maxRotation: 0, callback: (v, i) => i % 3 === 0 ? labels[i] : '' } },
+                        y: { grid: { color: 'rgba(42, 42, 58, 0.5)' }, ticks: { color: '#555566', callback: v => v >= 1000 ? `${v/1000}k` : v } }
                     }
                 }
             });
         }
 
-        // 更新主线活动
-        function updateActivities(activities) {
-            const container = document.getElementById('activities');
+        async function loadContentByApp() {
+            const dateStr = document.getElementById('datePicker').value;
+            const container = document.getElementById('appContentList');
             
-            if (!activities || activities.length === 0) {
-                container.innerHTML = '<p style="color: var(--text-muted);">暂无活动记录</p>';
-                return;
-            }
+            container.innerHTML = '<div class="loading"><div class="loading-spinner"></div><span>加载中...</span></div>';
 
-            container.innerHTML = activities.map((act, i) => `
-                <div class="activity-item">
-                    <span class="activity-number">${i + 1}</span>
-                    <span class="activity-text">${act}</span>
-                </div>
-            `).join('');
-        }
+            try {
+                const data = await fetch(`/api/content/by-app?target_date=${dateStr}`).then(r => r.json());
+                
+                if (!data || data.length === 0) {
+                    container.innerHTML = '<div class="empty-state"><div class="icon">📭</div><p>暂无输入内容</p></div>';
+                    return;
+                }
 
-        // 更新总结和建议
-        function updateSummary(summary, suggestions) {
-            document.getElementById('summaryText').textContent = summary || '暂无总结';
-            
-            const container = document.getElementById('suggestions');
-            if (!suggestions || suggestions.length === 0) {
-                container.innerHTML = '<li class="suggestion-item">暂无建议</li>';
-                return;
-            }
-
-            container.innerHTML = suggestions.map(sug => `
-                <li class="suggestion-item">
-                    <span class="suggestion-icon">→</span>
-                    <span>${sug}</span>
-                </li>
-            `).join('');
-        }
-
-        // 更新记录列表
-        function updateRecords(records) {
-            const container = document.getElementById('recordsContainer');
-            
-            if (!records || records.length === 0) {
-                container.innerHTML = `
-                    <div class="empty-state">
-                        <div class="icon">📭</div>
-                        <p>暂无输入记录</p>
+                container.innerHTML = data.map((app, index) => `
+                    <div class="app-content-item ${index === 0 ? 'expanded' : ''}" onclick="toggleAppContent(this)">
+                        <div class="app-content-header">
+                            <div class="app-content-info">
+                                <div class="app-content-icon">${appIcons[app.display_name] || appIcons.default}</div>
+                                <div>
+                                    <div class="app-content-name">${app.display_name}</div>
+                                    <div class="app-content-stats">${app.total_chars.toLocaleString()} 字符 · ${app.session_count} 个片段</div>
+                                </div>
+                            </div>
+                            <div class="app-content-toggle">▼</div>
+                        </div>
+                        <div class="app-content-body">
+                            <div class="content-text">${escapeHtml(app.full_content) || '(无内容)'}</div>
+                        </div>
                     </div>
-                `;
-                return;
+                `).join('');
+            } catch (error) {
+                console.error('加载内容失败:', error);
+                container.innerHTML = '<div class="empty-state"><div class="icon">❌</div><p>加载失败</p></div>';
             }
-
-            container.innerHTML = `
-                <table class="records-table">
-                    <thead>
-                        <tr>
-                            <th>时间</th>
-                            <th>应用</th>
-                            <th>内容</th>
-                            <th>字符</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${records.map(r => `
-                            <tr>
-                                <td class="record-time">${formatTime(r.timestamp)}</td>
-                                <td><span class="record-app">${appIcons[r.display_name] || '📱'} ${r.display_name}</span></td>
-                                <td class="record-content" title="${escapeHtml(r.content)}">${escapeHtml(r.content)}</td>
-                                <td class="record-chars">${r.char_count}</td>
-                            </tr>
-                        `).join('')}
-                    </tbody>
-                </table>
-            `;
         }
 
-        // 格式化时间
-        function formatTime(isoString) {
-            const date = new Date(isoString);
-            return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+        function toggleAppContent(element) {
+            element.classList.toggle('expanded');
         }
 
-        // HTML 转义
         function escapeHtml(text) {
             if (!text) return '';
             const div = document.createElement('div');

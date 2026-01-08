@@ -351,6 +351,61 @@ async def get_app_list():
     return [{"app_name": a, "display_name": d} for a, d in sorted(apps, key=lambda x: x[1])]
 
 
+@app.get("/api/content/by-app")
+async def get_content_by_app(target_date: Optional[str] = None):
+    """获取按应用分组的完整输入内容"""
+    db = get_database()
+    
+    if target_date:
+        try:
+            report_date = datetime.strptime(target_date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="日期格式错误")
+    else:
+        report_date = date.today()
+    
+    records = db.get_records_by_date(report_date)
+    
+    # 按应用分组
+    app_contents = {}
+    for r in records:
+        display_name = r.display_name
+        if display_name not in app_contents:
+            app_contents[display_name] = {
+                "app_name": r.app_name,
+                "display_name": display_name,
+                "total_chars": 0,
+                "sessions": []
+            }
+        
+        app_contents[display_name]["total_chars"] += r.char_count
+        app_contents[display_name]["sessions"].append({
+            "time": r.timestamp.strftime("%H:%M:%S"),
+            "content": r.content or "",
+            "char_count": r.char_count,
+        })
+    
+    # 合并每个应用的内容为完整文本
+    result = []
+    for app_name, data in sorted(app_contents.items(), key=lambda x: -x[1]["total_chars"]):
+        # 合并所有 session 的内容
+        full_content = ""
+        for session in data["sessions"]:
+            if session["content"]:
+                full_content += session["content"]
+        
+        result.append({
+            "app_name": data["app_name"],
+            "display_name": data["display_name"],
+            "total_chars": data["total_chars"],
+            "session_count": len(data["sessions"]),
+            "full_content": full_content,
+            "sessions": data["sessions"],
+        })
+    
+    return result
+
+
 # ===== 静态文件和首页 =====
 
 # 获取 web 目录路径
