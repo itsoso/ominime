@@ -33,30 +33,46 @@ class AppConfig:
     
     # 应用别名映射 (bundle_id -> 显示名称)
     app_aliases: Dict[str, str] = field(default_factory=lambda: {
+        # 微信相关
         "com.tencent.xinWeChat": "微信",
+        "com.tencent.WeChat": "微信",
+        "com.tencent.webplusdevtools": "微信开发者工具",
+        # 通讯工具
         "com.apple.MobileSMS": "信息",
-        "com.todesktop.230313mzl4w4u92": "Cursor",
-        "md.obsidian": "Obsidian",
-        "com.electron.kim": "Kim",
-        "com.apple.Safari": "Safari",
-        "com.google.Chrome": "Chrome",
-        "com.apple.mail": "邮件",
-        "com.apple.Notes": "备忘录",
-        "com.microsoft.Word": "Word",
-        "com.microsoft.Excel": "Excel",
-        "com.apple.Terminal": "终端",
-        "com.googlecode.iterm2": "iTerm",
-        "com.kapeli.dashdoc": "Dash",
-        "com.jetbrains.intellij": "IntelliJ IDEA",
-        "com.microsoft.VSCode": "VS Code",
-        "com.sublimetext.4": "Sublime Text",
-        "com.apple.finder": "Finder",
         "com.tencent.qq": "QQ",
         "com.bytedance.feishu": "飞书",
         "com.alibaba.DingTalkMac": "钉钉",
         "us.zoom.xos": "Zoom",
         "com.slack.Slack": "Slack",
+        # 开发工具
+        "com.todesktop.230313mzl4w4u92": "Cursor",
+        "com.microsoft.VSCode": "VS Code",
+        "com.jetbrains.intellij": "IntelliJ IDEA",
+        "com.sublimetext.4": "Sublime Text",
+        "com.apple.Terminal": "终端",
+        "com.googlecode.iterm2": "iTerm",
+        "com.kapeli.dashdoc": "Dash",
+        # 笔记应用
+        "md.obsidian": "Obsidian",
+        "com.apple.Notes": "备忘录",
         "com.notion.Notion": "Notion",
+        # Kim (可能有多种 bundle_id)
+        "com.electron.kim": "Kim",
+        "Kem": "Kim",
+        "Kem.Renderer": "Kim",
+        "Kim": "Kim",
+        # 浏览器
+        "com.apple.Safari": "Safari",
+        "com.google.Chrome": "Chrome",
+        "org.mozilla.firefox": "Firefox",
+        "com.brave.Browser": "Brave",
+        "com.microsoft.edgemac": "Edge",
+        # 办公软件
+        "com.apple.mail": "邮件",
+        "com.microsoft.Word": "Word",
+        "com.microsoft.Excel": "Excel",
+        "com.microsoft.Powerpoint": "PowerPoint",
+        "com.apple.finder": "Finder",
     })
     
     # 忽略的应用 (不记录这些应用的输入)

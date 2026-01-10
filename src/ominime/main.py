@@ -83,8 +83,13 @@ def cmd_monitor(args):
             current_app[0] = event.app_name
             console.print(f"\n[cyan][{event.app_name}][/cyan] ", end="")
         
-        # 记录输入
-        session = tracker.record_input(event.character, event.app_name, event.app_bundle_id)
+        # 记录输入（传递 is_ime_input 参数）
+        session = tracker.record_input(
+            event.character, 
+            event.app_name, 
+            event.app_bundle_id,
+            is_ime_input=event.is_ime_input
+        )
         
         if session:
             char_count[0] += 1
@@ -98,11 +103,15 @@ def cmd_monitor(args):
                 console.print("\b \b", end="")
             elif char == '\t':
                 console.print("    ", end="")
+            elif event.is_ime_input:
+                # IME 输入（中文）显示为绿色
+                console.print(f"[green]{char}[/green]", end="")
             else:
                 console.print(char, end="")
             
-            # 保存到数据库
-            if len(session.buffer) >= 50:
+            # 保存到数据库（每10个字符或遇到换行时保存）
+            should_save = len(session.buffer) >= 10 or char == '\n'
+            if should_save and session.buffer.strip():
                 record = InputRecord(
                     id=None,
                     timestamp=session.last_activity,

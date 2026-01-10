@@ -26,14 +26,20 @@ class InputSession:
     buffer: str = ""  # 当前输入缓冲区
     char_count: int = 0
     
-    def append(self, char: str):
-        """添加字符到缓冲区"""
+    def append(self, char: str, is_ime_input: bool = False):
+        """添加字符到缓冲区
+        
+        Args:
+            char: 要添加的字符
+            is_ime_input: 是否是 IME 输入（中文）
+        """
         if char == '\b':  # Backspace
             if self.buffer:
                 self.buffer = self.buffer[:-1]
         else:
             self.buffer += char
-            self.char_count += 1
+            self.char_count += len(char)
+        
         self.last_activity = datetime.now()
     
     def is_expired(self, timeout_seconds: int) -> bool:
@@ -153,13 +159,20 @@ class AppTracker:
         stats.total_time_seconds += (session.last_activity - session.start_time).total_seconds()
         stats.add_content(session.buffer)
     
-    def record_input(self, char: str, app_name: str, bundle_id: str) -> InputSession:
-        """记录一次输入"""
+    def record_input(self, char: str, app_name: str, bundle_id: str, is_ime_input: bool = False) -> InputSession:
+        """记录一次输入
+        
+        Args:
+            char: 输入的字符
+            app_name: 应用名称
+            bundle_id: 应用 Bundle ID
+            is_ime_input: 是否是 IME 输入（中文）
+        """
         if self.is_app_ignored(bundle_id):
             return None
         
         session = self.get_or_create_session(app_name, bundle_id)
-        session.append(char)
+        session.append(char, is_ime_input=is_ime_input)
         
         return session
     
