@@ -35,7 +35,7 @@ def check_permissions():
 
 
 def cmd_start(args):
-    """启动 Menu Bar 应用"""
+    """启动 Menu Bar 应用（旧版）"""
     console.print("[bold green]🚀 启动 OmniMe Menu Bar 应用...[/bold green]")
     
     if not check_permissions():
@@ -44,6 +44,18 @@ def cmd_start(args):
     
     from .menu_bar import run_menu_bar_app
     run_menu_bar_app()
+
+
+def cmd_app(args):
+    """启动完整版桌面应用"""
+    console.print("[bold green]🚀 启动 OmniMe 桌面应用...[/bold green]")
+    
+    if not check_permissions():
+        console.print("[red]请授予权限后重新运行[/red]")
+        return
+    
+    from .menu_bar_app import run_app
+    run_app()
 
 
 def cmd_monitor(args):
@@ -333,23 +345,32 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  ominime              # 启动 Menu Bar 应用
-  ominime web          # 启动 Web 后台管理 ⭐
+  ominime              # 启动桌面应用（菜单栏）⭐
+  ominime app          # 同上，启动完整版桌面应用
+  ominime web          # 启动 Web 后台管理
   ominime monitor      # 命令行监控模式
   ominime report       # 查看今日报告
   ominime report -d 2026-01-07  # 查看指定日期报告
   ominime stats        # 查看统计
   ominime export       # 导出今日数据
+
+安装开机启动:
+  ./scripts/install_app.sh   # 一键安装并设置开机启动
+  ./scripts/uninstall_app.sh # 卸载并移除开机启动
 """
     )
     
     subparsers = parser.add_subparsers(dest="command", help="子命令")
     
-    # start 命令
-    start_parser = subparsers.add_parser("start", help="启动 Menu Bar 应用")
+    # start 命令（旧版）
+    start_parser = subparsers.add_parser("start", help="启动 Menu Bar 应用（旧版）")
     start_parser.set_defaults(func=cmd_start)
     
-    # web 命令 (新增)
+    # app 命令（推荐）
+    app_parser = subparsers.add_parser("app", help="启动完整版桌面应用（推荐）⭐")
+    app_parser.set_defaults(func=cmd_app)
+    
+    # web 命令
     web_parser = subparsers.add_parser("web", help="启动 Web 后台管理")
     web_parser.add_argument("-H", "--host", default="127.0.0.1", help="主机地址 (默认: 127.0.0.1)")
     web_parser.add_argument("-p", "--port", type=int, default=8080, help="端口号 (默认: 8080)")
@@ -377,9 +398,9 @@ def main():
     
     args = parser.parse_args()
     
-    # 如果没有子命令，默认启动 Menu Bar 应用
+    # 如果没有子命令，默认启动完整版桌面应用
     if args.command is None:
-        cmd_start(args)
+        cmd_app(args)
     else:
         args.func(args)
 

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.ominime.app</string>
+    
+    <key>ProgramArguments</key>
+    <array>
+        <!-- 将在安装时替换为实际路径 -->
+        <string>__OMINIME_PATH__</string>
+        <string>app</string>
+    </array>
+    
+    <key>RunAtLoad</key>
+    <true/>
+    
+    <key>KeepAlive</key>
+    <false/>
+    
+    <key>StandardOutPath</key>
+    <string>__DATA_DIR__/ominime.log</string>
+    
+    <key>StandardErrorPath</key>
+    <string>__DATA_DIR__/ominime.error.log</string>
+    
+    <key>ProcessType</key>
+    <string>Interactive</string>
+    
+    <key>LimitLoadToSessionType</key>
+    <string>Aqua</string>
+</dict>
+</plist>
