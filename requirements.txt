@@ -21,6 +21,9 @@ pydantic>=2.0.0
 # 数据处理
 python-dateutil>=2.8.2
 
+# 环境变量管理
+python-dotenv>=1.0.0
+
 # AI 总结（可选）
 openai>=1.0.0
 

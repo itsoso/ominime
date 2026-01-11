@@ -237,6 +237,120 @@
         .loading-spinner { width: 40px; height: 40px; border: 3px solid var(--border); border-top-color: var(--accent-primary); border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 16px; }
         @keyframes spin { to { transform: rotate(360deg); } }
 
+        /* 分析页面 */
+        .analysis-content { padding: 20px; }
+        .analysis-section { margin-bottom: 30px; }
+        .analysis-section:last-child { margin-bottom: 0; }
+        .analysis-title { font-size: 18px; font-weight: 600; margin-bottom: 16px; color: var(--text-primary); }
+        .analysis-text { 
+            line-height: 1.8; 
+            color: var(--text-secondary); 
+            background: var(--bg-secondary);
+            padding: 20px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+        }
+        .analysis-text p { margin: 12px 0; }
+        .suggestions-list { 
+            list-style: none; 
+            padding: 0;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+        }
+        .suggestions-list li { 
+            padding: 12px 0; 
+            border-bottom: 1px solid var(--border);
+            color: var(--text-secondary);
+            line-height: 1.6;
+        }
+        .suggestions-list li:last-child { border-bottom: none; }
+
+        /* 工作路径分析 */
+        .work-path-content { padding: 20px; }
+        .work-path-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 16px;
+            margin-bottom: 30px;
+        }
+        .work-path-stat-item {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+        }
+        .stat-label {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .stat-value {
+            font-size: 24px;
+            font-weight: 700;
+            background: var(--gradient-1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .work-path-section { margin-bottom: 30px; }
+        .work-path-section:last-child { margin-bottom: 0; }
+        .work-path-title { font-size: 18px; font-weight: 600; margin-bottom: 16px; color: var(--text-primary); }
+        .peak-hours {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        .peak-hour-item {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px 16px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .peak-hour-time {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 600;
+            color: var(--accent-primary);
+        }
+        .peak-hour-chars {
+            color: var(--text-secondary);
+            font-size: 14px;
+        }
+        .focus-periods {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .focus-period-item {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+        }
+        .focus-period-time {
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--text-primary);
+            font-weight: 500;
+        }
+        .focus-period-app {
+            flex: 1;
+            color: var(--text-secondary);
+        }
+        .focus-period-duration {
+            color: var(--accent-primary);
+            font-weight: 600;
+        }
+
         .footer { text-align: center; padding: 40px 0; color: var(--text-muted); font-size: 12px; }
 
         @media (max-width: 768px) {
@@ -258,6 +372,7 @@
             <div class="nav-controls">
                 <div class="tab-buttons">
                     <button class="tab-btn active" onclick="switchTab('overview')">📊 概览</button>
+                    <button class="tab-btn" onclick="switchTab('analysis')">🤖 分析</button>
                     <button class="tab-btn" onclick="switchTab('content')">📝 内容</button>
                 </div>
                 <div class="date-nav">
@@ -307,6 +422,26 @@
                     <ul class="app-list" id="appList">
                         <div class="loading"><div class="loading-spinner"></div></div>
                     </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- 分析标签页 -->
+        <div id="tab-analysis" class="tab-content">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">🤖 AI 深度分析</h2>
+                </div>
+                <div id="aiAnalysisContent" class="analysis-content">
+                    <div class="loading"><div class="loading-spinner"></div><span>加载中...</span></div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">🛤️ 工作路径分析</h2>
+                </div>
+                <div id="workPathContent" class="work-path-content">
+                    <div class="loading"><div class="loading-spinner"></div><span>加载中...</span></div>
                 </div>
             </div>
         </div>
@@ -371,6 +506,8 @@
             
             if (tab === 'content') {
                 loadContentByApp();
+            } else if (tab === 'analysis') {
+                loadAnalysis();
             }
         }
 
@@ -390,6 +527,8 @@
 
                 if (currentTab === 'content') {
                     loadContentByApp();
+                } else if (currentTab === 'analysis') {
+                    loadAnalysis();
                 }
             } catch (error) {
                 console.error('加载数据失败:', error);
@@ -458,6 +597,150 @@
                     }
                 }
             });
+        }
+
+        async function loadAnalysis() {
+            const dateStr = document.getElementById('datePicker').value;
+            const aiContainer = document.getElementById('aiAnalysisContent');
+            const workPathContainer = document.getElementById('workPathContent');
+            
+            aiContainer.innerHTML = '<div class="loading"><div class="loading-spinner"></div><span>加载中...</span></div>';
+            workPathContainer.innerHTML = '<div class="loading"><div class="loading-spinner"></div><span>加载中...</span></div>';
+            
+            try {
+                const report = await fetch(`/api/report/${dateStr}`).then(r => r.json());
+                
+                // 更新 AI 分析
+                updateAIAnalysis(report);
+                
+                // 更新工作路径分析
+                updateWorkPath(report.work_path);
+            } catch (error) {
+                console.error('加载分析失败:', error);
+                aiContainer.innerHTML = '<div class="empty-state"><div class="icon">❌</div><p>加载失败</p></div>';
+                workPathContainer.innerHTML = '<div class="empty-state"><div class="icon">❌</div><p>加载失败</p></div>';
+            }
+        }
+
+        function updateAIAnalysis(report) {
+            const container = document.getElementById('aiAnalysisContent');
+            
+            let html = '';
+            
+            // 总结
+            if (report.summary) {
+                html += `
+                    <div class="analysis-section">
+                        <h3 class="analysis-title">📝 今日总结</h3>
+                        <div class="analysis-text">${escapeHtml(report.summary)}</div>
+                    </div>
+                `;
+            }
+            
+            // AI 工作分析
+            if (report.ai_work_analysis) {
+                const analysisText = escapeHtml(report.ai_work_analysis)
+                    .replace(/\n\n/g, '</p><p>')
+                    .replace(/\n/g, '<br>');
+                html += `
+                    <div class="analysis-section">
+                        <h3 class="analysis-title">🤖 AI 深度分析</h3>
+                        <div class="analysis-text"><p>${analysisText}</p></div>
+                    </div>
+                `;
+            }
+            
+            // 建议
+            if (report.suggestions && report.suggestions.length > 0) {
+                html += `
+                    <div class="analysis-section">
+                        <h3 class="analysis-title">💡 优化建议</h3>
+                        <ul class="suggestions-list">
+                            ${report.suggestions.map(s => `<li>${escapeHtml(s)}</li>`).join('')}
+                        </ul>
+                    </div>
+                `;
+            }
+            
+            if (!html) {
+                html = '<div class="empty-state"><div class="icon">📭</div><p>暂无分析数据</p></div>';
+            }
+            
+            container.innerHTML = html;
+        }
+
+        function updateWorkPath(workPath) {
+            const container = document.getElementById('workPathContent');
+            
+            if (!workPath) {
+                container.innerHTML = '<div class="empty-state"><div class="icon">📭</div><p>暂无工作路径数据</p></div>';
+                return;
+            }
+            
+            let html = `
+                <div class="work-path-stats">
+                    <div class="work-path-stat-item">
+                        <div class="stat-label">工作模式</div>
+                        <div class="stat-value">${workPath.work_pattern}</div>
+                    </div>
+                    <div class="work-path-stat-item">
+                        <div class="stat-label">效率分数</div>
+                        <div class="stat-value">${workPath.efficiency_score}/100</div>
+                    </div>
+                    <div class="work-path-stat-item">
+                        <div class="stat-label">应用切换</div>
+                        <div class="stat-value">${workPath.app_switches} 次</div>
+                    </div>
+                    <div class="work-path-stat-item">
+                        <div class="stat-label">工作片段</div>
+                        <div class="stat-value">${workPath.total_segments} 个</div>
+                    </div>
+                </div>
+            `;
+            
+            // 峰值时段
+            if (workPath.peak_hours && workPath.peak_hours.length > 0) {
+                html += `
+                    <div class="work-path-section">
+                        <h3 class="work-path-title">⏰ 峰值时段</h3>
+                        <div class="peak-hours">
+                            ${workPath.peak_hours.map(p => `
+                                <div class="peak-hour-item">
+                                    <span class="peak-hour-time">${p.hour}:00</span>
+                                    <span class="peak-hour-chars">${p.chars.toLocaleString()} 字符</span>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+            }
+            
+            // 专注时段
+            if (workPath.focus_periods && workPath.focus_periods.length > 0) {
+                html += `
+                    <div class="work-path-section">
+                        <h3 class="work-path-title">🎯 深度工作时段</h3>
+                        <div class="focus-periods">
+                            ${workPath.focus_periods.map(p => {
+                                const start = new Date(p.start);
+                                const end = new Date(p.end);
+                                return `
+                                    <div class="focus-period-item">
+                                        <div class="focus-period-time">
+                                            ${start.toLocaleTimeString('zh-CN', {hour: '2-digit', minute: '2-digit'})} - 
+                                            ${end.toLocaleTimeString('zh-CN', {hour: '2-digit', minute: '2-digit'})}
+                                        </div>
+                                        <div class="focus-period-app">${p.app}</div>
+                                        <div class="focus-period-duration">${Math.round(p.duration_minutes)} 分钟</div>
+                                    </div>
+                                `;
+                            }).join('')}
+                        </div>
+                    </div>
+                `;
+            }
+            
+            container.innerHTML = html;
         }
 
         async function loadContentByApp() {

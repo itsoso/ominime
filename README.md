@@ -36,9 +36,11 @@ chmod +x scripts/install_app.sh
 
 安装脚本会自动：
 1. 创建虚拟环境
-2. 安装所有依赖
+2. 安装所有依赖（包括 python-dotenv）
 3. 设置开机启动
 4. 启动应用
+
+> 💡 **提示**：首次使用建议配置 `.env` 文件启用 AI 功能（见下方说明）
 
 ### 手动安装
 
@@ -237,17 +239,50 @@ OmniMe 支持鼠须管(Rime)输入法的中文输入。如果你使用鼠须管�
 
 ### 启用 AI 功能
 
-1. 设置环境变量：
+#### 方法一：使用 .env 文件（推荐）
+
+1. 复制 `.env.example` 为 `.env`：
+```bash
+cp .env.example .env
+```
+
+2. 编辑 `.env` 文件，填入你的 OpenAI API Key：
+```bash
+OPENAI_API_KEY=your-openai-api-key-here
+```
+
+3. 系统会自动检测 API Key 并启用 AI 功能。
+
+#### 方法二：使用环境变量
+
 ```bash
 export OPENAI_API_KEY="your-api-key"
 ```
 
-2. 修改配置启用 AI：
+#### 方法三：修改配置文件
+
+编辑 `~/.ominime/config.json`：
 ```json
 {
-  "ai_enabled": true
+  "ai_enabled": true,
+  "openai_model": "gpt-4o-mini"
 }
 ```
+
+> 💡 **提示**：如果提供了 API Key，系统会自动启用 AI 功能，无需手动设置 `ai_enabled`。
+
+#### 获取 OpenAI API Key
+
+1. 访问 https://platform.openai.com/api-keys
+2. 登录并创建新的 API Key
+3. 将 Key 添加到 `.env` 文件或环境变量中
+
+#### AI 功能说明
+
+启用 AI 后，系统会使用 GPT 模型进行：
+- 📝 **智能总结**：生成每日工作内容的深度分析（150-200字）
+- 🤖 **工作路径分析**：分析工作节奏、应用使用模式、专注度评估（300-400字）
+- 💡 **个性化建议**：基于数据生成3-5条可执行的优化建议
 
 ## 📁 项目结构
 

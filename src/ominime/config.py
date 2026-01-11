@@ -8,6 +8,24 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 import json
 
+# 尝试加载 dotenv（如果可用）
+try:
+    from dotenv import load_dotenv
+    _dotenv_available = True
+except ImportError:
+    _dotenv_available = False
+
+# 加载 .env 文件（如果存在）
+if _dotenv_available:
+    # 从项目根目录加载 .env 文件
+    project_root = Path(__file__).parent.parent.parent.parent
+    env_path = project_root / ".env"
+    if env_path.exists():
+        load_dotenv(env_path)
+    else:
+        # 也尝试从当前工作目录加载
+        load_dotenv()
+
 
 @dataclass
 class AppConfig:
@@ -22,10 +40,10 @@ class AppConfig:
     # 日志目录
     log_dir: Path = field(default_factory=lambda: Path.home() / ".ominime" / "logs")
     
-    # 是否启用 AI 总结
-    ai_enabled: bool = False
+    # 是否启用 AI 总结（如果提供了 API Key 则自动启用）
+    ai_enabled: bool = field(default=False)
     
-    # OpenAI API Key (从环境变量读取)
+    # OpenAI API Key (从环境变量或 .env 文件读取)
     openai_api_key: Optional[str] = field(default_factory=lambda: os.getenv("OPENAI_API_KEY"))
     
     # OpenAI 模型
@@ -91,6 +109,10 @@ class AppConfig:
         """初始化后创建必要的目录"""
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.log_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 如果提供了 API Key，自动启用 AI 功能
+        if self.openai_api_key and not self.ai_enabled:
+            self.ai_enabled = True
     
     def get_app_display_name(self, bundle_id: str, default_name: str) -> str:
         """获取应用显示名称"""
@@ -120,6 +142,30 @@ class AppConfig:
         config = cls()
         config_path = path or (config.data_dir / "config.json")
         
+        # 从 .env 文件读取配置（如果可用）
+        if _dotenv_available:
+            # 重新加载环境变量（确保最新）
+            project_root = Path(__file__).parent.parent.parent.parent
+            env_path = project_root / ".env"
+            if env_path.exists():
+                load_dotenv(env_path, override=True)
+            else:
+                load_dotenv(override=True)
+            
+            # 从环境变量更新配置
+            env_api_key = os.getenv("OPENAI_API_KEY")
+            if env_api_key:
+                config.openai_api_key = env_api_key
+            
+            env_model = os.getenv("OPENAI_MODEL")
+            if env_model:
+                config.openai_model = env_model
+            
+            env_ai_enabled = os.getenv("AI_ENABLED")
+            if env_ai_enabled:
+                config.ai_enabled = env_ai_enabled.lower() in ("true", "1", "yes", "on")
+        
+        # 从 config.json 加载配置（会覆盖环境变量中的部分设置）
         if config_path.exists():
             with open(config_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -129,6 +175,10 @@ class AppConfig:
                 config.ignored_apps = data.get("ignored_apps", config.ignored_apps)
                 config.session_timeout = data.get("session_timeout", config.session_timeout)
                 config.min_record_length = data.get("min_record_length", config.min_record_length)
+        
+        # 如果提供了 API Key，自动启用 AI 功能
+        if config.openai_api_key and not config.ai_enabled:
+            config.ai_enabled = True
         
         return config
 

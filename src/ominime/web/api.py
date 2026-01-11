@@ -56,12 +56,34 @@ class DailyOverview(BaseModel):
     total_time_minutes: float
 
 
+class WorkPathSegmentResponse(BaseModel):
+    start_time: str
+    end_time: str
+    app_name: str
+    display_name: str
+    char_count: int
+    duration_minutes: float
+    content_preview: str
+
+
+class WorkPathAnalysisResponse(BaseModel):
+    total_segments: int
+    app_switches: int
+    peak_hours: List[dict]
+    focus_periods: List[dict]
+    work_pattern: str
+    efficiency_score: float
+    segments: Optional[List[WorkPathSegmentResponse]] = None
+
+
 class DailyReportResponse(BaseModel):
     overview: DailyOverview
     app_stats: List[AppStatsResponse]
     main_activities: List[str]
     summary: str
     suggestions: List[str]
+    work_path: Optional[WorkPathAnalysisResponse] = None
+    ai_work_analysis: Optional[str] = None
 
 
 class HourlyStats(BaseModel):
@@ -180,6 +202,38 @@ async def get_daily_report(target_date: str):
     
     weekday_names = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
     
+    # 工作路径分析
+    work_path_response = None
+    if report.work_path:
+        work_path_response = WorkPathAnalysisResponse(
+            total_segments=report.work_path.total_segments,
+            app_switches=report.work_path.app_switches,
+            peak_hours=[{"hour": h, "chars": c} for h, c in report.work_path.peak_hours],
+            focus_periods=[
+                {
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "app": app,
+                    "duration_minutes": round((end - start).total_seconds() / 60, 1)
+                }
+                for start, end, app in report.work_path.focus_periods
+            ],
+            work_pattern=report.work_path.work_pattern,
+            efficiency_score=round(report.work_path.efficiency_score, 1),
+            segments=[
+                WorkPathSegmentResponse(
+                    start_time=seg.start_time.isoformat(),
+                    end_time=seg.end_time.isoformat(),
+                    app_name=seg.app_name,
+                    display_name=seg.display_name,
+                    char_count=seg.char_count,
+                    duration_minutes=round(seg.duration_minutes, 1),
+                    content_preview=seg.content_preview
+                )
+                for seg in report.work_path.segments[:50]  # 限制返回数量
+            ] if len(report.work_path.segments) <= 50 else None
+        )
+    
     return DailyReportResponse(
         overview=DailyOverview(
             date=report_date.isoformat(),
@@ -193,6 +247,8 @@ async def get_daily_report(target_date: str):
         main_activities=report.main_activities,
         summary=report.summary,
         suggestions=report.suggestions,
+        work_path=work_path_response,
+        ai_work_analysis=report.ai_work_analysis,
     )
 
 

@@ -56,8 +56,37 @@ source venv/bin/activate
 
 # 安装依赖
 echo -e "${YELLOW}[3/5] 安装依赖...${NC}"
-pip install --upgrade pip -q
-pip install -e . -q
+
+# 检测是否需要使用镜像源（VPN/代理环境）
+PIP_MIRROR=""
+if [ "$USE_MIRROR" = "1" ] || [ "$USE_MIRROR" = "true" ]; then
+    PIP_MIRROR="-i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn"
+    echo -e "${BLUE}使用清华镜像源${NC}"
+fi
+
+# 尝试安装，如果失败则自动切换镜像源
+install_deps() {
+    pip install --upgrade pip $PIP_MIRROR -q 2>/dev/null && \
+    pip install -e . $PIP_MIRROR -q 2>/dev/null
+}
+
+if ! install_deps; then
+    echo -e "${YELLOW}检测到网络问题，切换到清华镜像源...${NC}"
+    PIP_MIRROR="-i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn"
+    
+    # 临时禁用代理
+    unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY
+    
+    if ! install_deps; then
+        echo -e "${RED}✗ 安装失败，请检查网络连接${NC}"
+        echo ""
+        echo "你可以尝试以下方法："
+        echo "  1. 临时关闭 VPN/代理后重试"
+        echo "  2. 手动安装: pip install -e . -i https://pypi.tuna.tsinghua.edu.cn/simple"
+        exit 1
+    fi
+fi
+
 echo -e "${GREEN}✓ 依赖安装完成${NC}"
 
 # 获取 ominime 命令路径

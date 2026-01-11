@@ -6,11 +6,36 @@
 
 import os
 from datetime import datetime, date, timedelta
-from typing import List, Dict, Optional
-from dataclasses import dataclass
+from typing import List, Dict, Optional, Tuple
+from dataclasses import dataclass, field
 
-from .database import get_database, AppDailyStats, DailySummary
+from .database import get_database, AppDailyStats, DailySummary, InputRecord
 from .config import config
+
+
+@dataclass
+class WorkPathSegment:
+    """工作路径片段"""
+    start_time: datetime
+    end_time: datetime
+    app_name: str
+    display_name: str
+    char_count: int
+    duration_minutes: float
+    content_preview: str
+
+
+@dataclass
+class WorkPathAnalysis:
+    """工作路径分析"""
+    segments: List[WorkPathSegment]
+    total_segments: int
+    app_switches: int
+    peak_hours: List[Tuple[int, int]]  # [(hour, char_count), ...]
+    focus_periods: List[Tuple[datetime, datetime, str]]  # [(start, end, app), ...]
+    work_pattern: str  # "集中型" / "分散型" / "混合型"
+    efficiency_score: float  # 0-100
+    ai_analysis: Optional[str] = None  # AI 生成的工作路径分析
 
 
 @dataclass
@@ -25,6 +50,8 @@ class DailyReport:
     main_activities: List[str]
     summary: str
     suggestions: List[str]
+    work_path: Optional[WorkPathAnalysis] = None
+    ai_work_analysis: Optional[str] = None  # AI 生成的工作分析
 
 
 class Analyzer:
@@ -84,8 +111,16 @@ class Analyzer:
         # 生成总结
         summary = self._generate_summary(app_stats, target_date)
         
-        # 生成建议
-        suggestions = self._generate_suggestions(app_stats, total_chars, total_time_minutes)
+        # 工作路径分析
+        work_path = self._analyze_work_path(target_date)
+        
+        # 生成建议（包含工作路径信息）
+        suggestions = self._generate_suggestions(app_stats, total_chars, total_time_minutes, work_path)
+        
+        # AI 工作分析
+        ai_work_analysis = None
+        if config.ai_enabled and work_path:
+            ai_work_analysis = self._ai_analyze_work_path(work_path, app_stats, target_date)
         
         return DailyReport(
             date=target_date,
@@ -97,6 +132,8 @@ class Analyzer:
             main_activities=main_activities,
             summary=summary,
             suggestions=suggestions,
+            work_path=work_path,
+            ai_work_analysis=ai_work_analysis,
         )
     
     def _extract_main_activities(self, app_stats: List[AppDailyStats]) -> List[str]:
@@ -200,34 +237,43 @@ class Analyzer:
             for s in app_stats[:10]
         ])
         
-        # 准备样本内容
+        # 准备样本内容（更丰富的内容用于分析）
         samples = []
         for s in app_stats[:5]:
-            for content in s.sample_content[:2]:
-                if content and len(content) > 10:
-                    samples.append(f"[{s.display_name}] {content[:100]}...")
+            for content in s.sample_content[:3]:
+                if content and len(content) > 20:
+                    samples.append(f"[{s.display_name}] {content[:150]}...")
         
-        samples_text = "\n".join(samples[:10])
+        samples_text = "\n".join(samples[:15])
         
-        prompt = f"""请根据以下用户今日({target_date})的输入统计，生成一段简洁的中文总结（不超过100字）：
+        total_chars = sum(s.total_chars for s in app_stats)
+        
+        prompt = f"""请根据以下用户{target_date}的输入统计和内容样本，生成一段150-200字的中文总结：
 
 应用统计:
 {stats_text}
 
-输入样本:
+总字符数: {total_chars:,}
+
+输入内容样本:
 {samples_text}
 
 要求：
-1. 概括今日主要活动
-2. 语气友好、简洁
-3. 不要列举数字，重在概括
+1. 概括今日主要工作内容和活动类型
+2. 识别工作重点和主要任务
+3. 分析工作节奏和效率特点
+4. 语气专业但友好
+5. 避免简单列举数字，重在洞察和分析
 """
         
         try:
             response = client.chat.completions.create(
                 model=config.openai_model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=200,
+                messages=[
+                    {"role": "system", "content": "你是一个专业的工作效率分析师，擅长从数据中提取洞察。"},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=400,
                 temperature=0.7,
             )
             return response.choices[0].message.content.strip()
@@ -239,7 +285,8 @@ class Analyzer:
         self, 
         app_stats: List[AppDailyStats], 
         total_chars: int,
-        total_time_minutes: float
+        total_time_minutes: float,
+        work_path: Optional[WorkPathAnalysis] = None
     ) -> List[str]:
         """生成建议"""
         suggestions = []
@@ -270,6 +317,18 @@ class Analyzer:
             if total_time_minutes > 300:  # 超过5小时
                 suggestions.append("⏰ 今日活跃时间较长，注意劳逸结合")
         
+        # 工作路径相关建议
+        if work_path:
+            if work_path.work_pattern == "分散型":
+                suggestions.append("🔄 工作模式较为分散，建议设置专注时段减少应用切换")
+            elif work_path.app_switches > 50:
+                suggestions.append("🔄 应用切换频繁，可能影响深度工作，建议批量处理任务")
+            
+            if work_path.efficiency_score < 60:
+                suggestions.append("📈 效率分数较低，建议优化工作节奏，增加专注时段")
+            elif len(work_path.focus_periods) < 2:
+                suggestions.append("🎯 深度工作时间较少，建议安排2-3个专注时段")
+        
         # 多应用切换建议
         if len(app_stats) > 8:
             suggestions.append("🔄 今日使用了多个应用，频繁切换可能影响专注度")
@@ -277,47 +336,77 @@ class Analyzer:
         # AI 增强建议
         client = self._get_openai_client()
         if client:
-            ai_suggestions = self._ai_generate_suggestions(app_stats, total_chars)
+            ai_suggestions = self._ai_generate_suggestions(app_stats, total_chars, work_path)
             suggestions.extend(ai_suggestions)
         
         return suggestions if suggestions else ["👍 继续保持，明天见！"]
     
-    def _ai_generate_suggestions(self, app_stats: List[AppDailyStats], total_chars: int) -> List[str]:
+    def _ai_generate_suggestions(
+        self, 
+        app_stats: List[AppDailyStats], 
+        total_chars: int,
+        work_path: Optional[WorkPathAnalysis] = None
+    ) -> List[str]:
         """使用 AI 生成个性化建议"""
         client = self._get_openai_client()
         if not client:
             return []
         
         stats_text = "\n".join([
-            f"- {s.display_name}: {s.total_chars}字符"
+            f"- {s.display_name}: {s.total_chars}字符, {s.session_count}个会话"
             for s in app_stats[:10]
         ])
         
-        prompt = f"""基于用户今日的应用使用统计，给出1-2条简短的效率或健康建议：
+        # 添加工作路径信息
+        work_path_info = ""
+        if work_path:
+            work_path_info = f"""
+工作模式: {work_path.work_pattern}
+效率分数: {work_path.efficiency_score:.1f}/100
+应用切换次数: {work_path.app_switches}
+专注时段数: {len(work_path.focus_periods)}
+峰值时段: {', '.join([f'{h}点' for h, _ in work_path.peak_hours[:3]])}
+"""
+        
+        prompt = f"""基于用户今日的应用使用统计和工作路径分析，给出3-5条具体、可执行的效率或健康建议：
 
+应用统计:
 {stats_text}
 
 总字符数: {total_chars}
+{work_path_info}
 
 要求：
-1. 每条建议不超过30字
-2. 以emoji开头
-3. 具体、可执行
-4. 语气友好
+1. 每条建议30-50字，具体可执行
+2. 以emoji开头（💡 ⏰ 🎯 🔄 💪 等）
+3. 基于数据给出针对性建议
+4. 语气友好、鼓励性
+5. 涵盖效率、健康、专注度等方面
 """
         
         try:
             response = client.chat.completions.create(
                 model=config.openai_model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=150,
+                messages=[
+                    {"role": "system", "content": "你是一个专业的工作效率顾问，擅长给出具体可执行的改进建议。"},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=300,
                 temperature=0.8,
             )
             
             text = response.choices[0].message.content.strip()
             # 解析多行建议
-            suggestions = [line.strip() for line in text.split('\n') if line.strip()]
-            return suggestions[:2]
+            suggestions = []
+            for line in text.split('\n'):
+                line = line.strip()
+                if line and (line.startswith('💡') or line.startswith('⏰') or 
+                           line.startswith('🎯') or line.startswith('🔄') or 
+                           line.startswith('💪') or line.startswith('📝') or
+                           line.startswith('✨') or line.startswith('🌟')):
+                    suggestions.append(line)
+            
+            return suggestions[:5] if suggestions else []
         except Exception as e:
             print(f"AI 建议生成失败: {e}")
             return []
@@ -368,6 +457,35 @@ class Analyzer:
         lines.append(f"  {report.summary}")
         lines.append("")
         
+        # 工作路径分析
+        if report.work_path:
+            lines.append("🛤️  工作路径分析:")
+            lines.append(f"  工作模式: {report.work_path.work_pattern}")
+            lines.append(f"  效率分数: {report.work_path.efficiency_score:.1f}/100")
+            lines.append(f"  应用切换: {report.work_path.app_switches} 次")
+            lines.append(f"  专注时段: {len(report.work_path.focus_periods)} 个")
+            
+            if report.work_path.peak_hours:
+                peak_str = ", ".join([f"{h}点({c:,}字符)" for h, c in report.work_path.peak_hours[:3]])
+                lines.append(f"  峰值时段: {peak_str}")
+            
+            if report.work_path.focus_periods:
+                lines.append("  深度工作时段:")
+                for start, end, app in report.work_path.focus_periods[:3]:
+                    duration = (end - start).total_seconds() / 60
+                    lines.append(f"    • {start.strftime('%H:%M')}-{end.strftime('%H:%M')} {app} ({duration:.0f}分钟)")
+            lines.append("")
+        
+        # AI 工作分析
+        if report.ai_work_analysis:
+            lines.append("🤖 AI 深度分析:")
+            # 按段落格式化
+            paragraphs = report.ai_work_analysis.split('\n\n')
+            for para in paragraphs:
+                if para.strip():
+                    lines.append(f"  {para.strip()}")
+            lines.append("")
+        
         # 建议
         if report.suggestions:
             lines.append("💡 建议:")
@@ -385,6 +503,216 @@ class Analyzer:
             "total_chars": sum(d.get('total_chars', 0) for d in days),
             "avg_chars_per_day": sum(d.get('total_chars', 0) for d in days) / max(len(days), 1),
         }
+    
+    def _analyze_work_path(self, target_date: date) -> Optional[WorkPathAnalysis]:
+        """分析工作路径"""
+        records = self.db.get_records_by_date(target_date)
+        
+        if not records:
+            return None
+        
+        # 按时间排序
+        records.sort(key=lambda x: x.timestamp)
+        
+        # 构建工作路径片段
+        segments = []
+        current_segment = None
+        
+        for record in records:
+            if current_segment is None or \
+               current_segment.display_name != record.display_name or \
+               (record.timestamp - current_segment.end_time).total_seconds() > 300:  # 5分钟间隔视为新片段
+                
+                # 保存上一个片段
+                if current_segment:
+                    segments.append(current_segment)
+                
+                # 创建新片段
+                current_segment = WorkPathSegment(
+                    start_time=record.timestamp,
+                    end_time=record.timestamp,
+                    app_name=record.app_name,
+                    display_name=record.display_name,
+                    char_count=record.char_count,
+                    duration_minutes=0,
+                    content_preview=record.content[:50] if record.content else ""
+                )
+            else:
+                # 更新当前片段
+                current_segment.end_time = record.timestamp
+                current_segment.char_count += record.char_count
+                if record.content and len(record.content) > len(current_segment.content_preview):
+                    current_segment.content_preview = record.content[:50]
+        
+        # 添加最后一个片段
+        if current_segment:
+            segments.append(current_segment)
+        
+        # 计算每个片段的持续时间
+        for segment in segments:
+            duration_seconds = (segment.end_time - segment.start_time).total_seconds()
+            segment.duration_minutes = duration_seconds / 60.0
+        
+        # 计算应用切换次数
+        app_switches = 0
+        prev_app = None
+        for segment in segments:
+            if prev_app and prev_app != segment.display_name:
+                app_switches += 1
+            prev_app = segment.display_name
+        
+        # 分析峰值时段（按小时统计）
+        hour_chars = {}
+        for record in records:
+            hour = record.timestamp.hour
+            hour_chars[hour] = hour_chars.get(hour, 0) + record.char_count
+        
+        peak_hours = sorted(hour_chars.items(), key=lambda x: x[1], reverse=True)[:5]
+        
+        # 识别专注时段（连续30分钟以上在同一应用且输入量较大）
+        focus_periods = []
+        for segment in segments:
+            if segment.duration_minutes >= 30 and segment.char_count >= 100:
+                focus_periods.append((
+                    segment.start_time,
+                    segment.end_time,
+                    segment.display_name
+                ))
+        
+        # 判断工作模式
+        work_pattern = self._identify_work_pattern(segments, app_switches)
+        
+        # 计算效率分数（基于专注时段、应用切换频率等）
+        efficiency_score = self._calculate_efficiency_score(
+            segments, app_switches, total_chars=sum(s.char_count for s in segments)
+        )
+        
+        return WorkPathAnalysis(
+            segments=segments,
+            total_segments=len(segments),
+            app_switches=app_switches,
+            peak_hours=peak_hours,
+            focus_periods=focus_periods,
+            work_pattern=work_pattern,
+            efficiency_score=efficiency_score,
+        )
+    
+    def _identify_work_pattern(self, segments: List[WorkPathSegment], app_switches: int) -> str:
+        """识别工作模式"""
+        if not segments:
+            return "未知"
+        
+        # 计算平均片段时长
+        avg_duration = sum(s.duration_minutes for s in segments) / len(segments)
+        
+        # 计算切换频率
+        switch_rate = app_switches / max(len(segments), 1)
+        
+        # 判断模式
+        if avg_duration >= 60 and switch_rate < 0.3:
+            return "集中型"  # 长时间专注，切换少
+        elif avg_duration < 15 and switch_rate > 0.7:
+            return "分散型"  # 短时间片段，频繁切换
+        else:
+            return "混合型"  # 介于两者之间
+    
+    def _calculate_efficiency_score(self, segments: List[WorkPathSegment], app_switches: int, total_chars: int) -> float:
+        """计算效率分数（0-100）"""
+        if not segments:
+            return 0.0
+        
+        score = 100.0
+        
+        # 专注时段加分
+        focus_count = sum(1 for s in segments if s.duration_minutes >= 30 and s.char_count >= 100)
+        score += min(focus_count * 5, 20)  # 最多加20分
+        
+        # 过度切换扣分
+        switch_rate = app_switches / max(len(segments), 1)
+        if switch_rate > 0.8:
+            score -= (switch_rate - 0.8) * 50  # 切换率超过0.8时扣分
+        
+        # 输入量加分
+        if total_chars > 5000:
+            score += min((total_chars - 5000) / 1000 * 2, 10)  # 每1000字符加2分，最多10分
+        
+        return max(0.0, min(100.0, score))
+    
+    def _ai_analyze_work_path(
+        self, 
+        work_path: WorkPathAnalysis, 
+        app_stats: List[AppDailyStats],
+        target_date: date
+    ) -> Optional[str]:
+        """使用 AI 分析工作路径"""
+        client = self._get_openai_client()
+        if not client:
+            return None
+        
+        # 准备时间线数据
+        timeline = []
+        for segment in work_path.segments[:20]:  # 限制前20个片段
+            timeline.append(
+                f"{segment.start_time.strftime('%H:%M')}-{segment.end_time.strftime('%H:%M')} "
+                f"[{segment.display_name}] {segment.char_count}字符"
+            )
+        
+        # 准备应用统计
+        app_summary = "\n".join([
+            f"- {s.display_name}: {s.total_chars}字符, {s.session_count}个会话"
+            for s in app_stats[:10]
+        ])
+        
+        # 准备峰值时段
+        peak_info = ", ".join([f"{h}点({c}字符)" for h, c in work_path.peak_hours[:3]])
+        
+        # 准备专注时段
+        focus_info = []
+        for start, end, app in work_path.focus_periods[:5]:
+            duration = (end - start).total_seconds() / 60
+            focus_info.append(f"{start.strftime('%H:%M')}-{end.strftime('%H:%M')} {app} ({duration:.0f}分钟)")
+        
+        prompt = f"""请分析用户{target_date}的工作路径，给出深度的工作模式分析和建议。
+
+工作路径时间线:
+{chr(10).join(timeline)}
+
+应用统计:
+{app_summary}
+
+峰值时段: {peak_info}
+工作模式: {work_path.work_pattern}
+效率分数: {work_path.efficiency_score:.1f}/100
+应用切换次数: {work_path.app_switches}
+专注时段数: {len(work_path.focus_periods)}
+
+请从以下角度分析（每个角度2-3句话）：
+1. 工作节奏分析：识别工作的高效时段和低效时段
+2. 应用使用模式：分析应用切换是否合理，是否存在注意力分散
+3. 专注度评估：评估深度工作时间占比
+4. 效率优化建议：基于数据给出3-5条具体可执行的改进建议
+
+要求：
+- 分析要具体、有数据支撑
+- 建议要可执行、有针对性
+- 语气专业但友好
+- 总字数控制在300-400字
+"""
+        
+        try:
+            response = client.chat.completions.create(
+                model=config.openai_model,
+                messages=[
+                    {"role": "system", "content": "你是一个专业的工作效率分析专家，擅长分析工作模式并提供优化建议。"},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=800,
+                temperature=0.7,
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            print(f"AI 工作路径分析失败: {e}")
+            return None
 
 
 # 全局分析器实例
