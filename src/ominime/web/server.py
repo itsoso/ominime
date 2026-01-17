@@ -6,7 +6,7 @@ import uvicorn
 from pathlib import Path
 
 
-def run_server(host: str = "127.0.0.1", port: int = 8080, reload: bool = False):
+def run_server(host: str = "127.0.0.1", port: int = 8001, reload: bool = False):
     """
     启动 Web 服务器
     

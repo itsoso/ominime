@@ -51,8 +51,8 @@ def cmd_app(args):
     console.print("[bold green]🚀 启动 OmniMe 桌面应用...[/bold green]")
     
     if not check_permissions():
-        console.print("[red]请授予权限后重新运行[/red]")
-        return
+        console.print("[yellow]⚠️  未授予辅助功能权限，应用将启动但无法监听键盘输入[/yellow]")
+        console.print("[yellow]可以在菜单栏中手动授予权限后开始记录[/yellow]")
     
     from .menu_bar_app import run_app
     run_app()
@@ -327,7 +327,7 @@ def cmd_export(args):
 def cmd_web(args):
     """启动 Web 后台"""
     host = args.host or "127.0.0.1"
-    port = args.port or 8080
+    port = args.port or 8001
     
     console.print(f"[bold green]🌐 启动 Web 后台管理...[/bold green]")
     console.print(f"[dim]访问地址: http://{host}:{port}[/dim]")
@@ -373,7 +373,7 @@ def main():
     # web 命令
     web_parser = subparsers.add_parser("web", help="启动 Web 后台管理")
     web_parser.add_argument("-H", "--host", default="127.0.0.1", help="主机地址 (默认: 127.0.0.1)")
-    web_parser.add_argument("-p", "--port", type=int, default=8080, help="端口号 (默认: 8080)")
+    web_parser.add_argument("-p", "--port", type=int, default=8001, help="端口号 (默认: 8001)")
     web_parser.add_argument("--reload", action="store_true", help="启用热重载 (开发模式)")
     web_parser.set_defaults(func=cmd_web)
     
