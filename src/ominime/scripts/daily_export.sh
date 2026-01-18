@@ -13,6 +13,17 @@ PYTHON_PATH="${PROJECT_ROOT}/venv/bin/python"
 LOG_DIR="$HOME/.ominime/logs"
 LOG_FILE="$LOG_DIR/daily_export.log"
 
+# 加载 .env 文件（如果存在）
+ENV_FILE="${PROJECT_ROOT}/.env"
+if [ -f "$ENV_FILE" ]; then
+    set -a  # 自动导出所有变量
+    source "$ENV_FILE"
+    set +a
+fi
+
+# 清除代理设置（避免 OpenAI 连接问题）
+unset all_proxy ALL_PROXY http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
+
 # 创建日志目录
 mkdir -p "$LOG_DIR"
 
