@@ -16,6 +16,7 @@ from pathlib import Path
 
 from ..database import get_database, InputRecord
 from ..analyzer import get_analyzer
+from ..exporter import export_daily_to_obsidian
 from ..config import config
 
 
@@ -555,6 +556,48 @@ async def get_app_list():
             apps.add((s.app_name, s.display_name))
     
     return [{"app_name": a, "display_name": d} for a, d in sorted(apps, key=lambda x: x[1])]
+
+
+@app.post("/api/export/obsidian/{target_date}")
+async def export_to_obsidian(
+    target_date: str,
+    include_raw: bool = True,
+    include_ai: bool = True
+):
+    """
+    导出日报到 Obsidian
+    
+    将指定日期的输入记录和 AI 分析导出为 Markdown 文件保存到 Obsidian
+    """
+    try:
+        report_date = datetime.strptime(target_date, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="日期格式错误，请使用 YYYY-MM-DD")
+    
+    filepath = export_daily_to_obsidian(
+        target_date=report_date,
+        include_raw_content=include_raw,
+        include_ai_analysis=include_ai
+    )
+    
+    if filepath:
+        return {
+            "success": True,
+            "message": f"已导出到 {filepath}",
+            "filepath": str(filepath)
+        }
+    else:
+        return {
+            "success": False,
+            "message": f"{report_date} 没有输入记录",
+            "filepath": None
+        }
+
+
+@app.post("/api/export/obsidian")
+async def export_today_to_obsidian(include_raw: bool = True, include_ai: bool = True):
+    """导出今日日报到 Obsidian"""
+    return await export_to_obsidian(date.today().isoformat(), include_raw, include_ai)
 
 
 @app.get("/api/content/by-app")

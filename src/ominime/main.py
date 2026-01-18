@@ -338,6 +338,39 @@ def cmd_web(args):
     run_server(host=host, port=port, reload=args.reload)
 
 
+def cmd_obsidian(args):
+    """导出到 Obsidian"""
+    from .exporter import export_daily_to_obsidian
+    
+    # 解析日期
+    if args.date:
+        try:
+            target_date = datetime.strptime(args.date, "%Y-%m-%d").date()
+        except ValueError:
+            console.print(f"[red]日期格式错误: {args.date}，请使用 YYYY-MM-DD 格式[/red]")
+            return
+    else:
+        target_date = date.today()
+    
+    console.print(f"[bold green]📝 导出 {target_date} 的数据到 Obsidian...[/bold green]")
+    
+    # 导出选项
+    include_raw = not args.no_raw
+    include_ai = not args.no_ai
+    
+    filepath = export_daily_to_obsidian(
+        target_date=target_date,
+        include_raw_content=include_raw,
+        include_ai_analysis=include_ai,
+        obsidian_path=args.path
+    )
+    
+    if filepath:
+        console.print(f"[green]✅ 已导出到: {filepath}[/green]")
+    else:
+        console.print(f"[yellow]⚠️  {target_date} 没有输入记录[/yellow]")
+
+
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(
@@ -353,6 +386,8 @@ def main():
   ominime report -d 2026-01-07  # 查看指定日期报告
   ominime stats        # 查看统计
   ominime export       # 导出今日数据
+  ominime obsidian     # 导出今日日报到 Obsidian ⭐
+  ominime obsidian -d 2026-01-17  # 导出指定日期
 
 安装开机启动:
   ./scripts/install_app.sh   # 一键安装并设置开机启动
@@ -376,6 +411,14 @@ def main():
     web_parser.add_argument("-p", "--port", type=int, default=8001, help="端口号 (默认: 8001)")
     web_parser.add_argument("--reload", action="store_true", help="启用热重载 (开发模式)")
     web_parser.set_defaults(func=cmd_web)
+    
+    # obsidian 命令
+    obsidian_parser = subparsers.add_parser("obsidian", help="导出日报到 Obsidian")
+    obsidian_parser.add_argument("-d", "--date", help="日期 (YYYY-MM-DD)，默认今天")
+    obsidian_parser.add_argument("-p", "--path", help="Obsidian vault 路径")
+    obsidian_parser.add_argument("--no-raw", action="store_true", help="不包含原始输入内容")
+    obsidian_parser.add_argument("--no-ai", action="store_true", help="不包含 AI 分析")
+    obsidian_parser.set_defaults(func=cmd_obsidian)
     
     # monitor 命令
     monitor_parser = subparsers.add_parser("monitor", help="命令行监控模式")
