@@ -22,14 +22,19 @@ echo "╚═══════════════════════�
 echo -e "${NC}"
 
 echo ""
-echo -e "${CYAN}[1/2] 卸载主应用服务...${NC}"
+echo -e "${CYAN}[1/3] 卸载主应用服务...${NC}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 "$SCRIPT_DIR/uninstall_app.sh"
 
 echo ""
-echo -e "${CYAN}[2/2] 卸载 Web 服务...${NC}"
+echo -e "${CYAN}[2/3] 卸载 Web 服务...${NC}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 "$SCRIPT_DIR/uninstall_web.sh"
+
+echo ""
+echo -e "${CYAN}[3/3] 卸载每日导出定时任务...${NC}"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+"$SCRIPT_DIR/uninstall_daily_export.sh"
 
 echo ""
 echo -e "${GREEN}✅ 全部服务已卸载${NC}"

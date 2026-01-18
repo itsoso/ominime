@@ -10,6 +10,7 @@ NC='\033[0m' # No Color
 
 APP_SERVICE="com.ominime.app"
 WEB_SERVICE="com.ominime.web"
+EXPORT_SERVICE="com.ominime.daily-export"
 LOG_DIR="$HOME/.ominime/logs"
 
 echo -e "${CYAN}"
@@ -70,6 +71,23 @@ else
     fi
 fi
 
+# 检查每日导出定时任务状态
+echo ""
+echo -e "${CYAN}⏰ 每日导出定时任务${NC}"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+EXPORT_PLIST="$HOME/Library/LaunchAgents/${EXPORT_SERVICE}.plist"
+if [ ! -f "$EXPORT_PLIST" ]; then
+    echo -e "状态: ${RED}❌ 未安装${NC}"
+else
+    if launchctl list | grep -q "$EXPORT_SERVICE"; then
+        echo -e "状态: ${GREEN}✅ 已安装${NC}"
+        echo -e "执行时间: ${CYAN}每天 23:30${NC}"
+    else
+        echo -e "状态: ${YELLOW}🟡 已安装但未加载${NC}"
+    fi
+fi
+
 # 日志信息
 echo ""
 echo -e "${CYAN}📋 日志文件${NC}"
@@ -78,6 +96,7 @@ echo -e "主应用日志: ${LOG_DIR}/app.log"
 echo -e "主应用错误: ${LOG_DIR}/app.error.log"
 echo -e "Web 日志:   ${LOG_DIR}/web.log"
 echo -e "Web 错误:   ${LOG_DIR}/web.error.log"
+echo -e "导出日志:   ${LOG_DIR}/daily_export.log"
 
 # 管理命令
 echo ""
