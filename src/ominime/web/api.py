@@ -115,6 +115,25 @@ class StatusResponse(BaseModel):
     data_dir: str
 
 
+class ThemeAnalysisResponse(BaseModel):
+    themes: List[str]
+    work_focus: str
+    current_interests: List[str]
+    insights: List[str]
+    detailed_summary: str
+
+
+class FullReportResponse(BaseModel):
+    overview: DailyOverview
+    app_stats: List[AppStatsResponse]
+    main_activities: List[str]
+    summary: str
+    suggestions: List[str]
+    work_path: Optional[WorkPathAnalysisResponse] = None
+    ai_work_analysis: Optional[str] = None
+    theme_analysis: Optional[ThemeAnalysisResponse] = None
+
+
 # ===== API 路由 =====
 
 @app.get("/api/status", response_model=StatusResponse)
@@ -256,6 +275,137 @@ async def get_daily_report(target_date: str):
 async def get_today_report():
     """获取今日报告"""
     return await get_daily_report(date.today().isoformat())
+
+
+@app.get("/api/analysis/theme/{target_date}", response_model=Optional[ThemeAnalysisResponse])
+async def get_theme_analysis(target_date: str):
+    """
+    获取指定日期的主题深度分析
+    
+    分析用户全部输入内容，生成：
+    - 今日主题列表
+    - 工作重点回顾
+    - 当前关注的内容
+    - 洞察和启发
+    - 详细总结
+    """
+    try:
+        report_date = datetime.strptime(target_date, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="日期格式错误，请使用 YYYY-MM-DD")
+    
+    analyzer = get_analyzer()
+    theme = analyzer.generate_theme_analysis(report_date)
+    
+    if not theme:
+        return None
+    
+    return ThemeAnalysisResponse(
+        themes=theme.themes,
+        work_focus=theme.work_focus,
+        current_interests=theme.current_interests,
+        insights=theme.insights,
+        detailed_summary=theme.detailed_summary,
+    )
+
+
+@app.get("/api/analysis/theme")
+async def get_today_theme_analysis():
+    """获取今日主题深度分析"""
+    return await get_theme_analysis(date.today().isoformat())
+
+
+@app.get("/api/report/full/{target_date}", response_model=FullReportResponse)
+async def get_full_report(target_date: str):
+    """
+    获取完整报告（包含主题深度分析）
+    
+    包含：
+    - 基础统计概览
+    - 应用统计
+    - 工作路径分析
+    - AI 工作分析
+    - 主题深度分析（今日主题、工作重点、关注内容、洞察启发）
+    """
+    try:
+        report_date = datetime.strptime(target_date, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="日期格式错误，请使用 YYYY-MM-DD")
+    
+    analyzer = get_analyzer()
+    report = analyzer.generate_full_report(report_date)
+    
+    # 计算百分比
+    total_chars = report.total_chars or 1
+    app_stats = [
+        AppStatsResponse(
+            app_name=s.app_name,
+            display_name=s.display_name,
+            total_chars=s.total_chars,
+            session_count=s.session_count,
+            total_time_minutes=round(s.total_time_minutes, 1),
+            percentage=round(s.total_chars / total_chars * 100, 1),
+        )
+        for s in report.app_stats
+    ]
+    
+    weekday_names = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
+    
+    # 工作路径分析
+    work_path_response = None
+    if report.work_path:
+        work_path_response = WorkPathAnalysisResponse(
+            total_segments=report.work_path.total_segments,
+            app_switches=report.work_path.app_switches,
+            peak_hours=[{"hour": h, "chars": c} for h, c in report.work_path.peak_hours],
+            focus_periods=[
+                {
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "app": app,
+                    "duration_minutes": round((end - start).total_seconds() / 60, 1)
+                }
+                for start, end, app in report.work_path.focus_periods
+            ],
+            work_pattern=report.work_path.work_pattern,
+            efficiency_score=round(report.work_path.efficiency_score, 1),
+            segments=None
+        )
+    
+    # 主题分析
+    theme_response = None
+    if report.theme_analysis:
+        theme_response = ThemeAnalysisResponse(
+            themes=report.theme_analysis.themes,
+            work_focus=report.theme_analysis.work_focus,
+            current_interests=report.theme_analysis.current_interests,
+            insights=report.theme_analysis.insights,
+            detailed_summary=report.theme_analysis.detailed_summary,
+        )
+    
+    return FullReportResponse(
+        overview=DailyOverview(
+            date=report_date.isoformat(),
+            weekday=weekday_names[report_date.weekday()],
+            total_chars=report.total_chars,
+            total_apps=report.total_apps,
+            total_sessions=report.total_sessions,
+            total_time_minutes=round(report.total_time_minutes, 1),
+        ),
+        app_stats=app_stats,
+        main_activities=report.main_activities,
+        summary=report.summary,
+        suggestions=report.suggestions,
+        work_path=work_path_response,
+        ai_work_analysis=report.ai_work_analysis,
+        theme_analysis=theme_response,
+    )
+
+
+@app.get("/api/report/full")
+async def get_today_full_report():
+    """获取今日完整报告"""
+    return await get_full_report(date.today().isoformat())
 
 
 @app.get("/api/stats/hourly")

@@ -39,6 +39,16 @@ class WorkPathAnalysis:
 
 
 @dataclass
+class ThemeAnalysis:
+    """主题分析"""
+    themes: List[str]  # 今日主要主题列表
+    work_focus: str  # 工作重点回顾
+    current_interests: List[str]  # 当前关注的内容
+    insights: List[str]  # 洞察和启发
+    detailed_summary: str  # 详细总结
+
+
+@dataclass
 class DailyReport:
     """每日报告"""
     date: date
@@ -52,6 +62,7 @@ class DailyReport:
     suggestions: List[str]
     work_path: Optional[WorkPathAnalysis] = None
     ai_work_analysis: Optional[str] = None  # AI 生成的工作分析
+    theme_analysis: Optional[ThemeAnalysis] = None  # 主题深度分析
 
 
 class Analyzer:
@@ -486,6 +497,43 @@ class Analyzer:
                     lines.append(f"  {para.strip()}")
             lines.append("")
         
+        # 主题深度分析
+        if report.theme_analysis:
+            theme = report.theme_analysis
+            
+            # 今日主题
+            if theme.themes:
+                lines.append("🎯 今日主题:")
+                for i, t in enumerate(theme.themes, 1):
+                    lines.append(f"  {i}. {t}")
+                lines.append("")
+            
+            # 工作重点回顾
+            if theme.work_focus:
+                lines.append("📋 工作重点回顾:")
+                lines.append(f"  {theme.work_focus}")
+                lines.append("")
+            
+            # 当前关注
+            if theme.current_interests:
+                lines.append("🔍 当前关注:")
+                for interest in theme.current_interests:
+                    lines.append(f"  • {interest}")
+                lines.append("")
+            
+            # 洞察与启发
+            if theme.insights:
+                lines.append("💡 洞察与启发:")
+                for insight in theme.insights:
+                    lines.append(f"  ✨ {insight}")
+                lines.append("")
+            
+            # 详细总结
+            if theme.detailed_summary:
+                lines.append("📝 深度总结:")
+                lines.append(f"  {theme.detailed_summary}")
+                lines.append("")
+        
         # 建议
         if report.suggestions:
             lines.append("💡 建议:")
@@ -713,6 +761,170 @@ class Analyzer:
         except Exception as e:
             print(f"AI 工作路径分析失败: {e}")
             return None
+    
+    def generate_theme_analysis(self, target_date: Optional[date] = None) -> Optional[ThemeAnalysis]:
+        """
+        生成深度主题分析
+        
+        获取用户全部输入内容，分析形成主题总结、工作重点、关注内容和洞察启发
+        
+        Args:
+            target_date: 目标日期，默认今天
+        
+        Returns:
+            ThemeAnalysis 对象
+        """
+        if target_date is None:
+            target_date = date.today()
+        
+        client = self._get_openai_client()
+        if not client:
+            return None
+        
+        # 获取当天全部输入记录
+        records = self.db.get_records_by_date(target_date)
+        
+        if not records:
+            return None
+        
+        # 收集全部内容，按应用分组
+        app_contents: Dict[str, List[str]] = {}
+        for record in records:
+            app_name = record.display_name or record.app_name
+            if app_name not in app_contents:
+                app_contents[app_name] = []
+            if record.content and record.content.strip():
+                app_contents[app_name].append(record.content.strip())
+        
+        # 构建内容摘要（限制总长度避免超出 token 限制）
+        content_summary = []
+        total_length = 0
+        max_length = 12000  # 限制总内容长度
+        
+        for app_name, contents in app_contents.items():
+            if total_length >= max_length:
+                break
+            
+            app_text = f"\n【{app_name}】\n"
+            for content in contents:
+                if total_length + len(content) > max_length:
+                    break
+                # 过滤掉太短的内容
+                if len(content) >= 5:
+                    app_text += f"- {content}\n"
+                    total_length += len(content) + 3
+            
+            if len(app_text) > len(f"\n【{app_name}】\n"):
+                content_summary.append(app_text)
+        
+        full_content = "\n".join(content_summary)
+        
+        if not full_content.strip():
+            return None
+        
+        # 获取应用统计
+        app_stats = self.db.get_daily_stats(target_date)
+        stats_text = "\n".join([
+            f"- {s.display_name}: {s.total_chars}字符"
+            for s in app_stats[:10]
+        ])
+        
+        prompt = f"""请深度分析用户{target_date}的全部输入内容，生成综合性的工作日报分析。
+
+用户今日应用统计:
+{stats_text}
+
+用户今日全部输入内容:
+{full_content}
+
+请从以下几个维度进行分析，并以 JSON 格式返回结果:
+
+{{
+    "themes": ["主题1", "主题2", ...],  // 今日3-5个主要工作/学习主题，每个主题10-20字
+    "work_focus": "...",  // 全天工作重点回顾，150-200字，总结今天主要做了什么，核心任务是什么
+    "current_interests": ["关注点1", "关注点2", ...],  // 用户当前关注的3-5个具体内容/技术/话题
+    "insights": ["洞察1", "洞察2", ...],  // 3-5条洞察和启发，每条30-50字，可以是：
+        // - 发现的工作模式或习惯
+        // - 可能的改进方向
+        // - 有趣的发现
+        // - 深层次的思考和建议
+    "detailed_summary": "..."  // 200-300字的详细总结，包含：
+        // - 今天完成了什么
+        // - 遇到了什么问题/挑战
+        // - 取得了什么进展
+        // - 整体工作状态评估
+}}
+
+分析要求:
+1. 深入分析内容含义，而不是简单罗列
+2. 识别隐藏的模式和趋势
+3. 给出有价值的洞察，而不是泛泛而谈
+4. 语气专业、友好、富有启发性
+5. 必须返回有效的 JSON 格式
+"""
+        
+        try:
+            response = client.chat.completions.create(
+                model=config.openai_model,
+                messages=[
+                    {"role": "system", "content": "你是一个专业的个人效率分析师和工作教练，擅长从用户的日常输入中提取有价值的洞察，帮助用户更好地理解自己的工作模式和成长方向。请始终返回有效的 JSON 格式。"},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=1500,
+                temperature=0.7,
+            )
+            
+            result_text = response.choices[0].message.content.strip()
+            
+            # 解析 JSON（处理可能的 markdown 代码块）
+            if result_text.startswith("```"):
+                # 移除 markdown 代码块标记
+                lines = result_text.split("\n")
+                result_text = "\n".join(lines[1:-1]) if lines[-1].strip() == "```" else "\n".join(lines[1:])
+            
+            import json
+            try:
+                data = json.loads(result_text)
+                return ThemeAnalysis(
+                    themes=data.get("themes", []),
+                    work_focus=data.get("work_focus", ""),
+                    current_interests=data.get("current_interests", []),
+                    insights=data.get("insights", []),
+                    detailed_summary=data.get("detailed_summary", ""),
+                )
+            except json.JSONDecodeError as e:
+                print(f"JSON 解析失败: {e}")
+                # 尝试从文本中提取信息
+                return ThemeAnalysis(
+                    themes=[],
+                    work_focus=result_text[:500] if result_text else "",
+                    current_interests=[],
+                    insights=[],
+                    detailed_summary=result_text if result_text else "",
+                )
+        
+        except Exception as e:
+            print(f"主题分析失败: {e}")
+            return None
+    
+    def generate_full_report(self, target_date: Optional[date] = None) -> DailyReport:
+        """
+        生成完整报告（包含主题深度分析）
+        
+        Args:
+            target_date: 目标日期，默认今天
+        
+        Returns:
+            包含主题分析的完整 DailyReport
+        """
+        # 生成基础报告
+        report = self.generate_daily_report(target_date)
+        
+        # 如果 AI 可用，生成主题深度分析
+        if config.ai_enabled:
+            report.theme_analysis = self.generate_theme_analysis(target_date)
+        
+        return report
 
 
 # 全局分析器实例

@@ -353,6 +353,81 @@
 
         .footer { text-align: center; padding: 40px 0; color: var(--text-muted); font-size: 12px; }
 
+        /* 主题分析样式 */
+        .theme-section { margin-bottom: 24px; }
+        .theme-section:last-child { margin-bottom: 0; }
+        .theme-title { 
+            font-size: 16px; 
+            font-weight: 600; 
+            color: var(--text-primary); 
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .theme-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        .theme-tag {
+            background: linear-gradient(135deg, rgba(99, 102, 241, 0.2) 0%, rgba(139, 92, 246, 0.2) 100%);
+            border: 1px solid rgba(99, 102, 241, 0.3);
+            color: var(--accent-secondary);
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .theme-content-box {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+            line-height: 1.8;
+            color: var(--text-secondary);
+        }
+        .interest-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .interest-item {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px 16px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .interest-icon {
+            color: var(--accent-primary);
+            font-size: 16px;
+        }
+        .insight-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .insight-item {
+            background: linear-gradient(135deg, rgba(16, 185, 129, 0.1) 0%, rgba(52, 211, 153, 0.1) 100%);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+            border-radius: 12px;
+            padding: 16px 20px;
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            line-height: 1.6;
+        }
+        .insight-icon {
+            font-size: 18px;
+            flex-shrink: 0;
+        }
+        .insight-text {
+            color: var(--text-secondary);
+        }
+
         @media (max-width: 768px) {
             .header { flex-direction: column; align-items: flex-start; }
             .nav-controls { width: 100%; justify-content: space-between; }
@@ -428,9 +503,19 @@
 
         <!-- 分析标签页 -->
         <div id="tab-analysis" class="tab-content">
+            <!-- 主题深度分析 -->
             <div class="card">
                 <div class="card-header">
-                    <h2 class="card-title">🤖 AI 深度分析</h2>
+                    <h2 class="card-title">🎯 主题深度分析</h2>
+                    <button onclick="loadThemeAnalysis()" style="background: var(--accent-primary); color: white; border: none; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 14px;">🔄 刷新分析</button>
+                </div>
+                <div id="themeAnalysisContent" class="analysis-content">
+                    <div class="empty-state"><div class="icon">💡</div><p>点击"刷新分析"获取 AI 深度分析</p></div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">🤖 AI 工作分析</h2>
                 </div>
                 <div id="aiAnalysisContent" class="analysis-content">
                     <div class="loading"><div class="loading-spinner"></div><span>加载中...</span></div>
@@ -789,6 +874,105 @@
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+
+        async function loadThemeAnalysis() {
+            const dateStr = document.getElementById('datePicker').value;
+            const container = document.getElementById('themeAnalysisContent');
+            
+            container.innerHTML = '<div class="loading"><div class="loading-spinner"></div><span>正在生成 AI 深度分析，请稍候...</span></div>';
+            
+            try {
+                const theme = await fetch(`/api/analysis/theme/${dateStr}`).then(r => r.json());
+                
+                if (!theme) {
+                    container.innerHTML = '<div class="empty-state"><div class="icon">📭</div><p>暂无数据，无法生成分析</p></div>';
+                    return;
+                }
+                
+                updateThemeAnalysis(theme);
+            } catch (error) {
+                console.error('加载主题分析失败:', error);
+                container.innerHTML = '<div class="empty-state"><div class="icon">❌</div><p>分析失败，请确保已配置 OpenAI API Key</p></div>';
+            }
+        }
+
+        function updateThemeAnalysis(theme) {
+            const container = document.getElementById('themeAnalysisContent');
+            
+            let html = '';
+            
+            // 今日主题
+            if (theme.themes && theme.themes.length > 0) {
+                html += `
+                    <div class="theme-section">
+                        <h3 class="theme-title">🎯 今日主题</h3>
+                        <div class="theme-tags">
+                            ${theme.themes.map(t => `<span class="theme-tag">${escapeHtml(t)}</span>`).join('')}
+                        </div>
+                    </div>
+                `;
+            }
+            
+            // 工作重点回顾
+            if (theme.work_focus) {
+                html += `
+                    <div class="theme-section">
+                        <h3 class="theme-title">📋 工作重点回顾</h3>
+                        <div class="theme-content-box">${escapeHtml(theme.work_focus)}</div>
+                    </div>
+                `;
+            }
+            
+            // 当前关注
+            if (theme.current_interests && theme.current_interests.length > 0) {
+                html += `
+                    <div class="theme-section">
+                        <h3 class="theme-title">🔍 当前关注</h3>
+                        <div class="interest-list">
+                            ${theme.current_interests.map(interest => `
+                                <div class="interest-item">
+                                    <span class="interest-icon">•</span>
+                                    <span>${escapeHtml(interest)}</span>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+            }
+            
+            // 洞察与启发
+            if (theme.insights && theme.insights.length > 0) {
+                html += `
+                    <div class="theme-section">
+                        <h3 class="theme-title">💡 洞察与启发</h3>
+                        <div class="insight-list">
+                            ${theme.insights.map(insight => `
+                                <div class="insight-item">
+                                    <span class="insight-icon">✨</span>
+                                    <span class="insight-text">${escapeHtml(insight)}</span>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+            }
+            
+            // 详细总结
+            if (theme.detailed_summary) {
+                html += `
+                    <div class="theme-section">
+                        <h3 class="theme-title">📝 深度总结</h3>
+                        <div class="theme-content-box">${escapeHtml(theme.detailed_summary)}</div>
+                    </div>
+                `;
+            }
+            
+            if (!html) {
+                html = '<div class="empty-state"><div class="icon">📭</div><p>暂无分析数据</p></div>';
+            }
+            
+            container.innerHTML = html;
         }
     </script>
 </body>
