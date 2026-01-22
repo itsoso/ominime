@@ -210,8 +210,8 @@ class Analyzer:
             return "今日暂无输入记录。"
         
         # 尝试使用 AI 生成总结
-        client = self._get_openai_client()
-        if client:
+        backend = self._get_llm_backend()
+        if backend:
             return self._ai_generate_summary(app_stats, target_date)
         
         # 基础总结
@@ -346,8 +346,8 @@ class Analyzer:
             suggestions.append("🔄 今日使用了多个应用，频繁切换可能影响专注度")
         
         # AI 增强建议
-        client = self._get_openai_client()
-        if client:
+        backend = self._get_llm_backend()
+        if backend:
             ai_suggestions = self._ai_generate_suggestions(app_stats, total_chars, work_path)
             suggestions.extend(ai_suggestions)
         
