@@ -74,25 +74,25 @@ class Analyzer:
     
     def __init__(self):
         self.db = get_database()
-        self._openai_client = None
+        self._llm_backend = None
     
-    def _get_openai_client(self):
-        """懒加载 OpenAI 客户端"""
+    def _get_llm_backend(self):
+        """懒加载 LLM 后端"""
         if not config.ai_enabled:
             return None
         
-        if self._openai_client is None and config.openai_api_key:
+        if self._llm_backend is None:
             try:
-                from openai import OpenAI
-                self._openai_client = OpenAI(api_key=config.openai_api_key)
-            except ImportError:
-                print("⚠️ 未安装 openai 包，AI 功能不可用")
-                return None
+                from .llm_backend import get_llm_backend
+                self._llm_backend = get_llm_backend()
+                if self._llm_backend is None:
+                    print("⚠️ 未配置 LLM 后端，AI 功能不可用")
+                    return None
             except Exception as e:
-                print(f"⚠️ OpenAI 初始化失败: {e}")
+                print(f"⚠️ LLM 后端初始化失败: {e}")
                 return None
         
-        return self._openai_client
+        return self._llm_backend
     
     def generate_daily_report(self, target_date: Optional[date] = None) -> DailyReport:
         """
@@ -238,8 +238,8 @@ class Analyzer:
     
     def _ai_generate_summary(self, app_stats: List[AppDailyStats], target_date: date) -> str:
         """使用 AI 生成总结"""
-        client = self._get_openai_client()
-        if not client:
+        backend = self._get_llm_backend()
+        if not backend:
             return self._generate_summary(app_stats, target_date)
         
         # 准备数据
@@ -278,16 +278,17 @@ class Analyzer:
 """
         
         try:
-            response = client.chat.completions.create(
-                model=config.openai_model,
+            from .llm_backend import LLMMessage
+            
+            response = backend.chat(
                 messages=[
-                    {"role": "system", "content": "你是一个专业的工作效率分析师，擅长从数据中提取洞察。"},
-                    {"role": "user", "content": prompt}
+                    LLMMessage(role="system", content="你是一个专业的工作效率分析师，擅长从数据中提取洞察。"),
+                    LLMMessage(role="user", content=prompt)
                 ],
                 max_tokens=400,
                 temperature=0.7,
             )
-            return response.choices[0].message.content.strip()
+            return response.content.strip()
         except Exception as e:
             print(f"AI 总结生成失败: {e}")
             return self._generate_summary(app_stats, target_date)
@@ -359,8 +360,8 @@ class Analyzer:
         work_path: Optional[WorkPathAnalysis] = None
     ) -> List[str]:
         """使用 AI 生成个性化建议"""
-        client = self._get_openai_client()
-        if not client:
+        backend = self._get_llm_backend()
+        if not backend:
             return []
         
         stats_text = "\n".join([
@@ -396,17 +397,18 @@ class Analyzer:
 """
         
         try:
-            response = client.chat.completions.create(
-                model=config.openai_model,
+            from .llm_backend import LLMMessage
+            
+            response = backend.chat(
                 messages=[
-                    {"role": "system", "content": "你是一个专业的工作效率顾问，擅长给出具体可执行的改进建议。"},
-                    {"role": "user", "content": prompt}
+                    LLMMessage(role="system", content="你是一个专业的工作效率顾问，擅长给出具体可执行的改进建议。"),
+                    LLMMessage(role="user", content=prompt)
                 ],
                 max_tokens=300,
                 temperature=0.8,
             )
             
-            text = response.choices[0].message.content.strip()
+            text = response.content.strip()
             # 解析多行建议
             suggestions = []
             for line in text.split('\n'):
@@ -693,8 +695,8 @@ class Analyzer:
         target_date: date
     ) -> Optional[str]:
         """使用 AI 分析工作路径"""
-        client = self._get_openai_client()
-        if not client:
+        backend = self._get_llm_backend()
+        if not backend:
             return None
         
         # 准备时间线数据
@@ -748,16 +750,17 @@ class Analyzer:
 """
         
         try:
-            response = client.chat.completions.create(
-                model=config.openai_model,
+            from .llm_backend import LLMMessage
+            
+            response = backend.chat(
                 messages=[
-                    {"role": "system", "content": "你是一个专业的工作效率分析专家，擅长分析工作模式并提供优化建议。"},
-                    {"role": "user", "content": prompt}
+                    LLMMessage(role="system", content="你是一个专业的工作效率分析专家，擅长分析工作模式并提供优化建议。"),
+                    LLMMessage(role="user", content=prompt)
                 ],
                 max_tokens=800,
                 temperature=0.7,
             )
-            return response.choices[0].message.content.strip()
+            return response.content.strip()
         except Exception as e:
             print(f"AI 工作路径分析失败: {e}")
             return None
@@ -777,8 +780,8 @@ class Analyzer:
         if target_date is None:
             target_date = date.today()
         
-        client = self._get_openai_client()
-        if not client:
+        backend = self._get_llm_backend()
+        if not backend:
             return None
         
         # 获取当天全部输入记录
@@ -864,17 +867,18 @@ class Analyzer:
 """
         
         try:
-            response = client.chat.completions.create(
-                model=config.openai_model,
+            from .llm_backend import LLMMessage
+            
+            response = backend.chat(
                 messages=[
-                    {"role": "system", "content": "你是一个专业的个人效率分析师和工作教练，擅长从用户的日常输入中提取有价值的洞察，帮助用户更好地理解自己的工作模式和成长方向。请始终返回有效的 JSON 格式。"},
-                    {"role": "user", "content": prompt}
+                    LLMMessage(role="system", content="你是一个专业的个人效率分析师和工作教练，擅长从用户的日常输入中提取有价值的洞察，帮助用户更好地理解自己的工作模式和成长方向。请始终返回有效的 JSON 格式。"),
+                    LLMMessage(role="user", content=prompt)
                 ],
                 max_tokens=1500,
                 temperature=0.7,
             )
             
-            result_text = response.choices[0].message.content.strip()
+            result_text = response.content.strip()
             
             # 解析 JSON（处理可能的 markdown 代码块）
             if result_text.startswith("```"):
