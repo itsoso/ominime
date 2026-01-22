@@ -346,8 +346,7 @@ class Database:
                     app_name,
                     display_name,
                     SUM(char_count) as total_chars,
-                    COUNT(DISTINCT session_id) as session_count,
-                    SUM(duration_seconds) / 60.0 as total_time_minutes
+                    COUNT(DISTINCT session_id) as session_count
                 FROM input_records 
                 WHERE timestamp >= ? AND timestamp < ?
                 GROUP BY app_bundle_id
@@ -367,12 +366,31 @@ class Database:
                 
                 samples = [r['content'] for r in cursor.fetchall()]
                 
+                # 计算该应用的实际活跃时间（按会话）
+                cursor.execute("""
+                    SELECT 
+                        session_id,
+                        MIN(timestamp) as session_start,
+                        MAX(timestamp) as session_end
+                    FROM input_records
+                    WHERE timestamp >= ? AND timestamp < ? AND app_name = ?
+                    GROUP BY session_id
+                """, (start.isoformat(), end.isoformat(), row['app_name']))
+                
+                total_minutes = 0.0
+                for session in cursor.fetchall():
+                    start_time = datetime.fromisoformat(session['session_start'])
+                    end_time = datetime.fromisoformat(session['session_end'])
+                    # 会话时长 = 最后一条记录时间 - 第一条记录时间 + 1 分钟
+                    duration = (end_time - start_time).total_seconds() / 60.0 + 1.0
+                    total_minutes += duration
+                
                 stats.append(AppDailyStats(
                     app_name=row['app_name'],
                     display_name=row['display_name'],
                     total_chars=row['total_chars'],
                     session_count=row['session_count'],
-                    total_time_minutes=row['total_time_minutes'] or 0,
+                    total_time_minutes=total_minutes,
                     sample_content=samples,
                 ))
             
