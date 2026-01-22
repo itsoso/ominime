@@ -14,7 +14,7 @@
 - **📊 分类统计** - 按应用、按时间段分类汇总输入数据
 - **📝 每日报告** - 自动生成每日输入汇总报告
 - **🎯 主线梳理** - 智能提取一天的主线活动
-- **💡 AI 建议** - 可选接入 OpenAI 生成个性化建议
+- **💡 AI 建议** - 支持 OpenAI/本地 Qwen/Ollama 多种 AI 后端
 - **🖥️ Menu Bar 应用** - 状态栏驻留，随时查看统计
 - **🌐 Web 后台** - 现代化 Web 界面，数据可视化
 - **🚀 开机启动** - 支持设置开机自动启动
@@ -239,50 +239,92 @@ OmniMe 支持鼠须管(Rime)输入法的中文输入。如果你使用鼠须管�
 
 ### 启用 AI 功能
 
-#### 方法一：使用 .env 文件（推荐）
+OmniMe 支持多种 AI 后端，你可以根据需求选择：
 
-1. 复制 `.env.example` 为 `.env`：
-```bash
-cp .env.example .env
-```
-
-2. 编辑 `.env` 文件，填入你的 OpenAI API Key：
-```bash
-OPENAI_API_KEY=your-openai-api-key-here
-```
-
-3. 系统会自动检测 API Key 并启用 AI 功能。
-
-#### 方法二：使用环境变量
+#### 🚀 快速设置（推荐）
 
 ```bash
-export OPENAI_API_KEY="your-api-key"
+# 运行设置向导
+./scripts/setup_local_llm.sh
 ```
 
-#### 方法三：修改配置文件
+设置向导会引导你选择并配置：
+- **Ollama**（本地，最简单）
+- **本地 Qwen 模型**（本地，更灵活）
+- **OpenAI API**（云端，质量最好）
 
-编辑 `~/.ominime/config.json`：
-```json
-{
-  "ai_enabled": true,
-  "openai_model": "gpt-4o-mini"
-}
+#### 📖 详细配置指南
+
+查看完整的配置文档：
+- [LLM 后端配置指南](docs/LLM_BACKENDS.md) - 各后端对比和配置
+- [本地 LLM 部署指南](docs/LOCAL_LLM_GUIDE.md) - 详细的安装和优化指南
+
+#### ⚡ 快速配置示例
+
+**使用 OpenAI API**:
+```bash
+# 编辑 .env 文件
+LLM_BACKEND=openai
+OPENAI_API_KEY=sk-xxx
+OPENAI_MODEL=gpt-4o-mini
 ```
 
-> 💡 **提示**：如果提供了 API Key，系统会自动启用 AI 功能，无需手动设置 `ai_enabled`。
+**使用本地 Ollama**（推荐隐私保护）:
+```bash
+# 1. 安装 Ollama
+brew install ollama
 
-#### 获取 OpenAI API Key
+# 2. 下载模型
+ollama pull qwen2.5:7b
 
-1. 访问 https://platform.openai.com/api-keys
-2. 登录并创建新的 API Key
-3. 将 Key 添加到 `.env` 文件或环境变量中
+# 3. 配置 .env
+LLM_BACKEND=ollama
+OLLAMA_MODEL=qwen2.5:7b
+```
 
-#### AI 功能说明
+**使用本地 Qwen 模型**:
+```bash
+# 1. 安装依赖
+pip install transformers torch accelerate
 
-启用 AI 后，系统会使用 GPT 模型进行：
+# 2. 配置 .env
+LLM_BACKEND=qwen-local
+QWEN_MODEL=Qwen/Qwen2.5-7B-Instruct
+```
+
+**使用公司内部模型**:
+```bash
+# 配置 .env
+LLM_BACKEND=openai
+OPENAI_API_KEY=your-company-key
+OPENAI_BASE_URL=https://your-company-api.com/v1
+OPENAI_MODEL=your-model-name
+```
+
+#### 🧪 测试配置
+
+```bash
+# 测试 LLM 后端是否正常工作
+python3 scripts/test_llm.py
+```
+
+#### 💡 AI 功能说明
+
+启用 AI 后，系统会进行：
 - 📝 **智能总结**：生成每日工作内容的深度分析（150-200字）
+- 🎯 **主题分析**：分析今日主题、工作重点、关注点和洞察启发
 - 🤖 **工作路径分析**：分析工作节奏、应用使用模式、专注度评估（300-400字）
 - 💡 **个性化建议**：基于数据生成3-5条可执行的优化建议
+- 📄 **自动导出**：每天 23:30 自动导出到 Obsidian
+
+#### 🔒 隐私对比
+
+| 后端 | 数据位置 | 隐私性 | 成本 |
+|------|----------|--------|------|
+| Ollama | 完全本地 | ⭐⭐⭐⭐⭐ | 免费 |
+| 本地 Qwen | 完全本地 | ⭐⭐⭐⭐⭐ | 免费 |
+| OpenAI API | 云端 | ⭐⭐ | 按量付费 |
+| 公司模型 | 公司服务器 | ⭐⭐⭐⭐ | 取决于公司 |
 
 ## 📁 项目结构
 
