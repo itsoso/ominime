@@ -880,6 +880,11 @@ class Analyzer:
             
             result_text = response.content.strip()
             
+            # 移除 Qwen 3 的思考标签 <think>...</think>
+            import re
+            result_text = re.sub(r'<think>.*?</think>', '', result_text, flags=re.DOTALL)
+            result_text = result_text.strip()
+            
             # 解析 JSON（处理可能的 markdown 代码块）
             if result_text.startswith("```"):
                 # 移除 markdown 代码块标记
