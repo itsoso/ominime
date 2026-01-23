@@ -12,6 +12,7 @@ from typing import Optional, Dict, List
 from .database import get_database
 from .analyzer import get_analyzer, DailyReport, ThemeAnalysis
 from .config import config
+from .llm_backend import get_llm_backend
 
 
 class ObsidianExporter:
@@ -89,16 +90,38 @@ class ObsidianExporter:
             include_ai_analysis=include_ai_analysis
         )
         
+        # 获取模型名称
+        model_name = self._get_model_name()
+        
         # 保存文件
         weekday_names = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
         weekday = weekday_names[target_date.weekday()]
-        filename = f"{target_date.strftime('%Y-%m-%d')}-{weekday}-OmniMe日报.md"
+        filename = f"{target_date.strftime('%Y-%m-%d')}-{weekday}-OmniMe日报-{model_name}.md"
         filepath = self.output_dir / filename
         
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(markdown)
         
         return filepath
+    
+    def _get_model_name(self) -> str:
+        """获取当前使用的模型名称"""
+        try:
+            backend = get_llm_backend()
+            if backend:
+                backend_type = os.getenv("LLM_BACKEND", "openai")
+                if backend_type == "ollama":
+                    model = os.getenv("OLLAMA_MODEL", "unknown")
+                    return model.replace(":", "-")
+                elif backend_type == "qwen-local":
+                    model = os.getenv("QWEN_MODEL", "qwen-local")
+                    return model.split("/")[-1] if "/" in model else model
+                elif backend_type == "openai":
+                    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+                    return model
+            return "no-ai"
+        except Exception:
+            return "no-ai"
     
     def _group_content_by_app(self, records) -> Dict[str, Dict]:
         """按应用分组内容"""
@@ -142,6 +165,9 @@ class ObsidianExporter:
         weekday_names = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
         weekday = weekday_names[target_date.weekday()]
         
+        # 获取模型名称
+        model_name = self._get_model_name()
+        
         # YAML Front Matter
         lines.append("---")
         lines.append(f"date: {target_date.isoformat()}")
@@ -149,11 +175,13 @@ class ObsidianExporter:
         lines.append(f"total_chars: {report.total_chars}")
         lines.append(f"total_apps: {report.total_apps}")
         lines.append(f"total_sessions: {report.total_sessions}")
+        lines.append(f"ai_model: {model_name}")
         lines.append(f"created: {datetime.now().isoformat()}")
         lines.append("tags:")
         lines.append("  - OmniMe")
         lines.append("  - 日报")
         lines.append("  - 输入追踪")
+        lines.append(f"  - {model_name}")
         lines.append("---")
         lines.append("")
         
@@ -324,7 +352,7 @@ class ObsidianExporter:
         # 页脚
         lines.append("---")
         lines.append("")
-        lines.append(f"*由 OmniMe 自动生成于 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*")
+        lines.append(f"*由 OmniMe 自动生成于 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | AI 模型: {model_name}*")
         
         return "\n".join(lines)
 
