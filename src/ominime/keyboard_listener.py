@@ -4,6 +4,7 @@
 方案：
 1. CGEventTap 监听键盘事件（英文、数字、符号、特殊键）
 2. Rime 日志监听（中文输入法）
+3. 系统唤醒事件监听，自动恢复 CGEventTap
 
 需要用户授予辅助功能权限
 """
@@ -21,9 +22,12 @@ import queue
 from Quartz import (
     CGEventTapCreate,
     CGEventTapEnable,
+    CGEventTapIsEnabled,
+    CFMachPortIsValid,
     CGEventGetIntegerValueField,
     CFMachPortCreateRunLoopSource,
     CFRunLoopAddSource,
+    CFRunLoopRemoveSource,
     CFRunLoopGetCurrent,
     CFRunLoopRun,
     CFRunLoopStop,
@@ -38,7 +42,7 @@ from Quartz import (
     CGEventGetFlags,
 )
 from AppKit import NSWorkspace, NSRunningApplication
-from Foundation import NSObject, NSRunLoop, NSDefaultRunLoopMode
+from Foundation import NSObject, NSRunLoop, NSDefaultRunLoopMode, NSDistributedNotificationCenter
 import Quartz
 import objc
 
@@ -346,15 +350,32 @@ class RimeLogWatcher:
 
 
 class KeyboardListener:
-    """全局键盘监听器"""
-    
+    """全局键盘监听器
+
+    包含以下健壮性机制：
+    1. 定期健康检查 CGEventTap 状态
+    2. 监听系统唤醒事件，自动恢复
+    3. 自动重连机制
+    """
+
+    # 健康检查间隔（秒）
+    HEALTH_CHECK_INTERVAL = 30
+    # 最大重试次数
+    MAX_RETRY_COUNT = 3
+
     def __init__(self, callback: Callable[[KeyEvent], None]):
         self.callback = callback
         self._running = False
         self._thread: Optional[threading.Thread] = None
+        self._health_check_thread: Optional[threading.Thread] = None
         self._run_loop = None
+        self._run_loop_source = None
         self._tap = None
         self._rime_watcher = RimeLogWatcher(self._on_rime_input)
+        self._last_event_time = time.time()
+        self._tap_lock = threading.Lock()
+        self._retry_count = 0
+        self._wake_observer = None
     
     def _on_rime_input(self, text: str, timestamp: datetime, app_name: str, bundle_id: str):
         """Rime 中文输入回调"""
@@ -482,59 +503,209 @@ class KeyboardListener:
         
         return event
     
-    def _run_loop_thread(self):
-        event_mask = (1 << kCGEventKeyDown)
-        
-        self._tap = CGEventTapCreate(
-            kCGSessionEventTap,
-            kCGHeadInsertEventTap,
-            0,
-            event_mask,
-            self._event_callback,
-            None
-        )
-        
-        if self._tap is None:
-            print("❌ 无法创建 CGEventTap")
-            print("请确保已授予辅助功能权限")
+    def _create_event_tap(self) -> bool:
+        """创建 CGEventTap，返回是否成功"""
+        with self._tap_lock:
+            # 清理旧的 tap
+            if self._tap is not None:
+                try:
+                    CGEventTapEnable(self._tap, False)
+                except:
+                    pass
+                self._tap = None
+
+            event_mask = (1 << kCGEventKeyDown)
+
+            self._tap = CGEventTapCreate(
+                kCGSessionEventTap,
+                kCGHeadInsertEventTap,
+                0,
+                event_mask,
+                self._event_callback,
+                None
+            )
+
+            if self._tap is None:
+                print("❌ 无法创建 CGEventTap")
+                print("请确保已授予辅助功能权限")
+                return False
+
+            return True
+
+    def _is_tap_healthy(self) -> bool:
+        """检查 CGEventTap 是否健康"""
+        with self._tap_lock:
+            if self._tap is None:
+                return False
+            try:
+                # 检查 MachPort 是否有效
+                if not CFMachPortIsValid(self._tap):
+                    print("⚠️  CGEventTap MachPort 无效")
+                    return False
+                # 检查 tap 是否启用
+                if not CGEventTapIsEnabled(self._tap):
+                    print("⚠️  CGEventTap 已被禁用，尝试重新启用...")
+                    CGEventTapEnable(self._tap, True)
+                    # 再次检查
+                    if not CGEventTapIsEnabled(self._tap):
+                        print("❌ 无法重新启用 CGEventTap")
+                        return False
+                    print("✅ CGEventTap 已重新启用")
+                return True
+            except Exception as e:
+                print(f"⚠️  检查 CGEventTap 状态失败: {e}")
+                return False
+
+    def _health_check_loop(self):
+        """健康检查循环"""
+        while self._running:
+            time.sleep(self.HEALTH_CHECK_INTERVAL)
+            if not self._running:
+                break
+
+            if not self._is_tap_healthy():
+                print("🔄 CGEventTap 不健康，尝试重建...")
+                self._rebuild_tap()
+
+    def _rebuild_tap(self):
+        """重建 CGEventTap"""
+        if self._retry_count >= self.MAX_RETRY_COUNT:
+            print(f"❌ 已达到最大重试次数 ({self.MAX_RETRY_COUNT})，停止重试")
             return
-        
-        run_loop_source = CFMachPortCreateRunLoopSource(None, self._tap, 0)
-        self._run_loop = CFRunLoopGetCurrent()
-        CFRunLoopAddSource(self._run_loop, run_loop_source, Quartz.kCFRunLoopCommonModes)
-        CGEventTapEnable(self._tap, True)
-        
+
+        self._retry_count += 1
+        print(f"🔄 第 {self._retry_count} 次尝试重建 CGEventTap...")
+
+        with self._tap_lock:
+            # 移除旧的 source
+            if self._run_loop_source and self._run_loop:
+                try:
+                    CFRunLoopRemoveSource(self._run_loop, self._run_loop_source, Quartz.kCFRunLoopCommonModes)
+                except:
+                    pass
+                self._run_loop_source = None
+
+        # 创建新的 tap
+        if self._create_event_tap():
+            with self._tap_lock:
+                self._run_loop_source = CFMachPortCreateRunLoopSource(None, self._tap, 0)
+                if self._run_loop:
+                    CFRunLoopAddSource(self._run_loop, self._run_loop_source, Quartz.kCFRunLoopCommonModes)
+                    CGEventTapEnable(self._tap, True)
+                    print("✅ CGEventTap 重建成功")
+                    self._retry_count = 0  # 重置重试计数
+        else:
+            print("❌ CGEventTap 重建失败")
+
+    def _on_system_wake(self, notification):
+        """系统唤醒回调"""
+        print("💤 检测到系统唤醒，检查 CGEventTap 状态...")
+        # 延迟一下再检查，等系统完全唤醒
+        def delayed_check():
+            time.sleep(2)
+            if self._running and not self._is_tap_healthy():
+                print("🔄 系统唤醒后 CGEventTap 失效，尝试重建...")
+                self._rebuild_tap()
+            else:
+                print("✅ 系统唤醒后 CGEventTap 状态正常")
+        threading.Thread(target=delayed_check, daemon=True).start()
+
+    def _start_wake_observer(self):
+        """启动系统唤醒事件监听"""
+        try:
+            ws = NSWorkspace.sharedWorkspace()
+            nc = ws.notificationCenter()
+
+            # 创建观察者类
+            class WakeObserver(NSObject):
+                def init(self_inner):
+                    self_inner = objc.super(WakeObserver, self_inner).init()
+                    return self_inner
+
+                def onWake_(self_inner, notification):
+                    self._on_system_wake(notification)
+
+            self._wake_observer = WakeObserver.alloc().init()
+
+            # 监听系统唤醒事件
+            nc.addObserver_selector_name_object_(
+                self._wake_observer,
+                objc.selector(self._wake_observer.onWake_, signature=b'v@:@'),
+                "NSWorkspaceDidWakeNotification",
+                None
+            )
+            print("👁️  系统唤醒监听已启动")
+        except Exception as e:
+            print(f"⚠️  启动系统唤醒监听失败: {e}")
+
+    def _run_loop_thread(self):
+        if not self._create_event_tap():
+            return
+
+        with self._tap_lock:
+            self._run_loop_source = CFMachPortCreateRunLoopSource(None, self._tap, 0)
+            self._run_loop = CFRunLoopGetCurrent()
+            CFRunLoopAddSource(self._run_loop, self._run_loop_source, Quartz.kCFRunLoopCommonModes)
+            CGEventTapEnable(self._tap, True)
+
         print("✅ 键盘监听已启动")
         print("🇨🇳 Rime 中文监听已启动")
-        
+
         CFRunLoopRun()
     
     def start(self):
         if self._running:
             return
         self._running = True
-        
+        self._retry_count = 0
+
         # 启动应用切换监听器（基于系统通知，比轮询更准确）
         _start_app_watcher()
-        
+
+        # 启动系统唤醒监听
+        self._start_wake_observer()
+
         # 启动键盘监听
         self._thread = threading.Thread(target=self._run_loop_thread, daemon=True)
         self._thread.start()
-        
+
+        # 启动健康检查线程
+        self._health_check_thread = threading.Thread(target=self._health_check_loop, daemon=True)
+        self._health_check_thread.start()
+
         # 启动 Rime 日志监听
         self._rime_watcher.start()
-    
+
     def stop(self):
         if not self._running:
             return
         self._running = False
         self._rime_watcher.stop()
-        if self._tap:
-            CGEventTapEnable(self._tap, False)
-        if self._run_loop:
-            CFRunLoopStop(self._run_loop)
+
+        with self._tap_lock:
+            if self._tap:
+                try:
+                    CGEventTapEnable(self._tap, False)
+                except:
+                    pass
+            if self._run_loop:
+                CFRunLoopStop(self._run_loop)
+
+        if self._health_check_thread:
+            self._health_check_thread.join(timeout=1.0)
         if self._thread:
             self._thread.join(timeout=1.0)
+
+        # 移除唤醒监听
+        if self._wake_observer:
+            try:
+                ws = NSWorkspace.sharedWorkspace()
+                nc = ws.notificationCenter()
+                nc.removeObserver_(self._wake_observer)
+            except:
+                pass
+            self._wake_observer = None
+
         print("⏹️ 监听已停止")
     
     def is_running(self) -> bool:
