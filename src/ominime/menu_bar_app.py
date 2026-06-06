@@ -9,6 +9,7 @@ import threading
 import webbrowser
 import os
 import sys
+import time
 from datetime import date
 from typing import Optional
 
@@ -44,6 +45,7 @@ class OmniMeMenuBarApp(rumps.App):
         self._today_chars = 0
         self._web_server_thread: Optional[threading.Thread] = None
         self._web_server_running = False
+        self._last_title_update = 0.0  # 标题更新节流
         
         # 构建菜单
         self._build_menu()
@@ -176,8 +178,13 @@ class OmniMeMenuBarApp(rumps.App):
         except Exception as e:
             print(f"保存记录失败: {e}")
     
-    def _update_title(self):
-        """更新状态栏标题"""
+    def _update_title(self, force=False):
+        """更新状态栏标题（节流：最多每秒更新一次）"""
+        now = time.monotonic()
+        if not force and (now - self._last_title_update) < 1.0:
+            return
+        self._last_title_update = now
+
         if self._is_recording:
             if self._today_chars > 1000:
                 self.title = f"⌨️ {self._today_chars // 1000}k"
@@ -190,7 +197,7 @@ class OmniMeMenuBarApp(rumps.App):
         """定时更新统计"""
         if self._is_recording:
             self._today_chars = self.db.get_total_chars_today()
-            self._update_title()
+            self._update_title(force=True)
     
     def _toggle_recording(self, sender):
         """切换记录状态"""

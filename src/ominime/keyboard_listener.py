@@ -34,6 +34,8 @@ from Quartz import (
     kCGSessionEventTap,
     kCGHeadInsertEventTap,
     kCGEventKeyDown,
+    kCGEventKeyUp,
+    kCGEventFlagsChanged,
     kCGKeyboardEventKeycode,
     kCGEventFlagMaskShift,
     kCGEventFlagMaskControl,
@@ -45,6 +47,8 @@ from AppKit import NSWorkspace, NSRunningApplication
 from Foundation import NSObject, NSRunLoop, NSDefaultRunLoopMode, NSDistributedNotificationCenter
 import Quartz
 import objc
+
+from .input_diff import extract_inserted_text
 
 
 @dataclass
@@ -100,6 +104,10 @@ _pinyin_mode_lock = threading.Lock()
 _pinyin_buffer = ""
 _pinyin_buffer_app = ("Unknown", "unknown")
 _pinyin_buffer_lock = threading.Lock()
+
+# 豆包输入法默认按住 Fn 语音输入；部分键盘/配置会把触发键映射到 Enter。
+ENTER_KEYCODE = 36
+FN_FLAG_MASK = getattr(Quartz, "kCGEventFlagMaskSecondaryFn", 1 << 23)
 
 
 def set_last_input_app(name: str, bundle_id: str):
@@ -213,10 +221,13 @@ def _start_app_watcher():
                 front_app.bundleIdentifier() or "unknown"
             )
         
-        # 运行 RunLoop（使用更短的间隔以快速响应应用切换）
+        # 运行 RunLoop（应用切换由系统通知驱动）
+        # 注意: runMode_beforeDate_ 可能在有 ready source 时立即返回，
+        # 必须加 sleep 防止在 Rosetta 翻译下忙循环
         run_loop = NSRunLoop.currentRunLoop()
         while True:
-            run_loop.runMode_beforeDate_(NSDefaultRunLoopMode, NSDate.dateWithTimeIntervalSinceNow_(0.05))
+            run_loop.runMode_beforeDate_(NSDefaultRunLoopMode, NSDate.dateWithTimeIntervalSinceNow_(1.0))
+            time.sleep(0.1)  # 防止 RunLoop 立即返回导致忙循环
     
     thread = threading.Thread(target=run_watcher, daemon=True)
     thread.start()
@@ -330,11 +341,11 @@ class RimeLogWatcher:
                                 print(f"[DEBUG] Rime 输入: '{text}' -> {app_name} ({bundle_id})")
                             self.callback(text, datetime.now(), app_name, bundle_id)
                 
-                time.sleep(0.1)
+                time.sleep(0.3)
             except Exception as e:
                 if _DEBUG:
                     print(f"[DEBUG] Rime watch error: {e}")
-                time.sleep(0.5)
+                time.sleep(1.0)
     
     def start(self):
         if self._running:
@@ -376,6 +387,10 @@ class KeyboardListener:
         self._tap_lock = threading.Lock()
         self._retry_count = 0
         self._wake_observer = None
+        self._commit_capture_active = False
+        self._commit_capture_trigger = ""
+        self._commit_capture_before = ""
+        self._commit_capture_app = ("Unknown", "unknown")
     
     def _on_rime_input(self, text: str, timestamp: datetime, app_name: str, bundle_id: str):
         """Rime 中文输入回调"""
@@ -399,12 +414,144 @@ class KeyboardListener:
         )
         if self.callback:
             self.callback(key_event)
+
+    def _copy_ax_attribute(self, element, attribute: str):
+        """Read an Accessibility attribute across PyObjC signature variants."""
+        try:
+            from ApplicationServices import AXUIElementCopyAttributeValue
+
+            try:
+                result = AXUIElementCopyAttributeValue(element, attribute, None)
+            except TypeError:
+                result = AXUIElementCopyAttributeValue(element, attribute)
+
+            if isinstance(result, tuple):
+                if len(result) >= 2 and result[0] == 0:
+                    return result[1]
+                return None
+            return result
+        except Exception as e:
+            if _DEBUG:
+                print(f"[DEBUG] AX read attribute failed: {attribute}: {e}")
+            return None
+
+    def _get_focused_text_snapshot(self) -> str:
+        """Read current focused input value for IME/voice commit diffing."""
+        try:
+            from ApplicationServices import AXUIElementCreateSystemWide
+
+            system = AXUIElementCreateSystemWide()
+            focused = self._copy_ax_attribute(system, "AXFocusedUIElement")
+            if focused is None:
+                return ""
+
+            value = self._copy_ax_attribute(focused, "AXValue")
+            if isinstance(value, str):
+                return value
+        except Exception as e:
+            if _DEBUG:
+                print(f"[DEBUG] focused text snapshot failed: {e}")
+        return ""
+
+    def _get_event_target_app(self, event) -> tuple[str, str]:
+        target_pid = CGEventGetIntegerValueField(event, 40)  # kCGEventTargetUnixProcessID
+        if target_pid > 0:
+            return get_app_by_pid(target_pid)
+        return get_frontmost_app()
+
+    def _begin_commit_capture(self, trigger: str, app_name: str, bundle_id: str):
+        """Start capturing text inserted by Fn/Enter-triggered IME input."""
+        if self._commit_capture_active:
+            return
+
+        self._commit_capture_active = True
+        self._commit_capture_trigger = trigger
+        self._commit_capture_before = self._get_focused_text_snapshot()
+        self._commit_capture_app = (app_name, bundle_id)
+        set_last_input_app(app_name, bundle_id)
+        if _DEBUG:
+            print(f"[DEBUG] 开始 {trigger} 输入捕获: {app_name}")
+
+    def _finish_commit_capture(self, trigger: str):
+        if not self._commit_capture_active or self._commit_capture_trigger != trigger:
+            return
+
+        before = self._commit_capture_before
+        app_name, bundle_id = self._commit_capture_app
+        self._commit_capture_active = False
+        self._commit_capture_trigger = ""
+        self._commit_capture_before = ""
+        self._commit_capture_app = ("Unknown", "unknown")
+
+        after = self._get_focused_text_snapshot()
+        committed_text = extract_inserted_text(before, after).replace("\r\n", "\n")
+        if trigger == "enter":
+            committed_text = committed_text.lstrip("\n")
+
+        if committed_text.strip():
+            if _DEBUG:
+                print(f"[DEBUG] {trigger} 输入提交: '{committed_text}' -> {app_name}")
+            key_event = KeyEvent(
+                timestamp=datetime.now(),
+                keycode=-1,
+                character=committed_text,
+                app_name=app_name,
+                app_bundle_id=bundle_id,
+                modifiers={"shift": False, "ctrl": False, "alt": False, "cmd": False},
+                is_ime_input=True,
+            )
+            if self.callback:
+                self.callback(key_event)
+            return
+
+        if trigger == "enter":
+            key_event = KeyEvent(
+                timestamp=datetime.now(),
+                keycode=ENTER_KEYCODE,
+                character="\n",
+                app_name=app_name,
+                app_bundle_id=bundle_id,
+                modifiers={"shift": False, "ctrl": False, "alt": False, "cmd": False},
+                is_ime_input=False,
+            )
+            if self.callback:
+                self.callback(key_event)
     
     def _event_callback(self, proxy, event_type, event, refcon):
         """CGEventTap 回调"""
+        if event_type == kCGEventFlagsChanged:
+            try:
+                flags = CGEventGetFlags(event)
+                fn_active = bool(flags & FN_FLAG_MASK)
+                if fn_active:
+                    app_name, bundle_id = self._get_event_target_app(event)
+                    self._begin_commit_capture("fn", app_name, bundle_id)
+                else:
+                    self._finish_commit_capture("fn")
+            except Exception:
+                pass
+            return event
+
+        if event_type == kCGEventKeyUp:
+            try:
+                keycode = CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode)
+                if keycode == ENTER_KEYCODE:
+                    self._finish_commit_capture("enter")
+            except Exception:
+                pass
+            return event
+
         if event_type == kCGEventKeyDown:
             try:
                 keycode = CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode)
+
+                if keycode == ENTER_KEYCODE:
+                    app_name, bundle_id = self._get_event_target_app(event)
+                    self._begin_commit_capture("enter", app_name, bundle_id)
+                    return event
+
+                if self._commit_capture_active:
+                    return event
                 
                 if keycode in IGNORED_KEYCODES:
                     return event
@@ -431,11 +578,7 @@ class KeyboardListener:
                     return event
                 
                 # 获取目标应用
-                target_pid = CGEventGetIntegerValueField(event, 40)  # kCGEventTargetUnixProcessID
-                if target_pid > 0:
-                    app_name, bundle_id = get_app_by_pid(target_pid)
-                else:
-                    app_name, bundle_id = get_frontmost_app()
+                app_name, bundle_id = self._get_event_target_app(event)
                 
                 # 判断是否是拼音输入
                 # 小写字母可能是拼音，缓存起来等待判断
@@ -483,7 +626,7 @@ class KeyboardListener:
                 set_pinyin_mode(False)
                 
                 if _DEBUG:
-                    print(f"[DEBUG] 键盘输入: '{character}' -> {app_name} ({bundle_id}) [pid={target_pid}]")
+                    print(f"[DEBUG] 键盘输入: '{character}' -> {app_name} ({bundle_id})")
                 
                 key_event = KeyEvent(
                     timestamp=datetime.now(),
@@ -514,7 +657,11 @@ class KeyboardListener:
                     pass
                 self._tap = None
 
-            event_mask = (1 << kCGEventKeyDown)
+            event_mask = (
+                (1 << kCGEventKeyDown)
+                | (1 << kCGEventKeyUp)
+                | (1 << kCGEventFlagsChanged)
+            )
 
             self._tap = CGEventTapCreate(
                 kCGSessionEventTap,
@@ -651,7 +798,10 @@ class KeyboardListener:
         print("✅ 键盘监听已启动")
         print("🇨🇳 Rime 中文监听已启动")
 
-        CFRunLoopRun()
+        # 使用带超时的循环代替 CFRunLoopRun()，
+        # 避免 Rosetta 翻译下 CGEventTap 回调导致忙循环
+        while self._running:
+            Quartz.CFRunLoopRunInMode(Quartz.kCFRunLoopDefaultMode, 1.0, False)
     
     def start(self):
         if self._running:
