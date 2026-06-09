@@ -1,0 +1,8 @@
+# Optional local Qwen2.5-VL multimodal context analysis dependencies.
+# Use a Python version with PyTorch wheels available for your platform.
+# If Python 3.13 cannot install torch, create a Python 3.12 venv for Qwen-VL.
+torch>=2.3.0
+transformers>=4.53.0
+accelerate>=0.30.0
+qwen-vl-utils>=0.0.8
+Pillow>=10.0.0
