@@ -27,5 +27,12 @@ python-dotenv>=1.0.0
 # AI 总结（可选）
 openai>=1.0.0
 
+# 本地 Qwen-VL 多模态上下文分析（懒加载；模型需首次运行时下载）
+torch>=2.3.0
+transformers>=4.53.0
+accelerate>=0.30.0
+qwen-vl-utils>=0.0.8
+Pillow>=10.0.0
+
 # 开发工具
 rich>=13.0.0  # 美化终端输出
