@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel
 import os
 from pathlib import Path
+import json
 
 from ..database import get_database, InputRecord
 from ..analyzer import get_analyzer
@@ -133,6 +134,15 @@ class FullReportResponse(BaseModel):
     work_path: Optional[WorkPathAnalysisResponse] = None
     ai_work_analysis: Optional[str] = None
     theme_analysis: Optional[ThemeAnalysisResponse] = None
+
+
+def _parse_json_field(value):
+    if not value:
+        return None
+    try:
+        return json.loads(value)
+    except Exception:
+        return value
 
 
 # ===== API 路由 =====
@@ -542,6 +552,73 @@ async def get_records(
     }
 
 
+@app.get("/api/submissions")
+async def get_submissions(
+    target_date: Optional[str] = None,
+    limit: int = Query(default=100, ge=1, le=500),
+):
+    """获取 Enter 提交上下文列表，包含截图和 Qwen 分析结果"""
+    db = get_database()
+    if target_date:
+        try:
+            report_date = datetime.strptime(target_date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="日期格式错误")
+        rows = db.get_submission_contexts_by_date(report_date, limit=limit)
+    else:
+        rows = db.get_recent_submission_contexts(limit=limit)
+
+    return {
+        "total": len(rows),
+        "submissions": [
+            {
+                "submission_id": row["submission_id"],
+                "input_record_id": row["input_record_id"],
+                "timestamp": row["timestamp"],
+                "app_name": row["app_name"],
+                "app_bundle_id": row["app_bundle_id"],
+                "display_name": row.get("display_name") or config.get_app_display_name(row["app_bundle_id"], row["app_name"]),
+                "content": row.get("content") or "",
+                "char_count": row.get("char_count") or 0,
+                "window_title": row["window_title"],
+                "focused_role": row["focused_role"],
+                "container_role": row["container_role"],
+                "container_title": row["container_title"],
+                "screenshot_path": row["screenshot_path"],
+                "screenshot_url": f"/api/submissions/{row['submission_id']}/screenshot" if row["screenshot_path"] else None,
+                "screenshot_scope": row["screenshot_scope"],
+                "capture_status": row["capture_status"],
+                "capture_error": row["capture_error"],
+                "analysis_status": row["analysis_status"],
+                "analysis_error": row["analysis_error"],
+                "qwen_model": row["qwen_model"],
+                "qwen_analysis": _parse_json_field(row["qwen_analysis_json"]),
+                "qwen_raw_output": row["qwen_raw_output"],
+                "focused_frame": _parse_json_field(row["focused_frame_json"]),
+                "container_frame": _parse_json_field(row["container_frame_json"]),
+            }
+            for row in rows
+        ],
+    }
+
+
+@app.get("/api/submissions/{submission_id}/screenshot")
+async def get_submission_screenshot(submission_id: str):
+    """读取本地保存的提交上下文截图"""
+    db = get_database()
+    context = db.get_submission_context(submission_id)
+    if not context or not context.screenshot_path:
+        raise HTTPException(status_code=404, detail="截图不存在")
+
+    screenshot_path = Path(context.screenshot_path).expanduser().resolve()
+    screenshots_root = (config.data_dir / "screenshots").resolve()
+    if screenshots_root not in screenshot_path.parents:
+        raise HTTPException(status_code=403, detail="非法截图路径")
+    if not screenshot_path.exists():
+        raise HTTPException(status_code=404, detail="截图文件不存在")
+    return FileResponse(screenshot_path)
+
+
 @app.get("/api/apps")
 async def get_app_list():
     """获取所有应用列表"""
@@ -689,4 +766,3 @@ async def index():
 static_dir = WEB_DIR / "static"
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
-

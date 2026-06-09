@@ -214,6 +214,82 @@
         .content-text::-webkit-scrollbar-track { background: var(--bg-secondary); }
         .content-text::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 
+        /* Enter 上下文证据卡片 */
+        .context-feed { display: flex; flex-direction: column; gap: 18px; }
+        .context-card {
+            background: linear-gradient(145deg, rgba(18, 18, 26, 0.96), rgba(26, 26, 36, 0.98));
+            border: 1px solid rgba(129, 140, 248, 0.22);
+            border-radius: 18px;
+            overflow: hidden;
+            box-shadow: 0 18px 50px -32px rgba(99, 102, 241, 0.75);
+        }
+        .context-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 16px;
+            padding: 18px 20px;
+            border-bottom: 1px solid var(--border);
+        }
+        .context-app { font-weight: 700; font-size: 16px; }
+        .context-meta { color: var(--text-secondary); font-size: 12px; margin-top: 4px; }
+        .context-badges { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+        .context-badge {
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            padding: 4px 10px;
+            color: var(--text-secondary);
+            background: rgba(255,255,255,0.03);
+            font-size: 12px;
+        }
+        .context-badge.ok { border-color: rgba(16, 185, 129, 0.45); color: #6ee7b7; }
+        .context-badge.pending { border-color: rgba(245, 158, 11, 0.45); color: #fcd34d; }
+        .context-badge.failed, .context-badge.missing_dependency, .context-badge.invalid_json { border-color: rgba(239, 68, 68, 0.45); color: #fca5a5; }
+        .context-card-body {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(300px, 42%);
+            gap: 18px;
+            padding: 20px;
+        }
+        .context-text {
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 16px;
+            white-space: pre-wrap;
+            color: var(--text-primary);
+            line-height: 1.8;
+        }
+        .context-analysis {
+            margin-top: 14px;
+            background: rgba(16, 185, 129, 0.06);
+            border: 1px solid rgba(16, 185, 129, 0.16);
+            border-radius: 14px;
+            padding: 14px;
+            color: var(--text-secondary);
+        }
+        .context-analysis-title { color: #6ee7b7; font-weight: 700; margin-bottom: 8px; }
+        .context-shot {
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            min-height: 220px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        .context-shot img { width: 100%; height: auto; display: block; }
+        .context-kv {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 8px;
+            margin-top: 12px;
+            color: var(--text-secondary);
+            font-size: 12px;
+        }
+        .context-kv div { background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 10px; padding: 8px; }
+
         /* 图表 */
         .chart-container { position: relative; height: 300px; }
 
@@ -449,6 +525,7 @@
                     <button class="tab-btn active" onclick="switchTab('overview')">📊 概览</button>
                     <button class="tab-btn" onclick="switchTab('analysis')">🤖 分析</button>
                     <button class="tab-btn" onclick="switchTab('content')">📝 内容</button>
+                    <button class="tab-btn" onclick="switchTab('context')">🧠 上下文</button>
                 </div>
                 <div class="date-nav">
                     <button onclick="changeDate(-1)">←</button>
@@ -543,6 +620,19 @@
             </div>
         </div>
 
+        <!-- 上下文标签页 -->
+        <div id="tab-context" class="tab-content">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">🧠 Enter 提交上下文</h2>
+                    <button class="tab-btn" onclick="loadSubmissionContexts()">刷新</button>
+                </div>
+                <div class="context-feed" id="contextFeed">
+                    <div class="loading"><div class="loading-spinner"></div><span>加载中...</span></div>
+                </div>
+            </div>
+        </div>
+
         <footer class="footer">
             <p>OmniMe v0.1.0 - 所有数据仅存储在本地</p>
         </footer>
@@ -593,6 +683,8 @@
                 loadContentByApp();
             } else if (tab === 'analysis') {
                 loadAnalysis();
+            } else if (tab === 'context') {
+                loadSubmissionContexts();
             }
         }
 
@@ -614,6 +706,8 @@
                     loadContentByApp();
                 } else if (currentTab === 'analysis') {
                     loadAnalysis();
+                } else if (currentTab === 'context') {
+                    loadSubmissionContexts();
                 }
             } catch (error) {
                 console.error('加载数据失败:', error);
@@ -867,6 +961,74 @@
 
         function toggleAppContent(element) {
             element.classList.toggle('expanded');
+        }
+
+        async function loadSubmissionContexts() {
+            const dateStr = document.getElementById('datePicker').value;
+            const container = document.getElementById('contextFeed');
+            container.innerHTML = '<div class="loading"><div class="loading-spinner"></div><span>加载上下文证据...</span></div>';
+
+            try {
+                const data = await fetch(`/api/submissions?target_date=${dateStr}&limit=100`).then(r => r.json());
+                const submissions = data.submissions || [];
+                if (submissions.length === 0) {
+                    container.innerHTML = '<div class="empty-state"><div class="icon">🧠</div><p>暂无 Enter 上下文记录</p></div>';
+                    return;
+                }
+                container.innerHTML = submissions.map(renderSubmissionContext).join('');
+            } catch (error) {
+                console.error('加载上下文失败:', error);
+                container.innerHTML = '<div class="empty-state"><div class="icon">❌</div><p>加载失败</p></div>';
+            }
+        }
+
+        function renderSubmissionContext(item) {
+            const analysis = item.qwen_analysis || {};
+            const visibleText = Array.isArray(analysis.visible_relevant_text) ? analysis.visible_relevant_text : [];
+            const statusClass = item.analysis_status || 'pending';
+            return `
+                <article class="context-card">
+                    <div class="context-card-header">
+                        <div>
+                            <div class="context-app">${appIcons[item.display_name] || appIcons.default} ${escapeHtml(item.display_name || item.app_name)}</div>
+                            <div class="context-meta">${formatTimestamp(item.timestamp)} · ${escapeHtml(item.window_title || '未知窗口')} · ${item.char_count} 字符</div>
+                        </div>
+                        <div class="context-badges">
+                            <span class="context-badge ${escapeHtml(item.capture_status || '')}">捕获 ${escapeHtml(item.capture_status || 'unknown')}</span>
+                            <span class="context-badge ${escapeHtml(statusClass)}">Qwen ${escapeHtml(item.analysis_status || 'pending')}</span>
+                            <span class="context-badge">${escapeHtml(item.screenshot_scope || 'no-shot')}</span>
+                        </div>
+                    </div>
+                    <div class="context-card-body">
+                        <div>
+                            <div class="context-text">${escapeHtml(item.content || '')}</div>
+                            <div class="context-analysis">
+                                <div class="context-analysis-title">Qwen 多模态识别</div>
+                                ${analysis.context_type ? `<div>类型：${escapeHtml(analysis.context_type)} · 置信度：${escapeHtml(String(analysis.confidence ?? 'n/a'))}</div>` : `<div>${escapeHtml(item.analysis_error || item.qwen_raw_output || '等待本地 Qwen-VL 分析')}</div>`}
+                                ${analysis.visible_topic ? `<div>主题：${escapeHtml(analysis.visible_topic)}</div>` : ''}
+                                ${analysis.user_intent ? `<div>意图：${escapeHtml(analysis.user_intent)}</div>` : ''}
+                                ${analysis.surrounding_messages_summary ? `<div>上下文摘要：${escapeHtml(analysis.surrounding_messages_summary)}</div>` : ''}
+                                ${visibleText.length ? `<div>可见文本：${visibleText.map(escapeHtml).join(' / ')}</div>` : ''}
+                            </div>
+                            <div class="context-kv">
+                                <div>输入控件：${escapeHtml(item.focused_role || 'unknown')}</div>
+                                <div>容器：${escapeHtml(item.container_role || 'unknown')}</div>
+                                <div>模型：${escapeHtml(item.qwen_model || 'not-loaded')}</div>
+                            </div>
+                        </div>
+                        <div class="context-shot">
+                            ${item.screenshot_url ? `<img src="${item.screenshot_url}" alt="对话框截图">` : '<span class="empty-state">无截图</span>'}
+                        </div>
+                    </div>
+                </article>
+            `;
+        }
+
+        function formatTimestamp(ts) {
+            if (!ts) return '';
+            const d = new Date(ts);
+            if (Number.isNaN(d.getTime())) return ts;
+            return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         }
 
         function escapeHtml(text) {

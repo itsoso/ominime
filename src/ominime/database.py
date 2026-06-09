@@ -419,6 +419,27 @@ class Database:
             """, (limit,))
             return [dict(row) for row in cursor.fetchall()]
 
+    def get_submission_contexts_by_date(self, target_date: date, limit: int = 100) -> List[Dict]:
+        """查询指定日期的提交上下文，包含输入内容"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            start = datetime.combine(target_date, datetime.min.time())
+            end = datetime.combine(target_date + timedelta(days=1), datetime.min.time())
+            cursor.execute("""
+                SELECT
+                    c.*,
+                    r.content,
+                    r.char_count,
+                    r.display_name,
+                    r.created_at AS input_created_at
+                FROM submission_contexts c
+                LEFT JOIN input_records r ON r.id = c.input_record_id
+                WHERE c.timestamp >= ? AND c.timestamp < ?
+                ORDER BY c.timestamp DESC
+                LIMIT ?
+            """, (start.isoformat(), end.isoformat(), limit))
+            return [dict(row) for row in cursor.fetchall()]
+
     def _row_to_submission_context(self, row) -> SubmissionContextRecord:
         return SubmissionContextRecord(
             id=row["id"],
