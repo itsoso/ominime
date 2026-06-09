@@ -54,6 +54,37 @@ class AppDailyStats:
     sample_content: List[str]
 
 
+@dataclass
+class SubmissionContextRecord:
+    """Enter 提交上下文记录"""
+    id: Optional[int]
+    submission_id: str
+    input_record_id: Optional[int]
+    timestamp: datetime
+    app_name: str
+    app_bundle_id: str
+    window_title: Optional[str] = None
+    focused_role: Optional[str] = None
+    focused_subrole: Optional[str] = None
+    focused_title: Optional[str] = None
+    focused_description: Optional[str] = None
+    focused_identifier: Optional[str] = None
+    focused_frame_json: Optional[str] = None
+    container_role: Optional[str] = None
+    container_title: Optional[str] = None
+    container_frame_json: Optional[str] = None
+    ax_hierarchy_json: Optional[str] = None
+    screenshot_path: Optional[str] = None
+    screenshot_scope: Optional[str] = None
+    qwen_analysis_json: Optional[str] = None
+    qwen_raw_output: Optional[str] = None
+    qwen_model: Optional[str] = None
+    analysis_status: str = "pending"
+    analysis_error: Optional[str] = None
+    capture_status: str = "ok"
+    capture_error: Optional[str] = None
+
+
 class Database:
     """
     数据库管理类
@@ -145,6 +176,47 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_daily_summaries_date 
                 ON daily_summaries(date)
             """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS submission_contexts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    submission_id TEXT NOT NULL UNIQUE,
+                    input_record_id INTEGER,
+                    timestamp DATETIME NOT NULL,
+                    app_name TEXT NOT NULL,
+                    app_bundle_id TEXT NOT NULL,
+                    window_title TEXT,
+                    focused_role TEXT,
+                    focused_subrole TEXT,
+                    focused_title TEXT,
+                    focused_description TEXT,
+                    focused_identifier TEXT,
+                    focused_frame_json TEXT,
+                    container_role TEXT,
+                    container_title TEXT,
+                    container_frame_json TEXT,
+                    ax_hierarchy_json TEXT,
+                    screenshot_path TEXT,
+                    screenshot_scope TEXT,
+                    qwen_analysis_json TEXT,
+                    qwen_raw_output TEXT,
+                    qwen_model TEXT,
+                    analysis_status TEXT DEFAULT 'pending',
+                    analysis_error TEXT,
+                    capture_status TEXT NOT NULL,
+                    capture_error TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(input_record_id) REFERENCES input_records(id)
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_submission_contexts_timestamp
+                ON submission_contexts(timestamp)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_submission_contexts_input_record
+                ON submission_contexts(input_record_id)
+            """)
     
     # ===== 输入记录操作 =====
     
@@ -219,6 +291,162 @@ class Database:
             char_count=row['char_count'],
             session_id=row['session_id'],
             duration_seconds=row['duration_seconds'],
+        )
+
+    # ===== 提交上下文操作 =====
+
+    def save_submission_context(self, record: SubmissionContextRecord) -> int:
+        """保存 Enter 提交上下文记录"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO submission_contexts
+                (submission_id, input_record_id, timestamp, app_name, app_bundle_id,
+                 window_title, focused_role, focused_subrole, focused_title,
+                 focused_description, focused_identifier, focused_frame_json,
+                 container_role, container_title, container_frame_json, ax_hierarchy_json,
+                 screenshot_path, screenshot_scope, qwen_analysis_json, qwen_raw_output,
+                 qwen_model, analysis_status, analysis_error, capture_status, capture_error)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(submission_id) DO UPDATE SET
+                    input_record_id = excluded.input_record_id,
+                    timestamp = excluded.timestamp,
+                    app_name = excluded.app_name,
+                    app_bundle_id = excluded.app_bundle_id,
+                    window_title = excluded.window_title,
+                    focused_role = excluded.focused_role,
+                    focused_subrole = excluded.focused_subrole,
+                    focused_title = excluded.focused_title,
+                    focused_description = excluded.focused_description,
+                    focused_identifier = excluded.focused_identifier,
+                    focused_frame_json = excluded.focused_frame_json,
+                    container_role = excluded.container_role,
+                    container_title = excluded.container_title,
+                    container_frame_json = excluded.container_frame_json,
+                    ax_hierarchy_json = excluded.ax_hierarchy_json,
+                    screenshot_path = excluded.screenshot_path,
+                    screenshot_scope = excluded.screenshot_scope,
+                    qwen_analysis_json = excluded.qwen_analysis_json,
+                    qwen_raw_output = excluded.qwen_raw_output,
+                    qwen_model = excluded.qwen_model,
+                    analysis_status = excluded.analysis_status,
+                    analysis_error = excluded.analysis_error,
+                    capture_status = excluded.capture_status,
+                    capture_error = excluded.capture_error
+            """, (
+                record.submission_id,
+                record.input_record_id,
+                record.timestamp.isoformat(),
+                record.app_name,
+                record.app_bundle_id,
+                record.window_title,
+                record.focused_role,
+                record.focused_subrole,
+                record.focused_title,
+                record.focused_description,
+                record.focused_identifier,
+                record.focused_frame_json,
+                record.container_role,
+                record.container_title,
+                record.container_frame_json,
+                record.ax_hierarchy_json,
+                record.screenshot_path,
+                record.screenshot_scope,
+                record.qwen_analysis_json,
+                record.qwen_raw_output,
+                record.qwen_model,
+                record.analysis_status,
+                record.analysis_error,
+                record.capture_status,
+                record.capture_error,
+            ))
+            if cursor.lastrowid:
+                return cursor.lastrowid
+            cursor.execute("SELECT id FROM submission_contexts WHERE submission_id = ?", (record.submission_id,))
+            return cursor.fetchone()["id"]
+
+    def update_submission_context_analysis(
+        self,
+        submission_id: str,
+        analysis_status: str,
+        qwen_analysis_json: Optional[str] = None,
+        qwen_raw_output: Optional[str] = None,
+        qwen_model: Optional[str] = None,
+        analysis_error: Optional[str] = None,
+    ):
+        """更新 Qwen 多模态分析结果"""
+        with self._get_connection() as conn:
+            conn.execute("""
+                UPDATE submission_contexts
+                SET analysis_status = ?,
+                    qwen_analysis_json = ?,
+                    qwen_raw_output = ?,
+                    qwen_model = ?,
+                    analysis_error = ?
+                WHERE submission_id = ?
+            """, (
+                analysis_status,
+                qwen_analysis_json,
+                qwen_raw_output,
+                qwen_model,
+                analysis_error,
+                submission_id,
+            ))
+
+    def get_submission_context(self, submission_id: str) -> Optional[SubmissionContextRecord]:
+        """按 submission_id 查询上下文记录"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM submission_contexts WHERE submission_id = ?", (submission_id,))
+            row = cursor.fetchone()
+            return self._row_to_submission_context(row) if row else None
+
+    def get_recent_submission_contexts(self, limit: int = 50) -> List[Dict]:
+        """查询最近提交上下文，包含输入内容"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT
+                    c.*,
+                    r.content,
+                    r.char_count,
+                    r.display_name,
+                    r.created_at AS input_created_at
+                FROM submission_contexts c
+                LEFT JOIN input_records r ON r.id = c.input_record_id
+                ORDER BY c.timestamp DESC
+                LIMIT ?
+            """, (limit,))
+            return [dict(row) for row in cursor.fetchall()]
+
+    def _row_to_submission_context(self, row) -> SubmissionContextRecord:
+        return SubmissionContextRecord(
+            id=row["id"],
+            submission_id=row["submission_id"],
+            input_record_id=row["input_record_id"],
+            timestamp=datetime.fromisoformat(row["timestamp"]),
+            app_name=row["app_name"],
+            app_bundle_id=row["app_bundle_id"],
+            window_title=row["window_title"],
+            focused_role=row["focused_role"],
+            focused_subrole=row["focused_subrole"],
+            focused_title=row["focused_title"],
+            focused_description=row["focused_description"],
+            focused_identifier=row["focused_identifier"],
+            focused_frame_json=row["focused_frame_json"],
+            container_role=row["container_role"],
+            container_title=row["container_title"],
+            container_frame_json=row["container_frame_json"],
+            ax_hierarchy_json=row["ax_hierarchy_json"],
+            screenshot_path=row["screenshot_path"],
+            screenshot_scope=row["screenshot_scope"],
+            qwen_analysis_json=row["qwen_analysis_json"],
+            qwen_raw_output=row["qwen_raw_output"],
+            qwen_model=row["qwen_model"],
+            analysis_status=row["analysis_status"],
+            analysis_error=row["analysis_error"],
+            capture_status=row["capture_status"],
+            capture_error=row["capture_error"],
         )
     
     # ===== 每日汇总操作 =====
@@ -472,4 +700,3 @@ if __name__ == "__main__":
     
     stats = db.get_daily_stats(today)
     print(f"今日应用统计: {stats}")
-
