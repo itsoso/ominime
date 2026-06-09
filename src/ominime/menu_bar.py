@@ -5,6 +5,8 @@ Menu Bar 应用模块
 """
 
 import rumps
+import time
+import uuid
 from datetime import date
 from typing import Optional
 
@@ -13,6 +15,7 @@ from .app_tracker import AppTracker
 from .database import get_database, InputRecord
 from .analyzer import get_analyzer
 from .config import config
+from .input_snapshot import normalize_submission_text, should_save_submission_snapshot
 
 
 class OmniMeApp(rumps.App):
@@ -40,6 +43,7 @@ class OmniMeApp(rumps.App):
         
         self._is_recording = False
         self._today_chars = 0
+        self._last_submission_snapshot = None
         
         # 构建菜单
         self._build_menu()
@@ -63,9 +67,8 @@ class OmniMeApp(rumps.App):
         ]
     
     def _on_key_event(self, event: KeyEvent):
-        """键盘事件回调"""
-        # 忽略特殊键
-        if event.character in ['esc', '←', '→', '↑', '↓', 'del']:
+        """输入提交回调：只保存 Enter 时的完整输入框快照。"""
+        if not event.modifiers.get("submit_snapshot"):
             return
         
         # 忽略带 Command 键的快捷键（如 Cmd+C）
@@ -75,24 +78,49 @@ class OmniMeApp(rumps.App):
         # 忽略被屏蔽的应用
         if config.is_app_ignored(event.app_bundle_id):
             return
-        
-        # 记录输入
-        session = self.tracker.record_input(
-            event.character,
+
+        content = normalize_submission_text(event.character)
+        if not content:
+            return
+
+        now = time.monotonic()
+        current_snapshot = (
             event.app_name,
             event.app_bundle_id,
+            content,
         )
-        
-        if session:
-            self._today_chars += 1
-            
-            # 当缓冲区达到一定长度时保存到数据库
-            if len(session.buffer) >= 50:
-                self._save_session(session)
-                session.buffer = ""
-        
+        if not should_save_submission_snapshot(
+            current_snapshot,
+            self._last_submission_snapshot,
+            now=now,
+            debounce_seconds=0.8,
+        ):
+            return
+
+        self._last_submission_snapshot = (*current_snapshot, now)
+        self._save_submission_snapshot(event, content)
+        self._today_chars += len(content)
         # 更新标题显示字符数
         self._update_title()
+
+    def _save_submission_snapshot(self, event: KeyEvent, content: str):
+        """保存 Enter 提交时读取到的完整输入框内容。"""
+        record = InputRecord(
+            id=None,
+            timestamp=event.timestamp,
+            app_name=event.app_name,
+            app_bundle_id=event.app_bundle_id,
+            display_name=config.get_app_display_name(event.app_bundle_id, event.app_name),
+            content=content,
+            char_count=len(content),
+            session_id=f"submit-{uuid.uuid4().hex}",
+            duration_seconds=0,
+        )
+
+        try:
+            self.db.save_input_record(record)
+        except Exception as e:
+            print(f"保存提交快照失败: {e}")
     
     def _save_session(self, session):
         """保存会话到数据库"""
@@ -307,4 +335,3 @@ def run_menu_bar_app():
 
 if __name__ == "__main__":
     run_menu_bar_app()
-

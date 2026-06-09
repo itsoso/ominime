@@ -7,6 +7,7 @@ OmniMe - macOS 输入追踪系统
 
 import sys
 import argparse
+import uuid
 from datetime import date, datetime, timedelta
 
 from rich.console import Console
@@ -68,18 +69,17 @@ def cmd_monitor(args):
     
     import time
     from .keyboard_listener import KeyboardListener, KeyEvent
-    from .app_tracker import AppTracker
     from .database import InputRecord
+    from .input_snapshot import normalize_submission_text, should_save_submission_snapshot
     
-    tracker = AppTracker()
     db = get_database()
     
     current_app = [""]
     char_count = [0]
+    last_submission_snapshot = [None]
     
     def on_key(event: KeyEvent):
-        # 忽略特殊键
-        if event.character in ['esc', '←', '→', '↑', '↓', 'del']:
+        if not event.modifiers.get("submit_snapshot"):
             return
         
         if event.modifiers.get('cmd'):
@@ -87,6 +87,21 @@ def cmd_monitor(args):
         
         if config.is_app_ignored(event.app_bundle_id):
             return
+
+        content = normalize_submission_text(event.character)
+        if not content:
+            return
+
+        now = time.monotonic()
+        current_snapshot = (event.app_name, event.app_bundle_id, content)
+        if not should_save_submission_snapshot(
+            current_snapshot,
+            last_submission_snapshot[0],
+            now=now,
+            debounce_seconds=0.8,
+        ):
+            return
+        last_submission_snapshot[0] = (*current_snapshot, now)
         
         # 检测应用切换
         if current_app[0] != event.app_name:
@@ -94,49 +109,22 @@ def cmd_monitor(args):
                 console.print("")
             current_app[0] = event.app_name
             console.print(f"\n[cyan][{event.app_name}][/cyan] ", end="")
-        
-        # 记录输入（传递 is_ime_input 参数）
-        session = tracker.record_input(
-            event.character, 
-            event.app_name, 
-            event.app_bundle_id,
-            is_ime_input=event.is_ime_input
+
+        console.print(f"[green]{content}[/green]", end="")
+        char_count[0] += len(content)
+
+        record = InputRecord(
+            id=None,
+            timestamp=event.timestamp,
+            app_name=event.app_name,
+            app_bundle_id=event.app_bundle_id,
+            display_name=config.get_app_display_name(event.app_bundle_id, event.app_name),
+            content=content,
+            char_count=len(content),
+            session_id=f"submit-{uuid.uuid4().hex}",
+            duration_seconds=0,
         )
-        
-        if session:
-            char_count[0] += 1
-            
-            # 显示字符
-            char = event.character
-            if char == '\n':
-                console.print("")
-                console.print(f"[cyan][{event.app_name}][/cyan] ", end="")
-            elif char == '\b':
-                console.print("\b \b", end="")
-            elif char == '\t':
-                console.print("    ", end="")
-            elif event.is_ime_input:
-                # IME 输入（中文）显示为绿色
-                console.print(f"[green]{char}[/green]", end="")
-            else:
-                console.print(char, end="")
-            
-            # 保存到数据库（每10个字符或遇到换行时保存）
-            should_save = len(session.buffer) >= 10 or char == '\n'
-            if should_save and session.buffer.strip():
-                record = InputRecord(
-                    id=None,
-                    timestamp=session.last_activity,
-                    app_name=session.app_name,
-                    app_bundle_id=session.app_bundle_id,
-                    display_name=config.get_app_display_name(session.app_bundle_id, session.app_name),
-                    content=session.buffer,
-                    char_count=len(session.buffer),
-                    session_id=session.session_id,
-                    duration_seconds=(session.last_activity - session.start_time).total_seconds(),
-                )
-                db.save_input_record(record)
-                session.buffer = ""
+        db.save_input_record(record)
     
     listener = KeyboardListener(on_key)
     listener.start()
@@ -150,7 +138,6 @@ def cmd_monitor(args):
             time.sleep(1)
     except KeyboardInterrupt:
         listener.stop()
-        tracker.flush_current_session()
         console.print(f"\n\n[yellow]已停止，共记录 {char_count[0]} 个字符[/yellow]")
 
 
@@ -450,4 +437,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

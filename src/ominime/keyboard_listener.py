@@ -48,7 +48,7 @@ from Foundation import NSObject, NSRunLoop, NSDefaultRunLoopMode, NSDistributedN
 import Quartz
 import objc
 
-from .input_diff import extract_inserted_text
+from .input_snapshot import normalize_submission_text
 
 
 @dataclass
@@ -105,9 +105,8 @@ _pinyin_buffer = ""
 _pinyin_buffer_app = ("Unknown", "unknown")
 _pinyin_buffer_lock = threading.Lock()
 
-# 豆包输入法默认按住 Fn 语音输入；部分键盘/配置会把触发键映射到 Enter。
+# 只在 Enter 提交时读取完整输入框内容，避免记录拼音中间态。
 ENTER_KEYCODE = 36
-FN_FLAG_MASK = getattr(Quartz, "kCGEventFlagMaskSecondaryFn", 1 << 23)
 
 
 def set_last_input_app(name: str, bundle_id: str):
@@ -387,33 +386,10 @@ class KeyboardListener:
         self._tap_lock = threading.Lock()
         self._retry_count = 0
         self._wake_observer = None
-        self._commit_capture_active = False
-        self._commit_capture_trigger = ""
-        self._commit_capture_before = ""
-        self._commit_capture_app = ("Unknown", "unknown")
     
     def _on_rime_input(self, text: str, timestamp: datetime, app_name: str, bundle_id: str):
-        """Rime 中文输入回调"""
-        # 收到中文输出，清除拼音模式和拼音缓冲区
-        set_pinyin_mode(False)
-        clear_pinyin_buffer()  # 清空缓冲区，因为这些字母已经转换为中文了
-        
-        # 过滤掉只有换行的内容
-        text = text.strip()
-        if not text:
-            return
-        
-        key_event = KeyEvent(
-            timestamp=timestamp,
-            keycode=-1,
-            character=text,
-            app_name=app_name,
-            app_bundle_id=bundle_id,
-            modifiers={"shift": False, "ctrl": False, "alt": False, "cmd": False},
-            is_ime_input=True,
-        )
-        if self.callback:
-            self.callback(key_event)
+        """Rime log events are ignored in submission-snapshot mode."""
+        return
 
     def _copy_ax_attribute(self, element, attribute: str):
         """Read an Accessibility attribute across PyObjC signature variants."""
@@ -459,188 +435,41 @@ class KeyboardListener:
             return get_app_by_pid(target_pid)
         return get_frontmost_app()
 
-    def _begin_commit_capture(self, trigger: str, app_name: str, bundle_id: str):
-        """Start capturing text inserted by Fn/Enter-triggered IME input."""
-        if self._commit_capture_active:
+    def _emit_submission_snapshot(self, event):
+        """Emit the full focused input value when Enter is pressed."""
+        app_name, bundle_id = self._get_event_target_app(event)
+        content = normalize_submission_text(self._get_focused_text_snapshot())
+        if not content:
             return
 
-        self._commit_capture_active = True
-        self._commit_capture_trigger = trigger
-        self._commit_capture_before = self._get_focused_text_snapshot()
-        self._commit_capture_app = (app_name, bundle_id)
-        set_last_input_app(app_name, bundle_id)
         if _DEBUG:
-            print(f"[DEBUG] 开始 {trigger} 输入捕获: {app_name}")
+            print(f"[DEBUG] Enter 提交快照: {len(content)} chars -> {app_name}")
 
-    def _finish_commit_capture(self, trigger: str):
-        if not self._commit_capture_active or self._commit_capture_trigger != trigger:
-            return
-
-        before = self._commit_capture_before
-        app_name, bundle_id = self._commit_capture_app
-        self._commit_capture_active = False
-        self._commit_capture_trigger = ""
-        self._commit_capture_before = ""
-        self._commit_capture_app = ("Unknown", "unknown")
-
-        after = self._get_focused_text_snapshot()
-        committed_text = extract_inserted_text(before, after).replace("\r\n", "\n")
-        if trigger == "enter":
-            committed_text = committed_text.lstrip("\n")
-
-        if committed_text.strip():
-            if _DEBUG:
-                print(f"[DEBUG] {trigger} 输入提交: '{committed_text}' -> {app_name}")
-            key_event = KeyEvent(
-                timestamp=datetime.now(),
-                keycode=-1,
-                character=committed_text,
-                app_name=app_name,
-                app_bundle_id=bundle_id,
-                modifiers={"shift": False, "ctrl": False, "alt": False, "cmd": False},
-                is_ime_input=True,
-            )
-            if self.callback:
-                self.callback(key_event)
-            return
-
-        if trigger == "enter":
-            key_event = KeyEvent(
-                timestamp=datetime.now(),
-                keycode=ENTER_KEYCODE,
-                character="\n",
-                app_name=app_name,
-                app_bundle_id=bundle_id,
-                modifiers={"shift": False, "ctrl": False, "alt": False, "cmd": False},
-                is_ime_input=False,
-            )
-            if self.callback:
-                self.callback(key_event)
+        key_event = KeyEvent(
+            timestamp=datetime.now(),
+            keycode=ENTER_KEYCODE,
+            character=content,
+            app_name=app_name,
+            app_bundle_id=bundle_id,
+            modifiers={
+                "shift": False,
+                "ctrl": False,
+                "alt": False,
+                "cmd": False,
+                "submit_snapshot": True,
+            },
+            is_ime_input=True,
+        )
+        if self.callback:
+            self.callback(key_event)
     
     def _event_callback(self, proxy, event_type, event, refcon):
         """CGEventTap 回调"""
-        if event_type == kCGEventFlagsChanged:
-            try:
-                flags = CGEventGetFlags(event)
-                fn_active = bool(flags & FN_FLAG_MASK)
-                if fn_active:
-                    app_name, bundle_id = self._get_event_target_app(event)
-                    self._begin_commit_capture("fn", app_name, bundle_id)
-                else:
-                    self._finish_commit_capture("fn")
-            except Exception:
-                pass
-            return event
-
-        if event_type == kCGEventKeyUp:
-            try:
-                keycode = CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode)
-                if keycode == ENTER_KEYCODE:
-                    self._finish_commit_capture("enter")
-            except Exception:
-                pass
-            return event
-
         if event_type == kCGEventKeyDown:
             try:
                 keycode = CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode)
-
                 if keycode == ENTER_KEYCODE:
-                    app_name, bundle_id = self._get_event_target_app(event)
-                    self._begin_commit_capture("enter", app_name, bundle_id)
-                    return event
-
-                if self._commit_capture_active:
-                    return event
-                
-                if keycode in IGNORED_KEYCODES:
-                    return event
-                
-                flags = CGEventGetFlags(event)
-                modifiers = {
-                    "shift": bool(flags & kCGEventFlagMaskShift),
-                    "ctrl": bool(flags & kCGEventFlagMaskControl),
-                    "alt": bool(flags & kCGEventFlagMaskAlternate),
-                    "cmd": bool(flags & kCGEventFlagMaskCommand),
-                }
-                
-                if modifiers["cmd"]:
-                    return event
-                
-                character = ""
-                if keycode in SPECIAL_KEYCODE_MAP:
-                    character = SPECIAL_KEYCODE_MAP[keycode]
-                elif keycode in KEYCODE_TO_CHAR:
-                    char = KEYCODE_TO_CHAR[keycode]
-                    character = char.upper() if modifiers["shift"] else char
-                
-                if not character:
-                    return event
-                
-                # 获取目标应用
-                app_name, bundle_id = self._get_event_target_app(event)
-                
-                # 判断是否是拼音输入
-                # 小写字母可能是拼音，缓存起来等待判断
-                if character.isalpha() and character.islower():
-                    set_pinyin_mode(True)
-                    set_last_input_app(app_name, bundle_id)
-                    # 添加到拼音缓冲区（可能是拼音也可能是英文）
-                    add_to_pinyin_buffer(character, app_name, bundle_id)
-                    if _DEBUG:
-                        print(f"[DEBUG] 缓存可能的拼音: '{character}' (目标: {app_name})")
-                    return event
-                
-                # 空格键在拼音模式下跳过（用于选词）
-                if character == ' ' and is_pinyin_mode():
-                    if _DEBUG:
-                        print(f"[DEBUG] 跳过拼音选词空格")
-                    return event
-                
-                # 数字键 1-9 在拼音模式下跳过（用于选词）
-                if character in '123456789' and is_pinyin_mode():
-                    if _DEBUG:
-                        print(f"[DEBUG] 跳过拼音选词数字: '{character}'")
-                    return event
-                
-                # 其他字符（数字0、符号、大写字母、回车等）
-                # 先检查是否需要将缓冲区作为英文输出
-                buffered_english, buf_app_name, buf_bundle_id = flush_pinyin_buffer_as_english()
-                if buffered_english:
-                    # 缓冲区有内容，说明之前的字母是英文（没有被 Rime 转换）
-                    if _DEBUG:
-                        print(f"[DEBUG] 输出缓冲的英文: '{buffered_english}' -> {buf_app_name}")
-                    english_event = KeyEvent(
-                        timestamp=datetime.now(),
-                        keycode=-1,
-                        character=buffered_english,
-                        app_name=buf_app_name,
-                        app_bundle_id=buf_bundle_id,
-                        modifiers={"shift": False, "ctrl": False, "alt": False, "cmd": False},
-                        is_ime_input=False,
-                    )
-                    if self.callback:
-                        self.callback(english_event)
-                
-                # 清除拼音模式
-                set_pinyin_mode(False)
-                
-                if _DEBUG:
-                    print(f"[DEBUG] 键盘输入: '{character}' -> {app_name} ({bundle_id})")
-                
-                key_event = KeyEvent(
-                    timestamp=datetime.now(),
-                    keycode=keycode,
-                    character=character,
-                    app_name=app_name,
-                    app_bundle_id=bundle_id,
-                    modifiers=modifiers,
-                    is_ime_input=False,
-                )
-                
-                if self.callback:
-                    self.callback(key_event)
-                    
+                    self._emit_submission_snapshot(event)
             except Exception:
                 pass
         
@@ -657,11 +486,7 @@ class KeyboardListener:
                     pass
                 self._tap = None
 
-            event_mask = (
-                (1 << kCGEventKeyDown)
-                | (1 << kCGEventKeyUp)
-                | (1 << kCGEventFlagsChanged)
-            )
+            event_mask = (1 << kCGEventKeyDown)
 
             self._tap = CGEventTapCreate(
                 kCGSessionEventTap,
@@ -796,7 +621,7 @@ class KeyboardListener:
             CGEventTapEnable(self._tap, True)
 
         print("✅ 键盘监听已启动")
-        print("🇨🇳 Rime 中文监听已启动")
+        print("📝 Enter 提交快照监听已启动")
 
         # 使用带超时的循环代替 CFRunLoopRun()，
         # 避免 Rosetta 翻译下 CGEventTap 回调导致忙循环
@@ -823,8 +648,7 @@ class KeyboardListener:
         self._health_check_thread = threading.Thread(target=self._health_check_loop, daemon=True)
         self._health_check_thread.start()
 
-        # 启动 Rime 日志监听
-        self._rime_watcher.start()
+        # 提交快照模式不启动 Rime 日志监听，避免保存拼音中间态。
 
     def stop(self):
         if not self._running:
