@@ -7,7 +7,6 @@ OmniMe - macOS 输入追踪系统
 
 import sys
 import argparse
-import uuid
 from datetime import date, datetime, timedelta
 
 from rich.console import Console
@@ -69,8 +68,8 @@ def cmd_monitor(args):
     
     import time
     from .keyboard_listener import KeyboardListener, KeyEvent
-    from .database import InputRecord
     from .input_snapshot import normalize_submission_text, should_save_submission_snapshot
+    from .submission_processor import save_submission_event
     
     db = get_database()
     
@@ -113,18 +112,7 @@ def cmd_monitor(args):
         console.print(f"[green]{content}[/green]", end="")
         char_count[0] += len(content)
 
-        record = InputRecord(
-            id=None,
-            timestamp=event.timestamp,
-            app_name=event.app_name,
-            app_bundle_id=event.app_bundle_id,
-            display_name=config.get_app_display_name(event.app_bundle_id, event.app_name),
-            content=content,
-            char_count=len(content),
-            session_id=f"submit-{uuid.uuid4().hex}",
-            duration_seconds=0,
-        )
-        db.save_input_record(record)
+        save_submission_event(db, event, content)
     
     listener = KeyboardListener(on_key)
     listener.start()

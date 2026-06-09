@@ -6,7 +6,6 @@ Menu Bar 应用模块
 
 import rumps
 import time
-import uuid
 from datetime import date
 from typing import Optional
 
@@ -16,6 +15,7 @@ from .database import get_database, InputRecord
 from .analyzer import get_analyzer
 from .config import config
 from .input_snapshot import normalize_submission_text, should_save_submission_snapshot
+from .submission_processor import save_submission_event
 
 
 class OmniMeApp(rumps.App):
@@ -105,20 +105,8 @@ class OmniMeApp(rumps.App):
 
     def _save_submission_snapshot(self, event: KeyEvent, content: str):
         """保存 Enter 提交时读取到的完整输入框内容。"""
-        record = InputRecord(
-            id=None,
-            timestamp=event.timestamp,
-            app_name=event.app_name,
-            app_bundle_id=event.app_bundle_id,
-            display_name=config.get_app_display_name(event.app_bundle_id, event.app_name),
-            content=content,
-            char_count=len(content),
-            session_id=f"submit-{uuid.uuid4().hex}",
-            duration_seconds=0,
-        )
-
         try:
-            self.db.save_input_record(record)
+            save_submission_event(self.db, event, content)
         except Exception as e:
             print(f"保存提交快照失败: {e}")
     

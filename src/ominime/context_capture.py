@@ -53,6 +53,26 @@ def choose_screenshot_scope(context: CapturedContext) -> ScreenshotScope:
     return ScreenshotScope("screen", None)
 
 
+def context_to_dict(context: CapturedContext) -> dict[str, Any]:
+    """Serialize captured context for event metadata and JSON storage."""
+    return {
+        "focused_frame": context.focused_frame.to_dict() if context.focused_frame else None,
+        "container_frame": context.container_frame.to_dict() if context.container_frame else None,
+        "window_frame": context.window_frame.to_dict() if context.window_frame else None,
+        "focused_role": context.focused_role,
+        "focused_subrole": context.focused_subrole,
+        "focused_title": context.focused_title,
+        "focused_description": context.focused_description,
+        "focused_identifier": context.focused_identifier,
+        "container_role": context.container_role,
+        "container_title": context.container_title,
+        "window_title": context.window_title,
+        "hierarchy": context.hierarchy,
+        "capture_status": context.capture_status,
+        "capture_error": context.capture_error,
+    }
+
+
 def frame_from_dict(value: dict | None) -> AXFrame | None:
     if not isinstance(value, dict):
         return None

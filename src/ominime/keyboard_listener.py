@@ -12,6 +12,7 @@
 import threading
 import time
 import re
+import uuid
 from typing import Callable, Optional
 from dataclasses import dataclass
 from datetime import datetime
@@ -48,7 +49,10 @@ from Foundation import NSObject, NSRunLoop, NSDefaultRunLoopMode, NSDistributedN
 import Quartz
 import objc
 
+from .config import config
+from .context_capture import capture_accessibility_context, context_to_dict
 from .input_snapshot import normalize_submission_text
+from .screenshot_capture import capture_context_screenshot
 
 
 @dataclass
@@ -442,22 +446,50 @@ class KeyboardListener:
         if not content:
             return
 
+        submission_id = uuid.uuid4().hex
+        context_data = {}
+        screenshot_data = {"status": "disabled", "scope": None, "path": None, "error": None}
+        if config.capture_context_on_enter:
+            context = capture_accessibility_context()
+            context_data = context_to_dict(context)
+            if (
+                config.capture_dialog_screenshot
+                and bundle_id not in config.screenshot_ignored_apps
+            ):
+                screenshot = capture_context_screenshot(
+                    context,
+                    submission_id=submission_id,
+                    timestamp=datetime.now(),
+                    base_dir=config.data_dir / "screenshots",
+                    max_width=config.screenshot_max_width,
+                )
+                screenshot_data = {
+                    "status": screenshot.status,
+                    "scope": screenshot.scope,
+                    "path": str(screenshot.path) if screenshot.path else None,
+                    "error": screenshot.error,
+                }
+
         if _DEBUG:
             print(f"[DEBUG] Enter 提交快照: {len(content)} chars -> {app_name}")
 
+        modifiers = {
+            "shift": False,
+            "ctrl": False,
+            "alt": False,
+            "cmd": False,
+            "submit_snapshot": True,
+            "submission_id": submission_id,
+            "context": context_data,
+            "screenshot": screenshot_data,
+        }
         key_event = KeyEvent(
             timestamp=datetime.now(),
             keycode=ENTER_KEYCODE,
             character=content,
             app_name=app_name,
             app_bundle_id=bundle_id,
-            modifiers={
-                "shift": False,
-                "ctrl": False,
-                "alt": False,
-                "cmd": False,
-                "submit_snapshot": True,
-            },
+            modifiers=modifiers,
             is_ime_input=True,
         )
         if self.callback:

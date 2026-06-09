@@ -104,6 +104,19 @@ class AppConfig:
     
     # 最小记录长度 (少于这个字符数的输入不单独记录)
     min_record_length: int = 1
+
+    # Enter 提交上下文捕获
+    capture_context_on_enter: bool = True
+    capture_dialog_screenshot: bool = True
+    multimodal_context_analysis: bool = True
+    multimodal_backend: str = "qwen-vl-local"
+    qwen_vl_model: str = "Qwen/Qwen2.5-VL-7B-Instruct"
+    qwen_vl_device: str = "auto"
+    qwen_vl_max_new_tokens: int = 768
+    qwen_vl_analysis_timeout_seconds: int = 20
+    screenshot_max_width: int = 1600
+    screenshot_retention_days: int = 30
+    screenshot_ignored_apps: List[str] = field(default_factory=list)
     
     def __post_init__(self):
         """初始化后创建必要的目录"""
@@ -132,6 +145,17 @@ class AppConfig:
             "ignored_apps": self.ignored_apps,
             "session_timeout": self.session_timeout,
             "min_record_length": self.min_record_length,
+            "capture_context_on_enter": self.capture_context_on_enter,
+            "capture_dialog_screenshot": self.capture_dialog_screenshot,
+            "multimodal_context_analysis": self.multimodal_context_analysis,
+            "multimodal_backend": self.multimodal_backend,
+            "qwen_vl_model": self.qwen_vl_model,
+            "qwen_vl_device": self.qwen_vl_device,
+            "qwen_vl_max_new_tokens": self.qwen_vl_max_new_tokens,
+            "qwen_vl_analysis_timeout_seconds": self.qwen_vl_analysis_timeout_seconds,
+            "screenshot_max_width": self.screenshot_max_width,
+            "screenshot_retention_days": self.screenshot_retention_days,
+            "screenshot_ignored_apps": self.screenshot_ignored_apps,
         }
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump(config_data, f, ensure_ascii=False, indent=2)
@@ -175,6 +199,17 @@ class AppConfig:
                 config.ignored_apps = data.get("ignored_apps", config.ignored_apps)
                 config.session_timeout = data.get("session_timeout", config.session_timeout)
                 config.min_record_length = data.get("min_record_length", config.min_record_length)
+                config.capture_context_on_enter = data.get("capture_context_on_enter", config.capture_context_on_enter)
+                config.capture_dialog_screenshot = data.get("capture_dialog_screenshot", config.capture_dialog_screenshot)
+                config.multimodal_context_analysis = data.get("multimodal_context_analysis", config.multimodal_context_analysis)
+                config.multimodal_backend = data.get("multimodal_backend", config.multimodal_backend)
+                config.qwen_vl_model = data.get("qwen_vl_model", config.qwen_vl_model)
+                config.qwen_vl_device = data.get("qwen_vl_device", config.qwen_vl_device)
+                config.qwen_vl_max_new_tokens = data.get("qwen_vl_max_new_tokens", config.qwen_vl_max_new_tokens)
+                config.qwen_vl_analysis_timeout_seconds = data.get("qwen_vl_analysis_timeout_seconds", config.qwen_vl_analysis_timeout_seconds)
+                config.screenshot_max_width = data.get("screenshot_max_width", config.screenshot_max_width)
+                config.screenshot_retention_days = data.get("screenshot_retention_days", config.screenshot_retention_days)
+                config.screenshot_ignored_apps = data.get("screenshot_ignored_apps", config.screenshot_ignored_apps)
         
         # 如果提供了 API Key，自动启用 AI 功能
         if config.openai_api_key and not config.ai_enabled:
@@ -185,4 +220,3 @@ class AppConfig:
 
 # 全局配置实例
 config = AppConfig.load()
-
