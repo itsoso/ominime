@@ -14,12 +14,16 @@ NC='\033[0m' # No Color
 # 获取脚本所在目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+source "${PROJECT_ROOT}/scripts/native_python.sh"
 
 # 配置
 SERVICE_NAME="com.ominime.app"
 PLIST_PATH="$HOME/Library/LaunchAgents/${SERVICE_NAME}.plist"
 LOG_DIR="$HOME/.ominime/logs"
 PYTHON_PATH="${PROJECT_ROOT}/venv/bin/python"
+OMINIME_TIMEZONE="${OMINIME_TIMEZONE:-America/New_York}"
+OMINIME_DAY_TIMEZONE="${OMINIME_DAY_TIMEZONE:-Asia/Shanghai}"
+OMINIME_STORAGE_TIMEZONE="${OMINIME_STORAGE_TIMEZONE:-$OMINIME_TIMEZONE}"
 
 echo -e "${CYAN}"
 echo "╔══════════════════════════════════════════════════════════╗"
@@ -35,6 +39,8 @@ if [ ! -f "$PYTHON_PATH" ]; then
     echo "请先运行: cd ${PROJECT_ROOT} && python -m venv venv && source venv/bin/activate && pip install -e ."
     exit 1
 fi
+
+ominime_require_native_python "$PYTHON_PATH"
 
 # 创建日志目录
 mkdir -p "$LOG_DIR"
@@ -70,9 +76,15 @@ cat > "$PLIST_PATH" << EOF
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>PYTHONPATH</key>
         <string>${PROJECT_ROOT}/src</string>
+        <key>TZ</key>
+        <string>${OMINIME_TIMEZONE}</string>
+        <key>OMINIME_DAY_TIMEZONE</key>
+        <string>${OMINIME_DAY_TIMEZONE}</string>
+        <key>OMINIME_STORAGE_TIMEZONE</key>
+        <string>${OMINIME_STORAGE_TIMEZONE}</string>
     </dict>
     
     <key>RunAtLoad</key>

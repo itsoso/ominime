@@ -17,6 +17,10 @@ def save_submission_event(db: Database, event: Any, content: str) -> int:
     """Save submitted text and linked context metadata."""
     submission_id = event.modifiers.get("submission_id") or f"sub-{uuid.uuid4().hex}"
     session_id = f"submit-{submission_id}"
+    redacted_content = bool(event.modifiers.get("redacted_content"))
+    char_count = int(event.modifiers.get("char_count_override") or len(content))
+    stored_content = "" if config.input_capture_mode == "count-only" or redacted_content else content
+    should_analyze = bool(config.multimodal_context_analysis and stored_content)
     input_id = db.save_input_record(
         InputRecord(
             id=None,
@@ -24,15 +28,14 @@ def save_submission_event(db: Database, event: Any, content: str) -> int:
             app_name=event.app_name,
             app_bundle_id=event.app_bundle_id,
             display_name=config.get_app_display_name(event.app_bundle_id, event.app_name),
-            content=content,
-            char_count=len(content),
+            content=stored_content,
+            char_count=char_count,
             session_id=session_id,
             duration_seconds=0,
         )
     )
 
     context_data = event.modifiers.get("context") or {}
-    screenshot = event.modifiers.get("screenshot") or {}
     db.save_submission_context(
         SubmissionContextRecord(
             id=None,
@@ -52,16 +55,14 @@ def save_submission_event(db: Database, event: Any, content: str) -> int:
             container_title=context_data.get("container_title"),
             container_frame_json=_json_or_none(context_data.get("container_frame")),
             ax_hierarchy_json=_json_or_none(context_data.get("hierarchy")),
-            screenshot_path=screenshot.get("path"),
-            screenshot_scope=screenshot.get("scope"),
-            analysis_status="pending" if config.multimodal_context_analysis else "disabled",
+            analysis_status="pending" if should_analyze else "disabled",
             capture_status=context_data.get("capture_status", "ok"),
-            capture_error=context_data.get("capture_error") or screenshot.get("error"),
+            capture_error=context_data.get("capture_error"),
         )
     )
 
-    if config.multimodal_context_analysis:
-        _start_analysis_thread(db, submission_id, content, event, context_data, screenshot)
+    if should_analyze:
+        _start_analysis_thread(db, submission_id, stored_content, event, context_data)
 
     return input_id
 
@@ -72,7 +73,6 @@ def _start_analysis_thread(
     content: str,
     event: Any,
     context_data: dict,
-    screenshot: dict,
 ):
     def run():
         backend = get_multimodal_backend()
@@ -102,12 +102,11 @@ def _start_analysis_thread(
                 "frame": context_data.get("container_frame"),
             },
             "ax_hierarchy": context_data.get("hierarchy", []),
-            "screenshot_scope": screenshot.get("scope"),
         }
         response = backend.analyze_context(
             MultimodalAnalysisRequest(
                 submitted_text=content,
-                screenshot_path=screenshot.get("path"),
+                screenshot_path=None,
                 metadata=metadata,
             )
         )

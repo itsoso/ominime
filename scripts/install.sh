@@ -6,6 +6,8 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
+source "${SCRIPT_DIR}/native_python.sh"
+
 cd "$PROJECT_DIR"
 
 echo "🚀 OmniMe 安装脚本"
@@ -13,24 +15,22 @@ echo "=================="
 echo ""
 
 # 检查 Python 版本
-PYTHON_VERSION=$(python3 --version 2>&1 | cut -d' ' -f2 | cut -d'.' -f1,2)
 REQUIRED_VERSION="3.10"
 
 echo "📌 检查 Python 版本..."
-if [ "$(printf '%s\n' "$REQUIRED_VERSION" "$PYTHON_VERSION" | sort -V | head -n1)" != "$REQUIRED_VERSION" ]; then
-    echo "❌ 需要 Python $REQUIRED_VERSION 或更高版本"
-    echo "   当前版本: $PYTHON_VERSION"
-    exit 1
-fi
-echo "✅ Python $PYTHON_VERSION"
+PYTHON_BIN="$(ominime_select_python "$REQUIRED_VERSION")"
+PYTHON_VERSION="$(ominime_python_version "$PYTHON_BIN")"
+PYTHON_ARCH="$(ominime_python_arch "$PYTHON_BIN")"
+echo "✅ Python $PYTHON_VERSION ($PYTHON_ARCH): $PYTHON_BIN"
 echo ""
 
 # 创建虚拟环境
 echo "📌 创建虚拟环境..."
 if [ ! -d "venv" ]; then
-    python3 -m venv venv
+    "$PYTHON_BIN" -m venv venv
     echo "✅ 虚拟环境已创建"
 else
+    ominime_require_native_python "$PROJECT_DIR/venv/bin/python"
     echo "✅ 虚拟环境已存在"
 fi
 echo ""
@@ -40,14 +40,14 @@ source venv/bin/activate
 
 # 安装依赖
 echo "📌 安装依赖..."
-pip install --upgrade pip -q
-pip install -r requirements.txt -q
+python -m pip install --upgrade pip -q
+python -m pip install -r requirements.txt -q
 echo "✅ 依赖安装完成"
 echo ""
 
 # 安装项目
 echo "📌 安装 OmniMe..."
-pip install -e . -q
+python -m pip install -e . -q
 echo "✅ OmniMe 安装完成"
 echo ""
 
@@ -69,4 +69,3 @@ echo ""
 echo "首次运行需要授予辅助功能权限："
 echo "  系统偏好设置 → 隐私与安全性 → 辅助功能"
 echo ""
-

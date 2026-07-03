@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 
 from .database import get_database, AppDailyStats, DailySummary, InputRecord
 from .config import config
+from .time_utils import business_today
 
 
 @dataclass
@@ -105,7 +106,7 @@ class Analyzer:
             DailyReport 对象
         """
         if target_date is None:
-            target_date = date.today()
+            target_date = business_today()
         
         # 获取应用统计
         app_stats = self.db.get_daily_stats(target_date)
@@ -778,7 +779,7 @@ class Analyzer:
             ThemeAnalysis 对象
         """
         if target_date is None:
-            target_date = date.today()
+            target_date = business_today()
         
         backend = self._get_llm_backend()
         if not backend:
@@ -957,4 +958,3 @@ if __name__ == "__main__":
     
     # 打印格式化报告
     print(analyzer.format_report(report))
-

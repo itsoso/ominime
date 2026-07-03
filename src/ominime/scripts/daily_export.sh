@@ -7,6 +7,7 @@ set -e
 # 获取脚本所在目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+source "${PROJECT_ROOT}/scripts/native_python.sh"
 
 # 配置
 PYTHON_PATH="${PROJECT_ROOT}/venv/bin/python"
@@ -34,6 +35,11 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] 开始每日导出..." >> "$LOG_FILE"
 # 检查 Python 虚拟环境
 if [ ! -f "$PYTHON_PATH" ]; then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] ❌ 未找到 Python: $PYTHON_PATH" >> "$LOG_FILE"
+    exit 1
+fi
+
+if ! ominime_require_native_python "$PYTHON_PATH" >> "$LOG_FILE" 2>&1; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ❌ Python 不是 Apple silicon 原生运行时: $PYTHON_PATH" >> "$LOG_FILE"
     exit 1
 fi
 

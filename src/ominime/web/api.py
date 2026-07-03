@@ -19,6 +19,8 @@ from ..database import get_database, InputRecord
 from ..analyzer import get_analyzer
 from ..exporter import export_daily_to_obsidian
 from ..config import config
+from ..runtime_state import get_runtime_state
+from ..time_utils import business_today
 
 
 # 创建 FastAPI 应用
@@ -112,7 +114,11 @@ class RecordItem(BaseModel):
 class StatusResponse(BaseModel):
     status: str
     is_recording: bool
+    recording_status: str
+    input_capture_mode: str
+    today_date: str
     today_chars: int
+    last_recorded_at: Optional[str] = None
     db_path: str
     data_dir: str
 
@@ -145,21 +151,67 @@ def _parse_json_field(value):
         return value
 
 
+def _build_health_payload() -> dict:
+    db = get_database()
+    today = business_today()
+    yesterday = today - timedelta(days=1)
+    latest = db.get_latest_input_record()
+    yesterday_stats = db.get_daily_stats(yesterday)
+    runtime = get_runtime_state()
+
+    return {
+        "status": "running",
+        "is_recording": runtime.is_recording,
+        "recording_status": runtime.recording_status,
+        "recording_status_updated_at": (
+            runtime.status_updated_at.isoformat()
+            if runtime.status_updated_at else None
+        ),
+        "listener_started_at": (
+            runtime.listener_started_at.isoformat()
+            if runtime.listener_started_at else None
+        ),
+        "last_runtime_error": runtime.last_error,
+        "process_id": os.getpid(),
+        "today_date": today.isoformat(),
+        "today_chars": db.get_total_chars_today(),
+        "yesterday_date": yesterday.isoformat(),
+        "yesterday_chars": sum(s.total_chars for s in yesterday_stats),
+        "last_recorded_at": latest.timestamp.isoformat() if latest else None,
+        "last_recorded_app": latest.display_name if latest else None,
+        "last_recorded_chars": latest.char_count if latest else None,
+        "input_capture_mode": getattr(config, "input_capture_mode", "enter-text"),
+        "capture_context_on_enter": config.capture_context_on_enter,
+        "multimodal_context_analysis": config.multimodal_context_analysis,
+        "db_path": str(config.db_path),
+        "data_dir": str(config.data_dir),
+    }
+
+
 # ===== API 路由 =====
 
 @app.get("/api/status", response_model=StatusResponse)
 async def get_status():
     """获取系统状态"""
-    db = get_database()
-    today_chars = db.get_total_chars_today()
+    health = _build_health_payload()
     
     return StatusResponse(
-        status="running",
-        is_recording=False,  # Web 模式下默认不显示录制状态
-        today_chars=today_chars,
-        db_path=str(config.db_path),
-        data_dir=str(config.data_dir),
+        status=health["status"],
+        is_recording=health["is_recording"],
+        recording_status=health["recording_status"],
+        input_capture_mode=health["input_capture_mode"],
+        today_date=health["today_date"],
+        today_chars=health["today_chars"],
+        last_recorded_at=health["last_recorded_at"],
+        db_path=health["db_path"],
+        data_dir=health["data_dir"],
     )
+
+
+@app.get("/api/health")
+async def get_health():
+    """获取运行状态和最近写入诊断信息"""
+    return _build_health_payload()
 
 
 @app.get("/api/overview")
@@ -168,7 +220,7 @@ async def get_overview():
     db = get_database()
     
     # 今日统计
-    today = date.today()
+    today = business_today()
     today_stats = db.get_daily_stats(today)
     today_chars = sum(s.total_chars for s in today_stats)
     
@@ -285,7 +337,7 @@ async def get_daily_report(target_date: str):
 @app.get("/api/report")
 async def get_today_report():
     """获取今日报告"""
-    return await get_daily_report(date.today().isoformat())
+    return await get_daily_report(business_today().isoformat())
 
 
 @app.get("/api/analysis/theme/{target_date}", response_model=Optional[ThemeAnalysisResponse])
@@ -323,7 +375,7 @@ async def get_theme_analysis(target_date: str):
 @app.get("/api/analysis/theme")
 async def get_today_theme_analysis():
     """获取今日主题深度分析"""
-    return await get_theme_analysis(date.today().isoformat())
+    return await get_theme_analysis(business_today().isoformat())
 
 
 @app.get("/api/report/full/{target_date}", response_model=FullReportResponse)
@@ -416,7 +468,7 @@ async def get_full_report(target_date: str):
 @app.get("/api/report/full")
 async def get_today_full_report():
     """获取今日完整报告"""
-    return await get_full_report(date.today().isoformat())
+    return await get_full_report(business_today().isoformat())
 
 
 @app.get("/api/stats/hourly")
@@ -428,7 +480,7 @@ async def get_hourly_stats(target_date: Optional[str] = None):
         except ValueError:
             raise HTTPException(status_code=400, detail="日期格式错误")
     else:
-        report_date = date.today()
+        report_date = business_today()
     
     db = get_database()
     records = db.get_records_by_date(report_date)
@@ -477,7 +529,7 @@ async def get_app_stats(
         except ValueError:
             raise HTTPException(status_code=400, detail="日期格式错误")
     else:
-        end_date = date.today()
+        end_date = business_today()
     
     # 汇总多天数据
     all_stats = {}
@@ -524,7 +576,7 @@ async def get_records(
         except ValueError:
             raise HTTPException(status_code=400, detail="日期格式错误")
     else:
-        report_date = date.today()
+        report_date = business_today()
     
     records = db.get_records_by_date(report_date)
     
@@ -557,7 +609,7 @@ async def get_submissions(
     target_date: Optional[str] = None,
     limit: int = Query(default=100, ge=1, le=500),
 ):
-    """获取 Enter 提交上下文列表，包含截图和 Qwen 分析结果"""
+    """获取 Enter 提交上下文列表，包含文字与 Qwen 分析结果"""
     db = get_database()
     if target_date:
         try:
@@ -584,9 +636,6 @@ async def get_submissions(
                 "focused_role": row["focused_role"],
                 "container_role": row["container_role"],
                 "container_title": row["container_title"],
-                "screenshot_path": row["screenshot_path"],
-                "screenshot_url": f"/api/submissions/{row['submission_id']}/screenshot" if row["screenshot_path"] else None,
-                "screenshot_scope": row["screenshot_scope"],
                 "capture_status": row["capture_status"],
                 "capture_error": row["capture_error"],
                 "analysis_status": row["analysis_status"],
@@ -602,23 +651,6 @@ async def get_submissions(
     }
 
 
-@app.get("/api/submissions/{submission_id}/screenshot")
-async def get_submission_screenshot(submission_id: str):
-    """读取本地保存的提交上下文截图"""
-    db = get_database()
-    context = db.get_submission_context(submission_id)
-    if not context or not context.screenshot_path:
-        raise HTTPException(status_code=404, detail="截图不存在")
-
-    screenshot_path = Path(context.screenshot_path).expanduser().resolve()
-    screenshots_root = (config.data_dir / "screenshots").resolve()
-    if screenshots_root not in screenshot_path.parents:
-        raise HTTPException(status_code=403, detail="非法截图路径")
-    if not screenshot_path.exists():
-        raise HTTPException(status_code=404, detail="截图文件不存在")
-    return FileResponse(screenshot_path)
-
-
 @app.get("/api/apps")
 async def get_app_list():
     """获取所有应用列表"""
@@ -627,7 +659,7 @@ async def get_app_list():
     # 获取最近30天的应用
     apps = set()
     for i in range(30):
-        d = date.today() - timedelta(days=i)
+        d = business_today() - timedelta(days=i)
         stats = db.get_daily_stats(d)
         for s in stats:
             apps.add((s.app_name, s.display_name))
@@ -674,7 +706,7 @@ async def export_to_obsidian(
 @app.post("/api/export/obsidian")
 async def export_today_to_obsidian(include_raw: bool = True, include_ai: bool = True):
     """导出今日日报到 Obsidian"""
-    return await export_to_obsidian(date.today().isoformat(), include_raw, include_ai)
+    return await export_to_obsidian(business_today().isoformat(), include_raw, include_ai)
 
 
 @app.get("/api/content/by-app")
@@ -688,7 +720,7 @@ async def get_content_by_app(target_date: Optional[str] = None):
         except ValueError:
             raise HTTPException(status_code=400, detail="日期格式错误")
     else:
-        report_date = date.today()
+        report_date = business_today()
     
     records = db.get_records_by_date(report_date)
     

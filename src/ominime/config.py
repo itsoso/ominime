@@ -17,8 +17,8 @@ except ImportError:
 
 # 加载 .env 文件（如果存在）
 if _dotenv_available:
-    # 从项目根目录加载 .env 文件
-    project_root = Path(__file__).parent.parent.parent.parent
+    # 从项目根目录加载 .env 文件 (config.py 位于 src/ominime/ 下，3 层 parent 到仓库根)
+    project_root = Path(__file__).parent.parent.parent
     env_path = project_root / ".env"
     if env_path.exists():
         load_dotenv(env_path)
@@ -105,18 +105,35 @@ class AppConfig:
     # 最小记录长度 (少于这个字符数的输入不单独记录)
     min_record_length: int = 1
 
-    # Enter 提交上下文捕获
+    # 输入保存模式:
+    # - enter-text: 保存 Enter 提交的完整文本
+    # - count-only: 只保存字符数，不保存原文
+    input_capture_mode: str = "enter-text"
+
+    # 业务日时区：所有“今日/昨日/日报”统计按这个时区切天。
+    day_timezone: str = field(default_factory=lambda: os.getenv("OMINIME_DAY_TIMEZONE", "Asia/Shanghai"))
+
+    # 数据库存储时区：历史记录是无时区时间戳，按该时区解释。
+    storage_timezone: str = field(
+        default_factory=lambda: os.getenv("OMINIME_STORAGE_TIMEZONE") or os.getenv("TZ") or "America/New_York"
+    )
+
+    # 是否在无法读取输入框文本时按物理按键数降级计数。
+    # 默认关闭：IME/候选词/不可访问输入框会造成严重虚高。
+    count_unreadable_submissions: bool = False
+
+    # AXValue 不可读时，是否使用 CGEvent 提供的 Unicode 文本作为真实文本兜底。
+    # 默认关闭：中文 IME 下该路径常拿到拼音预编辑串，而不是提交后的中文。
+    capture_key_event_text_fallback: bool = False
+
+    # Enter 提交上下文捕获（仅文字，不再截屏）
     capture_context_on_enter: bool = True
-    capture_dialog_screenshot: bool = True
-    multimodal_context_analysis: bool = True
+    multimodal_context_analysis: bool = False
     multimodal_backend: str = "qwen-vl-local"
     qwen_vl_model: str = "Qwen/Qwen2.5-VL-7B-Instruct"
     qwen_vl_device: str = "auto"
     qwen_vl_max_new_tokens: int = 768
     qwen_vl_analysis_timeout_seconds: int = 20
-    screenshot_max_width: int = 1600
-    screenshot_retention_days: int = 30
-    screenshot_ignored_apps: List[str] = field(default_factory=list)
     
     def __post_init__(self):
         """初始化后创建必要的目录"""
@@ -145,17 +162,18 @@ class AppConfig:
             "ignored_apps": self.ignored_apps,
             "session_timeout": self.session_timeout,
             "min_record_length": self.min_record_length,
+            "input_capture_mode": self.input_capture_mode,
+            "day_timezone": self.day_timezone,
+            "storage_timezone": self.storage_timezone,
+            "count_unreadable_submissions": self.count_unreadable_submissions,
+            "capture_key_event_text_fallback": self.capture_key_event_text_fallback,
             "capture_context_on_enter": self.capture_context_on_enter,
-            "capture_dialog_screenshot": self.capture_dialog_screenshot,
             "multimodal_context_analysis": self.multimodal_context_analysis,
             "multimodal_backend": self.multimodal_backend,
             "qwen_vl_model": self.qwen_vl_model,
             "qwen_vl_device": self.qwen_vl_device,
             "qwen_vl_max_new_tokens": self.qwen_vl_max_new_tokens,
             "qwen_vl_analysis_timeout_seconds": self.qwen_vl_analysis_timeout_seconds,
-            "screenshot_max_width": self.screenshot_max_width,
-            "screenshot_retention_days": self.screenshot_retention_days,
-            "screenshot_ignored_apps": self.screenshot_ignored_apps,
         }
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump(config_data, f, ensure_ascii=False, indent=2)
@@ -169,7 +187,7 @@ class AppConfig:
         # 从 .env 文件读取配置（如果可用）
         if _dotenv_available:
             # 重新加载环境变量（确保最新）
-            project_root = Path(__file__).parent.parent.parent.parent
+            project_root = Path(__file__).parent.parent.parent
             env_path = project_root / ".env"
             if env_path.exists():
                 load_dotenv(env_path, override=True)
@@ -199,17 +217,24 @@ class AppConfig:
                 config.ignored_apps = data.get("ignored_apps", config.ignored_apps)
                 config.session_timeout = data.get("session_timeout", config.session_timeout)
                 config.min_record_length = data.get("min_record_length", config.min_record_length)
+                config.input_capture_mode = data.get("input_capture_mode", config.input_capture_mode)
+                config.day_timezone = data.get("day_timezone", config.day_timezone)
+                config.storage_timezone = data.get("storage_timezone", config.storage_timezone)
+                config.count_unreadable_submissions = data.get(
+                    "count_unreadable_submissions",
+                    config.count_unreadable_submissions,
+                )
+                config.capture_key_event_text_fallback = data.get(
+                    "capture_key_event_text_fallback",
+                    config.capture_key_event_text_fallback,
+                )
                 config.capture_context_on_enter = data.get("capture_context_on_enter", config.capture_context_on_enter)
-                config.capture_dialog_screenshot = data.get("capture_dialog_screenshot", config.capture_dialog_screenshot)
                 config.multimodal_context_analysis = data.get("multimodal_context_analysis", config.multimodal_context_analysis)
                 config.multimodal_backend = data.get("multimodal_backend", config.multimodal_backend)
                 config.qwen_vl_model = data.get("qwen_vl_model", config.qwen_vl_model)
                 config.qwen_vl_device = data.get("qwen_vl_device", config.qwen_vl_device)
                 config.qwen_vl_max_new_tokens = data.get("qwen_vl_max_new_tokens", config.qwen_vl_max_new_tokens)
                 config.qwen_vl_analysis_timeout_seconds = data.get("qwen_vl_analysis_timeout_seconds", config.qwen_vl_analysis_timeout_seconds)
-                config.screenshot_max_width = data.get("screenshot_max_width", config.screenshot_max_width)
-                config.screenshot_retention_days = data.get("screenshot_retention_days", config.screenshot_retention_days)
-                config.screenshot_ignored_apps = data.get("screenshot_ignored_apps", config.screenshot_ignored_apps)
         
         # 如果提供了 API Key，自动启用 AI 功能
         if config.openai_api_key and not config.ai_enabled:

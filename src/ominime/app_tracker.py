@@ -13,6 +13,7 @@ from AppKit import NSWorkspace, NSWorkspaceDidActivateApplicationNotification
 from Foundation import NSNotificationCenter
 
 from .config import config
+from .time_utils import storage_now
 
 
 @dataclass
@@ -40,11 +41,11 @@ class InputSession:
             self.buffer += char
             self.char_count += len(char)
         
-        self.last_activity = datetime.now()
+        self.last_activity = storage_now()
     
     def is_expired(self, timeout_seconds: int) -> bool:
         """检查会话是否已过期"""
-        elapsed = (datetime.now() - self.last_activity).total_seconds()
+        elapsed = (storage_now() - self.last_activity).total_seconds()
         return elapsed > timeout_seconds
 
 
@@ -128,8 +129,8 @@ class AppTracker:
             session_id=str(uuid.uuid4()),
             app_name=app_name,
             app_bundle_id=bundle_id,
-            start_time=datetime.now(),
-            last_activity=datetime.now(),
+            start_time=storage_now(),
+            last_activity=storage_now(),
         )
         self._current_session = session
         self._sessions[session.session_id] = session
@@ -265,4 +266,3 @@ if __name__ == "__main__":
     
     print("当前会话:", tracker._current_session)
     print("应用统计:", tracker.get_app_stats())
-

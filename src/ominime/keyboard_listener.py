@@ -51,8 +51,9 @@ import objc
 
 from .config import config
 from .context_capture import capture_accessibility_context, context_to_dict
-from .input_snapshot import normalize_submission_text
-from .screenshot_capture import capture_context_screenshot
+from .input_snapshot import format_submission_terminal_notice, normalize_submission_text
+from .runtime_state import set_recording_status
+from .time_utils import storage_now
 
 
 @dataclass
@@ -111,6 +112,15 @@ _pinyin_buffer_lock = threading.Lock()
 
 # 只在 Enter 提交时读取完整输入框内容，避免记录拼音中间态。
 ENTER_KEYCODE = 36
+UNREADABLE_SUBMISSION_PLACEHOLDER = "[unreadable input]"
+MAX_FALLBACK_BUFFER_CHARS = 4000
+MAX_TEXT_FALLBACK_BUFFER_CHARS = 2000
+MAX_KEY_EVENT_TEXT_CHARS = 64
+
+
+def _clean_key_event_text(text: str) -> str:
+    """Keep only printable text from a keyboard event."""
+    return "".join(ch for ch in text if ch.isprintable())
 
 
 def set_last_input_app(name: str, bundle_id: str):
@@ -342,7 +352,7 @@ class RimeLogWatcher:
                         if text and self.callback:
                             if _DEBUG:
                                 print(f"[DEBUG] Rime 输入: '{text}' -> {app_name} ({bundle_id})")
-                            self.callback(text, datetime.now(), app_name, bundle_id)
+                            self.callback(text, storage_now(), app_name, bundle_id)
                 
                 time.sleep(0.3)
             except Exception as e:
@@ -390,6 +400,11 @@ class KeyboardListener:
         self._tap_lock = threading.Lock()
         self._retry_count = 0
         self._wake_observer = None
+        self._last_empty_submission_log = 0.0
+        self._fallback_buffers: dict[tuple[str, str], list[str]] = {}
+        self._fallback_buffer_updated_at: dict[tuple[str, str], float] = {}
+        self._text_fallback_buffers: dict[tuple[str, str], list[str]] = {}
+        self._text_fallback_buffer_updated_at: dict[tuple[str, str], float] = {}
     
     def _on_rime_input(self, text: str, timestamp: datetime, app_name: str, bundle_id: str):
         """Rime log events are ignored in submission-snapshot mode."""
@@ -439,52 +454,218 @@ class KeyboardListener:
             return get_app_by_pid(target_pid)
         return get_frontmost_app()
 
-    def _emit_submission_snapshot(self, event):
-        """Emit the full focused input value when Enter is pressed."""
-        app_name, bundle_id = self._get_event_target_app(event)
-        content = normalize_submission_text(self._get_focused_text_snapshot())
-        if not content:
+    def _fallback_buffer_key(self, app_name: str, bundle_id: str) -> tuple[str, str]:
+        return (app_name or "Unknown", bundle_id or "unknown")
+
+    def _is_fallback_buffer_expired(self, updated_at: float | None) -> bool:
+        if updated_at is None:
+            return False
+        return time.monotonic() - updated_at > config.session_timeout
+
+    def _get_keyboard_event_text(self, event) -> str:
+        getter = getattr(Quartz, "CGEventKeyboardGetUnicodeString", None)
+        if getter is None:
+            return ""
+        try:
+            actual_length, text = getter(event, MAX_KEY_EVENT_TEXT_CHARS, None, None)
+        except Exception as e:
+            if _DEBUG:
+                print(f"[DEBUG] keyboard unicode read failed: {e}")
+            return ""
+
+        if not text:
+            return ""
+        return _clean_key_event_text(text[:actual_length])
+
+    def _record_text_fallback_key(self, app_name: str, bundle_id: str, keycode: int, modifiers: dict, event):
+        """Track real Unicode text from key events when AXValue is unavailable."""
+        if not getattr(config, "capture_key_event_text_fallback", False):
             return
+        if config.is_app_ignored(bundle_id):
+            return
+        if modifiers.get("cmd") or modifiers.get("ctrl") or modifiers.get("alt"):
+            return
+
+        key = self._fallback_buffer_key(app_name, bundle_id)
+        if self._is_fallback_buffer_expired(self._text_fallback_buffer_updated_at.get(key)):
+            self._text_fallback_buffers.pop(key, None)
+
+        if keycode == 51:  # Backspace
+            buffer = self._text_fallback_buffers.get(key)
+            if buffer:
+                buffer.pop()
+                self._text_fallback_buffer_updated_at[key] = time.monotonic()
+            return
+
+        text = self._get_keyboard_event_text(event)
+        if not text:
+            return
+
+        buffer = self._text_fallback_buffers.setdefault(key, [])
+        buffer.append(text)
+        joined_len = sum(len(part) for part in buffer)
+        while buffer and joined_len > MAX_TEXT_FALLBACK_BUFFER_CHARS:
+            joined_len -= len(buffer.pop(0))
+        self._text_fallback_buffer_updated_at[key] = time.monotonic()
+
+    def _pop_text_fallback_content(self, app_name: str, bundle_id: str) -> str:
+        key = self._fallback_buffer_key(app_name, bundle_id)
+        updated_at = self._text_fallback_buffer_updated_at.pop(key, None)
+        buffer = self._text_fallback_buffers.pop(key, [])
+        if self._is_fallback_buffer_expired(updated_at):
+            return ""
+        return "".join(buffer)
+
+    def _clear_text_fallback_buffer(self, app_name: str, bundle_id: str):
+        key = self._fallback_buffer_key(app_name, bundle_id)
+        self._text_fallback_buffers.pop(key, None)
+        self._text_fallback_buffer_updated_at.pop(key, None)
+
+    def _record_fallback_key(self, app_name: str, bundle_id: str, keycode: int, modifiers: dict):
+        """Track typed key count for apps whose Accessibility value is unreadable."""
+        if not getattr(config, "count_unreadable_submissions", False):
+            return
+        if config.is_app_ignored(bundle_id):
+            return
+        if modifiers.get("cmd") or modifiers.get("ctrl") or modifiers.get("alt"):
+            return
+
+        key = self._fallback_buffer_key(app_name, bundle_id)
+        if self._is_fallback_buffer_expired(self._fallback_buffer_updated_at.get(key)):
+            self._fallback_buffers.pop(key, None)
+        buffer = self._fallback_buffers.setdefault(key, [])
+        if keycode == 51:  # Backspace
+            if buffer:
+                buffer.pop()
+                self._fallback_buffer_updated_at[key] = time.monotonic()
+            return
+        if keycode == 49:  # Space
+            char = " "
+        elif keycode in KEYCODE_TO_CHAR:
+            char = KEYCODE_TO_CHAR[keycode]
+        else:
+            return
+
+        buffer.append(char)
+        if len(buffer) > MAX_FALLBACK_BUFFER_CHARS:
+            del buffer[: len(buffer) - MAX_FALLBACK_BUFFER_CHARS]
+        self._fallback_buffer_updated_at[key] = time.monotonic()
+
+    def _pop_fallback_count(self, app_name: str, bundle_id: str) -> int:
+        key = self._fallback_buffer_key(app_name, bundle_id)
+        updated_at = self._fallback_buffer_updated_at.pop(key, None)
+        buffer = self._fallback_buffers.pop(key, [])
+        if self._is_fallback_buffer_expired(updated_at):
+            return 0
+        return len(buffer)
+
+    def _clear_fallback_buffer(self, app_name: str, bundle_id: str):
+        key = self._fallback_buffer_key(app_name, bundle_id)
+        self._fallback_buffers.pop(key, None)
+        self._fallback_buffer_updated_at.pop(key, None)
+
+    def _clear_submission_buffers(self, app_name: str, bundle_id: str):
+        self._clear_text_fallback_buffer(app_name, bundle_id)
+        self._clear_fallback_buffer(app_name, bundle_id)
+
+    def _event_modifiers(self, event) -> dict:
+        flags = CGEventGetFlags(event) or 0
+        return {
+            "shift": bool(flags & kCGEventFlagMaskShift),
+            "ctrl": bool(flags & kCGEventFlagMaskControl),
+            "alt": bool(flags & kCGEventFlagMaskAlternate),
+            "cmd": bool(flags & kCGEventFlagMaskCommand),
+        }
+
+    def _emit_submission_snapshot(
+        self,
+        event,
+        app_name: str | None = None,
+        bundle_id: str | None = None,
+        key_modifiers: dict | None = None,
+    ):
+        """Emit the full focused input value when Enter is pressed."""
+        if app_name is None or bundle_id is None:
+            app_name, bundle_id = self._get_event_target_app(event)
+        key_modifiers = key_modifiers or {
+            "shift": False,
+            "ctrl": False,
+            "alt": False,
+            "cmd": False,
+        }
+        content = normalize_submission_text(
+            self._get_focused_text_snapshot(),
+            app_name=app_name,
+            bundle_id=bundle_id,
+        )
+        char_count_override = None
+        redacted_content = False
+        fallback_source = None
+        if not content:
+            content = normalize_submission_text(
+                self._pop_text_fallback_content(app_name, bundle_id),
+                app_name=app_name,
+                bundle_id=bundle_id,
+            )
+            if content:
+                fallback_source = "key_event_text"
+            if not content:
+                fallback_count = (
+                    self._pop_fallback_count(app_name, bundle_id)
+                    if getattr(config, "count_unreadable_submissions", False)
+                    else 0
+                )
+                if fallback_count > 0:
+                    content = UNREADABLE_SUBMISSION_PLACEHOLDER
+                    char_count_override = fallback_count
+                    redacted_content = True
+                    fallback_source = "count_unreadable"
+                else:
+                    self._clear_submission_buffers(app_name, bundle_id)
+                    now = time.monotonic()
+                    if now - self._last_empty_submission_log >= 5.0:
+                        print(f"⚠️  Enter 提交未保存：无法读取输入框文本 -> {app_name} ({bundle_id})")
+                        self._last_empty_submission_log = now
+                    return
+        else:
+            self._clear_submission_buffers(app_name, bundle_id)
+
+        if redacted_content:
+            now = time.monotonic()
+            if now - self._last_empty_submission_log >= 5.0:
+                print(f"⚠️  Enter 提交使用计数降级：{char_count_override} chars -> {app_name} ({bundle_id})")
+                self._last_empty_submission_log = now
+        elif fallback_source == "key_event_text":
+            now = time.monotonic()
+            if now - self._last_empty_submission_log >= 5.0:
+                print(f"⚠️  Enter 提交使用键盘文本降级：{len(content)} chars -> {app_name} ({bundle_id})")
+                self._last_empty_submission_log = now
 
         submission_id = uuid.uuid4().hex
         context_data = {}
-        screenshot_data = {"status": "disabled", "scope": None, "path": None, "error": None}
         if config.capture_context_on_enter:
             context = capture_accessibility_context()
             context_data = context_to_dict(context)
-            if (
-                config.capture_dialog_screenshot
-                and bundle_id not in config.screenshot_ignored_apps
-            ):
-                screenshot = capture_context_screenshot(
-                    context,
-                    submission_id=submission_id,
-                    timestamp=datetime.now(),
-                    base_dir=config.data_dir / "screenshots",
-                    max_width=config.screenshot_max_width,
-                )
-                screenshot_data = {
-                    "status": screenshot.status,
-                    "scope": screenshot.scope,
-                    "path": str(screenshot.path) if screenshot.path else None,
-                    "error": screenshot.error,
-                }
 
         if _DEBUG:
             print(f"[DEBUG] Enter 提交快照: {len(content)} chars -> {app_name}")
 
         modifiers = {
-            "shift": False,
-            "ctrl": False,
-            "alt": False,
-            "cmd": False,
+            "shift": key_modifiers.get("shift", False),
+            "ctrl": key_modifiers.get("ctrl", False),
+            "alt": key_modifiers.get("alt", False),
+            "cmd": key_modifiers.get("cmd", False),
             "submit_snapshot": True,
             "submission_id": submission_id,
             "context": context_data,
-            "screenshot": screenshot_data,
+            "redacted_content": redacted_content,
         }
+        if fallback_source is not None:
+            modifiers["fallback_source"] = fallback_source
+        if char_count_override is not None:
+            modifiers["char_count_override"] = char_count_override
         key_event = KeyEvent(
-            timestamp=datetime.now(),
+            timestamp=storage_now(),
             keycode=ENTER_KEYCODE,
             character=content,
             app_name=app_name,
@@ -497,13 +678,31 @@ class KeyboardListener:
     
     def _event_callback(self, proxy, event_type, event, refcon):
         """CGEventTap 回调"""
-        if event_type == kCGEventKeyDown:
+        if event_type in (kCGEventKeyDown, kCGEventKeyUp, kCGEventFlagsChanged):
             try:
+                app_name, bundle_id = self._get_event_target_app(event)
+                set_last_input_app(app_name, bundle_id)
                 keycode = CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode)
-                if keycode == ENTER_KEYCODE:
-                    self._emit_submission_snapshot(event)
-            except Exception:
-                pass
+                modifiers = self._event_modifiers(event)
+                if event_type == kCGEventKeyDown and keycode != ENTER_KEYCODE:
+                    self._record_text_fallback_key(app_name, bundle_id, keycode, modifiers, event)
+                    self._record_fallback_key(app_name, bundle_id, keycode, modifiers)
+                if (
+                    keycode == ENTER_KEYCODE
+                    and event_type in (kCGEventKeyDown, kCGEventKeyUp)
+                    and not modifiers.get("cmd")
+                    and not modifiers.get("ctrl")
+                    and not modifiers.get("alt")
+                ):
+                    self._emit_submission_snapshot(
+                        event,
+                        app_name=app_name,
+                        bundle_id=bundle_id,
+                        key_modifiers=modifiers,
+                    )
+            except Exception as e:
+                if _DEBUG:
+                    print(f"[DEBUG] keyboard event callback failed: {e}")
         
         return event
     
@@ -518,7 +717,11 @@ class KeyboardListener:
                     pass
                 self._tap = None
 
-            event_mask = (1 << kCGEventKeyDown)
+            event_mask = (
+                (1 << kCGEventKeyDown)
+                | (1 << kCGEventKeyUp)
+                | (1 << kCGEventFlagsChanged)
+            )
 
             self._tap = CGEventTapCreate(
                 kCGSessionEventTap,
@@ -532,6 +735,7 @@ class KeyboardListener:
             if self._tap is None:
                 print("❌ 无法创建 CGEventTap")
                 print("请确保已授予辅助功能权限")
+                set_recording_status("error", error="unable_to_create_cgeventtap")
                 return False
 
             return True
@@ -575,6 +779,7 @@ class KeyboardListener:
         """重建 CGEventTap"""
         if self._retry_count >= self.MAX_RETRY_COUNT:
             print(f"❌ 已达到最大重试次数 ({self.MAX_RETRY_COUNT})，停止重试")
+            set_recording_status("error", error="cgeventtap_max_retries_reached")
             return
 
         self._retry_count += 1
@@ -597,9 +802,11 @@ class KeyboardListener:
                     CFRunLoopAddSource(self._run_loop, self._run_loop_source, Quartz.kCFRunLoopCommonModes)
                     CGEventTapEnable(self._tap, True)
                     print("✅ CGEventTap 重建成功")
+                    set_recording_status("recording")
                     self._retry_count = 0  # 重置重试计数
         else:
             print("❌ CGEventTap 重建失败")
+            set_recording_status("error", error="cgeventtap_rebuild_failed")
 
     def _on_system_wake(self, notification):
         """系统唤醒回调"""
@@ -654,6 +861,7 @@ class KeyboardListener:
 
         print("✅ 键盘监听已启动")
         print("📝 Enter 提交快照监听已启动")
+        set_recording_status("recording")
 
         # 使用带超时的循环代替 CFRunLoopRun()，
         # 避免 Rosetta 翻译下 CGEventTap 回调导致忙循环
@@ -713,6 +921,7 @@ class KeyboardListener:
             self._wake_observer = None
 
         print("⏹️ 监听已停止")
+        set_recording_status("paused")
     
     def is_running(self) -> bool:
         return self._running
@@ -752,7 +961,9 @@ if __name__ == "__main__":
             last_app[0] = event.app_name
         
         char = event.character
-        if char == '\n':
+        if event.modifiers.get("submit_snapshot"):
+            print(f"\033[32m{format_submission_terminal_notice(char)}\033[0m", flush=True)
+        elif char == '\n':
             print()
             print(f"[{event.app_name}] ", end="", flush=True)
         elif char == '\b':

@@ -18,6 +18,7 @@ from .keyboard_listener import check_accessibility_permission, request_accessibi
 from .database import get_database
 from .analyzer import get_analyzer
 from .config import config
+from .time_utils import business_today
 
 
 console = Console()
@@ -68,7 +69,11 @@ def cmd_monitor(args):
     
     import time
     from .keyboard_listener import KeyboardListener, KeyEvent
-    from .input_snapshot import normalize_submission_text, should_save_submission_snapshot
+    from .input_snapshot import (
+        format_submission_terminal_notice,
+        normalize_submission_text,
+        should_save_submission_snapshot,
+    )
     from .submission_processor import save_submission_event
     
     db = get_database()
@@ -87,7 +92,11 @@ def cmd_monitor(args):
         if config.is_app_ignored(event.app_bundle_id):
             return
 
-        content = normalize_submission_text(event.character)
+        content = normalize_submission_text(
+            event.character,
+            app_name=event.app_name,
+            bundle_id=event.app_bundle_id,
+        )
         if not content:
             return
 
@@ -109,7 +118,7 @@ def cmd_monitor(args):
             current_app[0] = event.app_name
             console.print(f"\n[cyan][{event.app_name}][/cyan] ", end="")
 
-        console.print(f"[green]{content}[/green]", end="")
+        console.print(f"[green]{format_submission_terminal_notice(content)}[/green]")
         char_count[0] += len(content)
 
         save_submission_event(db, event, content)
@@ -141,7 +150,7 @@ def cmd_report(args):
             console.print(f"[red]日期格式错误: {args.date}，请使用 YYYY-MM-DD 格式[/red]")
             return
     else:
-        target_date = date.today()
+        target_date = business_today()
     
     # 生成报告
     report = analyzer.generate_daily_report(target_date)
@@ -263,7 +272,7 @@ def cmd_export(args):
             console.print(f"[red]日期格式错误: {args.date}[/red]")
             return
     else:
-        target_date = date.today()
+        target_date = business_today()
     
     # 获取数据
     records = db.get_records_by_date(target_date)
@@ -325,7 +334,7 @@ def cmd_obsidian(args):
             console.print(f"[red]日期格式错误: {args.date}，请使用 YYYY-MM-DD 格式[/red]")
             return
     else:
-        target_date = date.today()
+        target_date = business_today()
     
     console.print(f"[bold green]📝 导出 {target_date} 的数据到 Obsidian...[/bold green]")
     

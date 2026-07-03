@@ -12,6 +12,11 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+source "${SCRIPT_DIR}/native_python.sh"
+
+OMINIME_TIMEZONE="${OMINIME_TIMEZONE:-America/New_York}"
+OMINIME_DAY_TIMEZONE="${OMINIME_DAY_TIMEZONE:-Asia/Shanghai}"
+OMINIME_STORAGE_TIMEZONE="${OMINIME_STORAGE_TIMEZONE:-$OMINIME_TIMEZONE}"
 
 # 颜色输出
 RED='\033[0;31m'
@@ -29,26 +34,21 @@ echo -e "${NC}"
 
 # 检查 Python 版本
 echo -e "${YELLOW}[1/5] 检查 Python 版本...${NC}"
-PYTHON_VERSION=$(python3 --version 2>&1 | cut -d' ' -f2 | cut -d'.' -f1,2)
 REQUIRED_VERSION="3.10"
-
-if [ "$(printf '%s\n' "$REQUIRED_VERSION" "$PYTHON_VERSION" | sort -V | head -n1)" = "$REQUIRED_VERSION" ]; then
-    echo -e "${GREEN}✓ Python $PYTHON_VERSION 已安装${NC}"
-else
-    echo -e "${RED}✗ 需要 Python 3.10 或更高版本${NC}"
-    echo "  当前版本: $PYTHON_VERSION"
-    echo "  请安装 Python 3.10+: https://www.python.org/downloads/"
-    exit 1
-fi
+PYTHON_BIN="$(ominime_select_python "$REQUIRED_VERSION")"
+PYTHON_VERSION="$(ominime_python_version "$PYTHON_BIN")"
+PYTHON_ARCH="$(ominime_python_arch "$PYTHON_BIN")"
+echo -e "${GREEN}✓ Python $PYTHON_VERSION ($PYTHON_ARCH): $PYTHON_BIN${NC}"
 
 # 创建虚拟环境
 echo -e "${YELLOW}[2/5] 设置虚拟环境...${NC}"
 cd "$PROJECT_DIR"
 
 if [ ! -d "venv" ]; then
-    python3 -m venv venv
+    "$PYTHON_BIN" -m venv venv
     echo -e "${GREEN}✓ 虚拟环境已创建${NC}"
 else
+    ominime_require_native_python "$PROJECT_DIR/venv/bin/python"
     echo -e "${GREEN}✓ 虚拟环境已存在${NC}"
 fi
 
@@ -66,8 +66,8 @@ fi
 
 # 尝试安装，如果失败则自动切换镜像源
 install_deps() {
-    pip install --upgrade pip $PIP_MIRROR -q 2>/dev/null && \
-    pip install -e . $PIP_MIRROR -q 2>/dev/null
+    python -m pip install --upgrade pip $PIP_MIRROR -q 2>/dev/null && \
+    python -m pip install -e . $PIP_MIRROR -q 2>/dev/null
 }
 
 if ! install_deps; then
@@ -123,6 +123,16 @@ cat > "$PLIST_PATH" << EOF
     
     <key>KeepAlive</key>
     <false/>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>TZ</key>
+        <string>$OMINIME_TIMEZONE</string>
+        <key>OMINIME_DAY_TIMEZONE</key>
+        <string>$OMINIME_DAY_TIMEZONE</string>
+        <key>OMINIME_STORAGE_TIMEZONE</key>
+        <string>$OMINIME_STORAGE_TIMEZONE</string>
+    </dict>
     
     <key>StandardOutPath</key>
     <string>$DATA_DIR/ominime.log</string>

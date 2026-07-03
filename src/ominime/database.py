@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from .config import config
+from .time_utils import business_day_bounds_for_storage, business_today, storage_now
 
 
 @dataclass
@@ -245,8 +246,7 @@ class Database:
         """获取指定日期的所有记录"""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            start = datetime.combine(target_date, datetime.min.time())
-            end = datetime.combine(target_date + timedelta(days=1), datetime.min.time())
+            start, end = business_day_bounds_for_storage(target_date)
             
             cursor.execute("""
                 SELECT * FROM input_records 
@@ -262,8 +262,7 @@ class Database:
             cursor = conn.cursor()
             
             if target_date:
-                start = datetime.combine(target_date, datetime.min.time())
-                end = datetime.combine(target_date + timedelta(days=1), datetime.min.time())
+                start, end = business_day_bounds_for_storage(target_date)
                 cursor.execute("""
                     SELECT * FROM input_records 
                     WHERE app_bundle_id = ? AND timestamp >= ? AND timestamp < ?
@@ -278,6 +277,18 @@ class Database:
                 """, (app_bundle_id,))
             
             return [self._row_to_input_record(row) for row in cursor.fetchall()]
+
+    def get_latest_input_record(self) -> Optional[InputRecord]:
+        """获取最近一条输入记录"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM input_records
+                ORDER BY timestamp DESC
+                LIMIT 1
+            """)
+            row = cursor.fetchone()
+            return self._row_to_input_record(row) if row else None
     
     def _row_to_input_record(self, row) -> InputRecord:
         """将数据库行转换为 InputRecord"""
@@ -423,8 +434,7 @@ class Database:
         """查询指定日期的提交上下文，包含输入内容"""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            start = datetime.combine(target_date, datetime.min.time())
-            end = datetime.combine(target_date + timedelta(days=1), datetime.min.time())
+            start, end = business_day_bounds_for_storage(target_date)
             cursor.execute("""
                 SELECT
                     c.*,
@@ -586,8 +596,7 @@ class Database:
         """获取指定日期的应用统计"""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            start = datetime.combine(target_date, datetime.min.time())
-            end = datetime.combine(target_date + timedelta(days=1), datetime.min.time())
+            start, end = business_day_bounds_for_storage(target_date)
             
             # 按应用汇总
             cursor.execute("""
@@ -647,11 +656,10 @@ class Database:
     
     def get_total_chars_today(self) -> int:
         """获取今日总字符数"""
-        today = date.today()
+        today = business_today()
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            start = datetime.combine(today, datetime.min.time())
-            end = datetime.combine(today + timedelta(days=1), datetime.min.time())
+            start, end = business_day_bounds_for_storage(today)
             
             cursor.execute("""
                 SELECT COALESCE(SUM(char_count), 0) as total
@@ -665,21 +673,30 @@ class Database:
         """获取最近几天的汇总"""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            start_date = date.today() - timedelta(days=days-1)
-            
-            cursor.execute("""
-                SELECT 
-                    DATE(timestamp) as day,
-                    SUM(char_count) as total_chars,
-                    COUNT(DISTINCT app_bundle_id) as app_count,
-                    COUNT(DISTINCT session_id) as session_count
-                FROM input_records 
-                WHERE DATE(timestamp) >= ?
-                GROUP BY DATE(timestamp)
-                ORDER BY day DESC
-            """, (start_date.isoformat(),))
-            
-            return [dict(row) for row in cursor.fetchall()]
+            result = []
+            today = business_today()
+            for offset in range(days):
+                target_date = today - timedelta(days=offset)
+                start, end = business_day_bounds_for_storage(target_date)
+                cursor.execute("""
+                    SELECT
+                        COALESCE(SUM(char_count), 0) as total_chars,
+                        COUNT(DISTINCT app_bundle_id) as app_count,
+                        COUNT(DISTINCT session_id) as session_count
+                    FROM input_records
+                    WHERE timestamp >= ? AND timestamp < ?
+                """, (start.isoformat(), end.isoformat()))
+                row = cursor.fetchone()
+                total_chars = row["total_chars"] or 0
+                if total_chars <= 0:
+                    continue
+                result.append({
+                    "day": target_date.isoformat(),
+                    "total_chars": total_chars,
+                    "app_count": row["app_count"],
+                    "session_count": row["session_count"],
+                })
+            return result
 
 
 # 单例数据库实例
@@ -701,7 +718,7 @@ if __name__ == "__main__":
     # 测试保存记录
     record = InputRecord(
         id=None,
-        timestamp=datetime.now(),
+        timestamp=storage_now(),
         app_name="Cursor",
         app_bundle_id="com.todesktop.230313mzl4w4u92",
         display_name="Cursor",
@@ -715,7 +732,7 @@ if __name__ == "__main__":
     print(f"保存记录 ID: {record_id}")
     
     # 测试查询
-    today = date.today()
+    today = business_today()
     records = db.get_records_by_date(today)
     print(f"今日记录数: {len(records)}")
     

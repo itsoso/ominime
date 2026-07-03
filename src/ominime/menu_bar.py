@@ -15,7 +15,9 @@ from .database import get_database, InputRecord
 from .analyzer import get_analyzer
 from .config import config
 from .input_snapshot import normalize_submission_text, should_save_submission_snapshot
+from .runtime_state import set_recording_status
 from .submission_processor import save_submission_event
+from .time_utils import business_today
 
 
 class OmniMeApp(rumps.App):
@@ -43,7 +45,9 @@ class OmniMeApp(rumps.App):
         
         self._is_recording = False
         self._today_chars = 0
+        self._today_date = business_today()
         self._last_submission_snapshot = None
+        set_recording_status("paused")
         
         # 构建菜单
         self._build_menu()
@@ -79,7 +83,11 @@ class OmniMeApp(rumps.App):
         if config.is_app_ignored(event.app_bundle_id):
             return
 
-        content = normalize_submission_text(event.character)
+        content = normalize_submission_text(
+            event.character,
+            app_name=event.app_name,
+            bundle_id=event.app_bundle_id,
+        )
         if not content:
             return
 
@@ -99,7 +107,7 @@ class OmniMeApp(rumps.App):
 
         self._last_submission_snapshot = (*current_snapshot, now)
         self._save_submission_snapshot(event, content)
-        self._today_chars += len(content)
+        self._refresh_today_chars(force=True)
         # 更新标题显示字符数
         self._update_title()
 
@@ -134,6 +142,7 @@ class OmniMeApp(rumps.App):
     
     def _update_title(self):
         """更新状态栏标题"""
+        self._refresh_today_chars()
         if self._is_recording:
             if self._today_chars > 1000:
                 self.title = f"⌨️ {self._today_chars // 1000}k"
@@ -141,12 +150,27 @@ class OmniMeApp(rumps.App):
                 self.title = f"⌨️ {self._today_chars}"
         else:
             self.title = "⌨️"
+
+    def _mark_permission_missing(self):
+        """Reflect missing Accessibility permission in runtime state and title."""
+        self._is_recording = False
+        set_recording_status("permission_missing")
+        self.title = "⌨️ ⚠"
+
+    def _refresh_today_chars(self, force=False) -> bool:
+        """Refresh cached title counter and reset it across local day boundaries."""
+        today = business_today()
+        if force or getattr(self, "_today_date", None) != today:
+            self._today_date = today
+            self._today_chars = self.db.get_total_chars_today()
+            return True
+        return False
     
     def _update_stats(self, _):
         """定时更新统计"""
         if self._is_recording:
             # 从数据库获取今日总字符数
-            self._today_chars = self.db.get_total_chars_today()
+            self._refresh_today_chars(force=True)
             self._update_title()
     
     def _toggle_recording(self, sender):
@@ -166,6 +190,7 @@ class OmniMeApp(rumps.App):
                 ok="打开设置"
             )
             request_accessibility_permission()
+            self._mark_permission_missing()
             return
         
         # 启动监听
@@ -173,7 +198,9 @@ class OmniMeApp(rumps.App):
         self.listener.start()
         
         self._is_recording = True
+        set_recording_status("recording")
         sender.title = "⏸️ 暂停记录"
+        self._refresh_today_chars(force=True)
         self._update_title()
         
         rumps.notification(
@@ -194,6 +221,7 @@ class OmniMeApp(rumps.App):
             self.listener = None
         
         self._is_recording = False
+        set_recording_status("paused")
         sender.title = "▶️ 开始记录"
         self.title = "⌨️"
         
@@ -205,7 +233,7 @@ class OmniMeApp(rumps.App):
     
     def _show_today_stats(self, _):
         """显示今日统计"""
-        stats = self.db.get_daily_stats(date.today())
+        stats = self.db.get_daily_stats(business_today())
         
         if not stats:
             rumps.alert(

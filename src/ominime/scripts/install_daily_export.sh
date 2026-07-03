@@ -19,6 +19,9 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 SERVICE_NAME="com.ominime.daily-export"
 PLIST_PATH="$HOME/Library/LaunchAgents/${SERVICE_NAME}.plist"
 LOG_DIR="$HOME/.ominime/logs"
+OMINIME_TIMEZONE="${OMINIME_TIMEZONE:-America/New_York}"
+OMINIME_DAY_TIMEZONE="${OMINIME_DAY_TIMEZONE:-Asia/Shanghai}"
+OMINIME_STORAGE_TIMEZONE="${OMINIME_STORAGE_TIMEZONE:-$OMINIME_TIMEZONE}"
 EXPORT_SCRIPT="${SCRIPT_DIR}/daily_export.sh"
 
 # 默认执行时间
@@ -66,6 +69,16 @@ cat > "$PLIST_PATH" << EOF
     <array>
         <string>${EXPORT_SCRIPT}</string>
     </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>TZ</key>
+        <string>${OMINIME_TIMEZONE}</string>
+        <key>OMINIME_DAY_TIMEZONE</key>
+        <string>${OMINIME_DAY_TIMEZONE}</string>
+        <key>OMINIME_STORAGE_TIMEZONE</key>
+        <string>${OMINIME_STORAGE_TIMEZONE}</string>
+    </dict>
     
     <key>StartCalendarInterval</key>
     <dict>

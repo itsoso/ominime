@@ -246,9 +246,6 @@
         .context-badge.pending { border-color: rgba(245, 158, 11, 0.45); color: #fcd34d; }
         .context-badge.failed, .context-badge.missing_dependency, .context-badge.invalid_json { border-color: rgba(239, 68, 68, 0.45); color: #fca5a5; }
         .context-card-body {
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) minmax(300px, 42%);
-            gap: 18px;
             padding: 20px;
         }
         .context-text {
@@ -269,17 +266,6 @@
             color: var(--text-secondary);
         }
         .context-analysis-title { color: #6ee7b7; font-weight: 700; margin-bottom: 8px; }
-        .context-shot {
-            background: var(--bg-primary);
-            border: 1px solid var(--border);
-            border-radius: 14px;
-            min-height: 220px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            overflow: hidden;
-        }
-        .context-shot img { width: 100%; height: auto; display: block; }
         .context-kv {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -529,7 +515,7 @@
                 </div>
                 <div class="date-nav">
                     <button onclick="changeDate(-1)">←</button>
-                    <input type="date" id="datePicker" onchange="loadData()">
+                    <input type="date" id="datePicker" onchange="onDatePickerChange()">
                     <button onclick="changeDate(1)">→</button>
                     <button onclick="goToToday()">今天</button>
                 </div>
@@ -640,6 +626,7 @@
 
     <script>
         let currentDate = new Date();
+        let serverTodayDate = null;
         let hourlyChart = null;
         let currentTab = 'overview';
 
@@ -650,25 +637,81 @@
             '钉钉': '💼', 'Slack': '💬', 'Notion': '📓', 'default': '📱'
         };
 
-        document.addEventListener('DOMContentLoaded', () => {
-            document.getElementById('datePicker').value = formatDate(currentDate);
-            loadData();
-        });
+        document.addEventListener('DOMContentLoaded', initializeDashboard);
+
+        async function initializeDashboard() {
+            const datePicker = document.getElementById('datePicker');
+            serverTodayDate = await fetchServerTodayDate();
+            datePicker.value = serverTodayDate || formatDate(currentDate);
+            currentDate = parseDateValue(datePicker.value);
+            await loadData();
+            setInterval(refreshTodayView, 15000);
+        }
+
+        async function fetchServerTodayDate() {
+            try {
+                const status = await fetch('/api/status').then(r => r.json());
+                serverTodayDate = status.today_date || serverTodayDate;
+                return serverTodayDate;
+            } catch (error) {
+                console.error('加载系统状态失败:', error);
+                return serverTodayDate;
+            }
+        }
 
         function formatDate(date) {
-            return date.toISOString().split('T')[0];
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        }
+
+        function parseDateValue(value) {
+            const [year, month, day] = value.split('-').map(Number);
+            return new Date(year, month - 1, day);
         }
 
         function changeDate(delta) {
+            currentDate = parseDateValue(document.getElementById('datePicker').value);
             currentDate.setDate(currentDate.getDate() + delta);
             document.getElementById('datePicker').value = formatDate(currentDate);
             loadData();
         }
 
-        function goToToday() {
-            currentDate = new Date();
-            document.getElementById('datePicker').value = formatDate(currentDate);
+        async function goToToday() {
+            const today = await fetchServerTodayDate();
+            if (today) {
+                document.getElementById('datePicker').value = today;
+                currentDate = parseDateValue(today);
+            } else {
+                currentDate = new Date();
+                document.getElementById('datePicker').value = formatDate(currentDate);
+            }
+            await loadData();
+        }
+
+        function onDatePickerChange() {
+            const dateStr = document.getElementById('datePicker').value;
+            currentDate = parseDateValue(dateStr);
             loadData();
+        }
+
+        async function refreshTodayView() {
+            const datePicker = document.getElementById('datePicker');
+            const previousTodayDate = serverTodayDate;
+            const today = await fetchServerTodayDate();
+            if (!today) return;
+
+            if (datePicker.value === today) {
+                await loadData();
+                return;
+            }
+
+            if (previousTodayDate && datePicker.value === previousTodayDate) {
+                datePicker.value = today;
+                currentDate = parseDateValue(today);
+                await loadData();
+            }
         }
 
         function switchTab(tab) {
@@ -690,16 +733,16 @@
 
         async function loadData() {
             const dateStr = document.getElementById('datePicker').value;
-            currentDate = new Date(dateStr);
+            currentDate = parseDateValue(dateStr);
 
             try {
-                const [report, hourlyStats] = await Promise.all([
-                    fetch(`/api/report/${dateStr}`).then(r => r.json()),
+                const [appStats, hourlyStats] = await Promise.all([
+                    fetch(`/api/stats/apps?target_date=${dateStr}`).then(r => r.json()),
                     fetch(`/api/stats/hourly?target_date=${dateStr}`).then(r => r.json())
                 ]);
 
-                updateOverview(report.overview);
-                updateAppList(report.app_stats);
+                updateOverview(buildOverviewFromAppStats(dateStr, appStats));
+                updateAppList(appStats);
                 updateHourlyChart(hourlyStats);
 
                 if (currentTab === 'content') {
@@ -712,6 +755,17 @@
             } catch (error) {
                 console.error('加载数据失败:', error);
             }
+        }
+
+        function buildOverviewFromAppStats(dateStr, apps) {
+            const safeApps = Array.isArray(apps) ? apps : [];
+            return {
+                date: dateStr,
+                total_chars: safeApps.reduce((sum, app) => sum + (app.total_chars || 0), 0),
+                total_apps: safeApps.length,
+                total_sessions: safeApps.reduce((sum, app) => sum + (app.session_count || 0), 0),
+                total_time_minutes: safeApps.reduce((sum, app) => sum + (app.total_time_minutes || 0), 0),
+            };
         }
 
         function updateOverview(overview) {
@@ -996,7 +1050,6 @@
                         <div class="context-badges">
                             <span class="context-badge ${escapeHtml(item.capture_status || '')}">捕获 ${escapeHtml(item.capture_status || 'unknown')}</span>
                             <span class="context-badge ${escapeHtml(statusClass)}">Qwen ${escapeHtml(item.analysis_status || 'pending')}</span>
-                            <span class="context-badge">${escapeHtml(item.screenshot_scope || 'no-shot')}</span>
                         </div>
                     </div>
                     <div class="context-card-body">
@@ -1015,9 +1068,6 @@
                                 <div>容器：${escapeHtml(item.container_role || 'unknown')}</div>
                                 <div>模型：${escapeHtml(item.qwen_model || 'not-loaded')}</div>
                             </div>
-                        </div>
-                        <div class="context-shot">
-                            ${item.screenshot_url ? `<img src="${item.screenshot_url}" alt="对话框截图">` : '<span class="empty-state">无截图</span>'}
                         </div>
                     </div>
                 </article>

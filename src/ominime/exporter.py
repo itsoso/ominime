@@ -13,6 +13,7 @@ from .database import get_database
 from .analyzer import get_analyzer, DailyReport, ThemeAnalysis
 from .config import config
 from .llm_backend import get_llm_backend
+from .time_utils import business_today, storage_now
 
 
 class ObsidianExporter:
@@ -60,7 +61,7 @@ class ObsidianExporter:
             导出文件路径，如果无数据则返回 None
         """
         if target_date is None:
-            target_date = date.today()
+            target_date = business_today()
         
         self.ensure_output_dir()
         
@@ -176,7 +177,7 @@ class ObsidianExporter:
         lines.append(f"total_apps: {report.total_apps}")
         lines.append(f"total_sessions: {report.total_sessions}")
         lines.append(f"ai_model: {model_name}")
-        lines.append(f"created: {datetime.now().isoformat()}")
+        lines.append(f"created: {storage_now().isoformat()}")
         lines.append("tags:")
         lines.append("  - OmniMe")
         lines.append("  - 日报")
@@ -352,7 +353,7 @@ class ObsidianExporter:
         # 页脚
         lines.append("---")
         lines.append("")
-        lines.append(f"*由 OmniMe 自动生成于 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | AI 模型: {model_name}*")
+        lines.append(f"*由 OmniMe 自动生成于 {storage_now().strftime('%Y-%m-%d %H:%M:%S')} | AI 模型: {model_name}*")
         
         return "\n".join(lines)
 
