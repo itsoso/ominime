@@ -117,6 +117,7 @@ MAX_FALLBACK_BUFFER_CHARS = 4000
 MAX_TEXT_FALLBACK_BUFFER_CHARS = 2000
 MAX_KEY_EVENT_TEXT_CHARS = 64
 MAX_RECENT_TEXT_SNAPSHOT_AGE_SECONDS = 60
+TEXT_FALLBACK_EVENT_DEDUP_SECONDS = 0.2
 
 
 def _clean_key_event_text(text: str) -> str:
@@ -417,6 +418,7 @@ class KeyboardListener:
         self._text_fallback_buffers: dict[tuple[str, str], list[str]] = {}
         self._text_fallback_buffer_updated_at: dict[tuple[str, str], float] = {}
         self._recent_text_snapshots: dict[tuple[str, str], tuple[str, float]] = {}
+        self._last_text_fallback_events: dict[tuple[str, str], tuple[int, str, float]] = {}
     
     def _on_rime_input(self, text: str, timestamp: datetime, app_name: str, bundle_id: str):
         """Rime log events are ignored in submission-snapshot mode."""
@@ -489,7 +491,16 @@ class KeyboardListener:
             return ""
         return _clean_key_event_text(text[:actual_length])
 
-    def _record_text_fallback_key(self, app_name: str, bundle_id: str, keycode: int, modifiers: dict, event):
+    def _record_text_fallback_key(
+        self,
+        app_name: str,
+        bundle_id: str,
+        keycode: int,
+        modifiers: dict,
+        event,
+        *,
+        track_editing_keys: bool = True,
+    ):
         """Track real Unicode text from key events when AXValue is unavailable."""
         if not getattr(config, "capture_key_event_text_fallback", True):
             return
@@ -502,7 +513,7 @@ class KeyboardListener:
         if self._is_fallback_buffer_expired(self._text_fallback_buffer_updated_at.get(key)):
             self._text_fallback_buffers.pop(key, None)
 
-        if keycode == 51:  # Backspace
+        if track_editing_keys and keycode == 51:  # Backspace
             buffer = self._text_fallback_buffers.get(key)
             if buffer:
                 buffer.pop()
@@ -513,17 +524,30 @@ class KeyboardListener:
         if not text or not _contains_cjk(text):
             return
 
+        now = time.monotonic()
+        previous = self._last_text_fallback_events.get(key)
+        if (
+            previous is not None
+            and previous[0] == keycode
+            and previous[1] == text
+            and now - previous[2] <= TEXT_FALLBACK_EVENT_DEDUP_SECONDS
+        ):
+            self._last_text_fallback_events[key] = (keycode, text, now)
+            return
+
         buffer = self._text_fallback_buffers.setdefault(key, [])
         buffer.append(text)
         joined_len = sum(len(part) for part in buffer)
         while buffer and joined_len > MAX_TEXT_FALLBACK_BUFFER_CHARS:
             joined_len -= len(buffer.pop(0))
-        self._text_fallback_buffer_updated_at[key] = time.monotonic()
+        self._text_fallback_buffer_updated_at[key] = now
+        self._last_text_fallback_events[key] = (keycode, text, now)
 
     def _pop_text_fallback_content(self, app_name: str, bundle_id: str) -> str:
         key = self._fallback_buffer_key(app_name, bundle_id)
         updated_at = self._text_fallback_buffer_updated_at.pop(key, None)
         buffer = self._text_fallback_buffers.pop(key, [])
+        self._last_text_fallback_events.pop(key, None)
         if self._is_fallback_buffer_expired(updated_at):
             return ""
         content = "".join(buffer)
@@ -561,6 +585,7 @@ class KeyboardListener:
         key = self._fallback_buffer_key(app_name, bundle_id)
         self._text_fallback_buffers.pop(key, None)
         self._text_fallback_buffer_updated_at.pop(key, None)
+        self._last_text_fallback_events.pop(key, None)
 
     def _record_fallback_key(self, app_name: str, bundle_id: str, keycode: int, modifiers: dict):
         """Track typed key count for apps whose Accessibility value is unreadable."""
@@ -635,44 +660,46 @@ class KeyboardListener:
             "alt": False,
             "cmd": False,
         }
-        content = normalize_submission_text(
+        ax_content = normalize_submission_text(
             self._get_focused_text_snapshot(),
             app_name=app_name,
             bundle_id=bundle_id,
         )
+        content = ax_content
         char_count_override = None
         redacted_content = False
         fallback_source = None
+        if not content or not _contains_cjk(content):
+            key_event_content = normalize_submission_text(
+                self._pop_text_fallback_content(app_name, bundle_id),
+                app_name=app_name,
+                bundle_id=bundle_id,
+            )
+            if key_event_content:
+                content = key_event_content
+                fallback_source = "key_event_text"
         if not content:
             content = self._pop_recent_text_snapshot_content(app_name, bundle_id)
             if content:
                 fallback_source = "recent_ax_snapshot"
         if not content:
-            content = normalize_submission_text(
-                self._pop_text_fallback_content(app_name, bundle_id),
-                app_name=app_name,
-                bundle_id=bundle_id,
+            fallback_count = (
+                self._pop_fallback_count(app_name, bundle_id)
+                if getattr(config, "count_unreadable_submissions", True)
+                else 0
             )
-            if content:
-                fallback_source = "key_event_text"
-            if not content:
-                fallback_count = (
-                    self._pop_fallback_count(app_name, bundle_id)
-                    if getattr(config, "count_unreadable_submissions", True)
-                    else 0
-                )
-                if fallback_count > 0:
-                    content = UNREADABLE_SUBMISSION_PLACEHOLDER
-                    char_count_override = fallback_count
-                    redacted_content = True
-                    fallback_source = "count_unreadable"
-                else:
-                    self._clear_submission_buffers(app_name, bundle_id)
-                    now = time.monotonic()
-                    if now - self._last_empty_submission_log >= 5.0:
-                        print(f"⚠️  Enter 提交未保存：无法读取输入框文本 -> {app_name} ({bundle_id})")
-                        self._last_empty_submission_log = now
-                    return
+            if fallback_count > 0:
+                content = UNREADABLE_SUBMISSION_PLACEHOLDER
+                char_count_override = fallback_count
+                redacted_content = True
+                fallback_source = "count_unreadable"
+            else:
+                self._clear_submission_buffers(app_name, bundle_id)
+                now = time.monotonic()
+                if now - self._last_empty_submission_log >= 5.0:
+                    print(f"⚠️  Enter 提交未保存：无法读取输入框文本 -> {app_name} ({bundle_id})")
+                    self._last_empty_submission_log = now
+                return
         else:
             self._clear_submission_buffers(app_name, bundle_id)
 
@@ -735,6 +762,14 @@ class KeyboardListener:
                         app_name,
                         bundle_id,
                         clear_on_empty=keycode in (51, 117),
+                    )
+                    self._record_text_fallback_key(
+                        app_name,
+                        bundle_id,
+                        keycode,
+                        modifiers,
+                        event,
+                        track_editing_keys=False,
                     )
                 if event_type == kCGEventKeyDown and keycode != ENTER_KEYCODE:
                     self._record_text_fallback_key(app_name, bundle_id, keycode, modifiers, event)

@@ -279,6 +279,74 @@ def test_enter_uses_cjk_key_event_text_fallback_by_default_when_ax_value_is_empt
     assert "char_count_override" not in events[0].modifiers
 
 
+def test_key_event_text_fallback_captures_committed_cjk_from_keyup(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    events = []
+    listener = keyboard_listener.KeyboardListener(events.append)
+    listener._get_event_target_app = lambda event: ("Codex", "com.openai.codex")
+    listener._get_focused_text_snapshot = lambda: ""
+    monkeypatch.setattr(
+        keyboard_listener.config,
+        "count_unreadable_submissions",
+        False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        keyboard_listener,
+        "capture_accessibility_context",
+        lambda: SimpleNamespace(),
+    )
+    monkeypatch.setattr(keyboard_listener, "context_to_dict", lambda context: {})
+
+    listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyUp,
+        SimpleNamespace(keycode=49, text="你好"),
+        None,
+    )
+    listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyDown,
+        SimpleNamespace(keycode=keyboard_listener.ENTER_KEYCODE, text=""),
+        None,
+    )
+
+    assert len(events) == 1
+    assert events[0].character == "你好"
+    assert events[0].modifiers["fallback_source"] == "key_event_text"
+
+
+def test_cjk_key_event_fallback_preferred_over_latin_ax_snapshot(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    events = []
+    listener = keyboard_listener.KeyboardListener(events.append)
+    listener._get_event_target_app = lambda event: ("Codex", "com.openai.codex")
+    listener._get_focused_text_snapshot = lambda: "nihao"
+    monkeypatch.setattr(
+        keyboard_listener,
+        "capture_accessibility_context",
+        lambda: SimpleNamespace(),
+    )
+    monkeypatch.setattr(keyboard_listener, "context_to_dict", lambda context: {})
+
+    listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyUp,
+        SimpleNamespace(keycode=49, text="你好"),
+        None,
+    )
+    listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyDown,
+        SimpleNamespace(keycode=keyboard_listener.ENTER_KEYCODE, text=""),
+        None,
+    )
+
+    assert len(events) == 1
+    assert events[0].character == "你好"
+    assert events[0].modifiers["fallback_source"] == "key_event_text"
+
+
 def test_key_event_text_fallback_drops_pinyin_prefix_before_committed_cjk(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     events = []
