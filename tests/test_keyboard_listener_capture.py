@@ -208,6 +208,33 @@ def test_enter_uses_cjk_key_event_text_fallback_by_default_when_ax_value_is_empt
     assert "char_count_override" not in events[0].modifiers
 
 
+def test_key_event_text_fallback_drops_pinyin_prefix_before_committed_cjk(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    events = []
+    listener = keyboard_listener.KeyboardListener(events.append)
+    listener._get_event_target_app = lambda event: ("Codex", "com.openai.codex")
+    listener._get_focused_text_snapshot = lambda: ""
+    monkeypatch.setattr(
+        keyboard_listener,
+        "capture_accessibility_context",
+        lambda: SimpleNamespace(),
+    )
+    monkeypatch.setattr(keyboard_listener, "context_to_dict", lambda context: {})
+
+    for event in (
+        SimpleNamespace(keycode=12, text="p"),
+        SimpleNamespace(keycode=34, text="i"),
+        SimpleNamespace(keycode=45, text="n"),
+        SimpleNamespace(keycode=12, text="你"),
+        SimpleNamespace(keycode=13, text="好"),
+        SimpleNamespace(keycode=keyboard_listener.ENTER_KEYCODE, text=""),
+    ):
+        listener._event_callback(None, keyboard_listener.kCGEventKeyDown, event, None)
+
+    assert len(events) == 1
+    assert events[0].character == "你好"
+
+
 def test_key_event_text_fallback_handles_backspace(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     events = []

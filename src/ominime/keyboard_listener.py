@@ -508,7 +508,7 @@ class KeyboardListener:
             return
 
         text = self._get_keyboard_event_text(event)
-        if not text:
+        if not text or not _contains_cjk(text):
             return
 
         buffer = self._text_fallback_buffers.setdefault(key, [])
