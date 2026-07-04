@@ -144,7 +144,7 @@ def test_enter_does_not_emit_count_only_fallback_by_default_when_ax_value_is_emp
     assert events == []
 
 
-def test_enter_does_not_emit_key_event_text_fallback_by_default_when_ax_value_is_empty(monkeypatch):
+def test_enter_does_not_emit_pinyin_key_event_text_fallback_when_ax_value_is_empty(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     events = []
     listener = keyboard_listener.KeyboardListener(events.append)
@@ -168,18 +168,12 @@ def test_enter_does_not_emit_key_event_text_fallback_by_default_when_ax_value_is
     assert events == []
 
 
-def test_enter_uses_key_event_text_fallback_when_ax_value_is_empty(monkeypatch):
+def test_enter_uses_cjk_key_event_text_fallback_by_default_when_ax_value_is_empty(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     events = []
     listener = keyboard_listener.KeyboardListener(events.append)
     listener._get_event_target_app = lambda event: ("Codex", "com.openai.codex")
     listener._get_focused_text_snapshot = lambda: ""
-    monkeypatch.setattr(
-        keyboard_listener.config,
-        "capture_key_event_text_fallback",
-        True,
-        raising=False,
-    )
     monkeypatch.setattr(
         keyboard_listener,
         "capture_accessibility_context",
@@ -234,16 +228,16 @@ def test_key_event_text_fallback_handles_backspace(monkeypatch):
     monkeypatch.setattr(keyboard_listener, "context_to_dict", lambda context: {})
 
     for event in (
-        SimpleNamespace(keycode=0, text="a"),
-        SimpleNamespace(keycode=11, text="b"),
+        SimpleNamespace(keycode=0, text="你"),
+        SimpleNamespace(keycode=11, text="好"),
         SimpleNamespace(keycode=51, text=""),
-        SimpleNamespace(keycode=8, text="c"),
+        SimpleNamespace(keycode=8, text="吗"),
         SimpleNamespace(keycode=keyboard_listener.ENTER_KEYCODE, text=""),
     ):
         listener._event_callback(None, keyboard_listener.kCGEventKeyDown, event, None)
 
     assert len(events) == 1
-    assert events[0].character == "ac"
+    assert events[0].character == "你吗"
 
 
 def test_enter_emits_count_only_fallback_only_when_enabled(monkeypatch):

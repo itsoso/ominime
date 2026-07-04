@@ -123,8 +123,8 @@ class AppConfig:
     count_unreadable_submissions: bool = False
 
     # AXValue 不可读时，是否使用 CGEvent 提供的 Unicode 文本作为真实文本兜底。
-    # 默认关闭：中文 IME 下该路径常拿到拼音预编辑串，而不是提交后的中文。
-    capture_key_event_text_fallback: bool = False
+    # 运行时只保存包含 CJK 的提交文本，避免把中文 IME 拼音预编辑串当成真实输入。
+    capture_key_event_text_fallback: bool = True
 
     # Enter 提交上下文捕获（仅文字，不再截屏）
     capture_context_on_enter: bool = True

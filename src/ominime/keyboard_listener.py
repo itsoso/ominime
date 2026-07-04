@@ -123,6 +123,16 @@ def _clean_key_event_text(text: str) -> str:
     return "".join(ch for ch in text if ch.isprintable())
 
 
+def _contains_cjk(text: str) -> bool:
+    """Return whether text contains committed CJK characters."""
+    return any(
+        ("\u3400" <= ch <= "\u4dbf")
+        or ("\u4e00" <= ch <= "\u9fff")
+        or ("\uf900" <= ch <= "\ufaff")
+        for ch in text
+    )
+
+
 def set_last_input_app(name: str, bundle_id: str):
     """设置最近接收键盘输入的应用"""
     global _last_input_app_name, _last_input_app_bundle
@@ -479,7 +489,7 @@ class KeyboardListener:
 
     def _record_text_fallback_key(self, app_name: str, bundle_id: str, keycode: int, modifiers: dict, event):
         """Track real Unicode text from key events when AXValue is unavailable."""
-        if not getattr(config, "capture_key_event_text_fallback", False):
+        if not getattr(config, "capture_key_event_text_fallback", True):
             return
         if config.is_app_ignored(bundle_id):
             return
@@ -514,7 +524,10 @@ class KeyboardListener:
         buffer = self._text_fallback_buffers.pop(key, [])
         if self._is_fallback_buffer_expired(updated_at):
             return ""
-        return "".join(buffer)
+        content = "".join(buffer)
+        if not _contains_cjk(content):
+            return ""
+        return content
 
     def _clear_text_fallback_buffer(self, app_name: str, bundle_id: str):
         key = self._fallback_buffer_key(app_name, bundle_id)
