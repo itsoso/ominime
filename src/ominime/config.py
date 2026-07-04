@@ -119,8 +119,8 @@ class AppConfig:
     )
 
     # 是否在无法读取输入框文本时按物理按键数降级计数。
-    # 默认关闭：IME/候选词/不可访问输入框会造成严重虚高。
-    count_unreadable_submissions: bool = False
+    # 默认开启：只保存占位内容和字符数，不保存拼音/原文，避免不可读输入直接归零。
+    count_unreadable_submissions: bool = True
 
     # AXValue 不可读时，是否使用 CGEvent 提供的 Unicode 文本作为真实文本兜底。
     # 运行时只保存包含 CJK 的提交文本，避免把中文 IME 拼音预编辑串当成真实输入。

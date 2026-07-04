@@ -116,6 +116,7 @@ UNREADABLE_SUBMISSION_PLACEHOLDER = "[unreadable input]"
 MAX_FALLBACK_BUFFER_CHARS = 4000
 MAX_TEXT_FALLBACK_BUFFER_CHARS = 2000
 MAX_KEY_EVENT_TEXT_CHARS = 64
+MAX_RECENT_TEXT_SNAPSHOT_AGE_SECONDS = 60
 
 
 def _clean_key_event_text(text: str) -> str:
@@ -415,6 +416,7 @@ class KeyboardListener:
         self._fallback_buffer_updated_at: dict[tuple[str, str], float] = {}
         self._text_fallback_buffers: dict[tuple[str, str], list[str]] = {}
         self._text_fallback_buffer_updated_at: dict[tuple[str, str], float] = {}
+        self._recent_text_snapshots: dict[tuple[str, str], tuple[str, float]] = {}
     
     def _on_rime_input(self, text: str, timestamp: datetime, app_name: str, bundle_id: str):
         """Rime log events are ignored in submission-snapshot mode."""
@@ -529,6 +531,32 @@ class KeyboardListener:
             return ""
         return content
 
+    def _record_recent_text_snapshot(self, app_name: str, bundle_id: str, *, clear_on_empty: bool = False):
+        key = self._fallback_buffer_key(app_name, bundle_id)
+        content = normalize_submission_text(
+            self._get_focused_text_snapshot(),
+            app_name=app_name,
+            bundle_id=bundle_id,
+        )
+        if content:
+            self._recent_text_snapshots[key] = (content, time.monotonic())
+        elif clear_on_empty:
+            self._recent_text_snapshots.pop(key, None)
+
+    def _pop_recent_text_snapshot_content(self, app_name: str, bundle_id: str) -> str:
+        key = self._fallback_buffer_key(app_name, bundle_id)
+        snapshot = self._recent_text_snapshots.pop(key, None)
+        if snapshot is None:
+            return ""
+        content, updated_at = snapshot
+        if time.monotonic() - updated_at > MAX_RECENT_TEXT_SNAPSHOT_AGE_SECONDS:
+            return ""
+        return content
+
+    def _clear_recent_text_snapshot(self, app_name: str, bundle_id: str):
+        key = self._fallback_buffer_key(app_name, bundle_id)
+        self._recent_text_snapshots.pop(key, None)
+
     def _clear_text_fallback_buffer(self, app_name: str, bundle_id: str):
         key = self._fallback_buffer_key(app_name, bundle_id)
         self._text_fallback_buffers.pop(key, None)
@@ -536,7 +564,7 @@ class KeyboardListener:
 
     def _record_fallback_key(self, app_name: str, bundle_id: str, keycode: int, modifiers: dict):
         """Track typed key count for apps whose Accessibility value is unreadable."""
-        if not getattr(config, "count_unreadable_submissions", False):
+        if not getattr(config, "count_unreadable_submissions", True):
             return
         if config.is_app_ignored(bundle_id):
             return
@@ -578,6 +606,7 @@ class KeyboardListener:
         self._fallback_buffer_updated_at.pop(key, None)
 
     def _clear_submission_buffers(self, app_name: str, bundle_id: str):
+        self._clear_recent_text_snapshot(app_name, bundle_id)
         self._clear_text_fallback_buffer(app_name, bundle_id)
         self._clear_fallback_buffer(app_name, bundle_id)
 
@@ -615,6 +644,10 @@ class KeyboardListener:
         redacted_content = False
         fallback_source = None
         if not content:
+            content = self._pop_recent_text_snapshot_content(app_name, bundle_id)
+            if content:
+                fallback_source = "recent_ax_snapshot"
+        if not content:
             content = normalize_submission_text(
                 self._pop_text_fallback_content(app_name, bundle_id),
                 app_name=app_name,
@@ -625,7 +658,7 @@ class KeyboardListener:
             if not content:
                 fallback_count = (
                     self._pop_fallback_count(app_name, bundle_id)
-                    if getattr(config, "count_unreadable_submissions", False)
+                    if getattr(config, "count_unreadable_submissions", True)
                     else 0
                 )
                 if fallback_count > 0:
@@ -697,6 +730,12 @@ class KeyboardListener:
                 set_last_input_app(app_name, bundle_id)
                 keycode = CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode)
                 modifiers = self._event_modifiers(event)
+                if event_type == kCGEventKeyUp and keycode != ENTER_KEYCODE:
+                    self._record_recent_text_snapshot(
+                        app_name,
+                        bundle_id,
+                        clear_on_empty=keycode in (51, 117),
+                    )
                 if event_type == kCGEventKeyDown and keycode != ENTER_KEYCODE:
                     self._record_text_fallback_key(app_name, bundle_id, keycode, modifiers, event)
                     self._record_fallback_key(app_name, bundle_id, keycode, modifiers)

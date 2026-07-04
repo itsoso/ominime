@@ -1,5 +1,6 @@
 import importlib
 import sys
+import time
 import types
 from types import SimpleNamespace
 
@@ -109,7 +110,7 @@ def test_enter_keyup_can_emit_submission_snapshot(monkeypatch):
     assert events[0].modifiers["submit_snapshot"] is True
 
 
-def test_enter_does_not_emit_count_only_fallback_by_default_when_ax_value_is_empty(monkeypatch):
+def test_enter_emits_count_only_fallback_by_default_when_ax_value_is_empty(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     events = []
     listener = keyboard_listener.KeyboardListener(events.append)
@@ -141,7 +142,11 @@ def test_enter_does_not_emit_count_only_fallback_by_default_when_ax_value_is_emp
         None,
     )
 
-    assert events == []
+    assert len(events) == 1
+    assert events[0].character == keyboard_listener.UNREADABLE_SUBMISSION_PLACEHOLDER
+    assert events[0].modifiers["fallback_source"] == "count_unreadable"
+    assert events[0].modifiers["redacted_content"] is True
+    assert events[0].modifiers["char_count_override"] == 2
 
 
 def test_enter_does_not_emit_pinyin_key_event_text_fallback_when_ax_value_is_empty(monkeypatch):
@@ -150,6 +155,12 @@ def test_enter_does_not_emit_pinyin_key_event_text_fallback_when_ax_value_is_emp
     listener = keyboard_listener.KeyboardListener(events.append)
     listener._get_event_target_app = lambda event: ("Codex", "com.openai.codex")
     listener._get_focused_text_snapshot = lambda: ""
+    monkeypatch.setattr(
+        keyboard_listener.config,
+        "count_unreadable_submissions",
+        False,
+        raising=False,
+    )
     monkeypatch.setattr(
         keyboard_listener,
         "capture_accessibility_context",
@@ -164,6 +175,66 @@ def test_enter_does_not_emit_pinyin_key_event_text_fallback_when_ax_value_is_emp
         SimpleNamespace(keycode=keyboard_listener.ENTER_KEYCODE, text=""),
     ):
         listener._event_callback(None, keyboard_listener.kCGEventKeyDown, event, None)
+
+    assert events == []
+
+
+def test_enter_uses_recent_ax_snapshot_when_enter_snapshot_is_empty(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    events = []
+    listener = keyboard_listener.KeyboardListener(events.append)
+    listener._get_event_target_app = lambda event: ("Codex", "com.openai.codex")
+    listener._get_focused_text_snapshot = lambda: ""
+    listener._recent_text_snapshots = {
+        ("Codex", "com.openai.codex"): ("你好", time.monotonic())
+    }
+    monkeypatch.setattr(
+        keyboard_listener,
+        "capture_accessibility_context",
+        lambda: SimpleNamespace(),
+    )
+    monkeypatch.setattr(keyboard_listener, "context_to_dict", lambda context: {})
+
+    listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyDown,
+        SimpleNamespace(keycode=keyboard_listener.ENTER_KEYCODE, text=""),
+        None,
+    )
+
+    assert len(events) == 1
+    assert events[0].character == "你好"
+    assert events[0].modifiers["fallback_source"] == "recent_ax_snapshot"
+
+
+def test_backspace_keyup_clears_recent_ax_snapshot_when_field_becomes_empty(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    events = []
+    listener = keyboard_listener.KeyboardListener(events.append)
+    listener._get_event_target_app = lambda event: ("Codex", "com.openai.codex")
+    listener._get_focused_text_snapshot = lambda: ""
+    listener._recent_text_snapshots = {
+        ("Codex", "com.openai.codex"): ("旧内容", time.monotonic())
+    }
+    monkeypatch.setattr(
+        keyboard_listener,
+        "capture_accessibility_context",
+        lambda: SimpleNamespace(),
+    )
+    monkeypatch.setattr(keyboard_listener, "context_to_dict", lambda context: {})
+
+    listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyUp,
+        SimpleNamespace(keycode=51, text=""),
+        None,
+    )
+    listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyDown,
+        SimpleNamespace(keycode=keyboard_listener.ENTER_KEYCODE, text=""),
+        None,
+    )
 
     assert events == []
 
@@ -267,7 +338,7 @@ def test_key_event_text_fallback_handles_backspace(monkeypatch):
     assert events[0].character == "你吗"
 
 
-def test_enter_emits_count_only_fallback_only_when_enabled(monkeypatch):
+def test_enter_does_not_emit_count_only_fallback_when_disabled(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     events = []
     listener = keyboard_listener.KeyboardListener(events.append)
@@ -276,7 +347,7 @@ def test_enter_emits_count_only_fallback_only_when_enabled(monkeypatch):
     monkeypatch.setattr(
         keyboard_listener.config,
         "count_unreadable_submissions",
-        True,
+        False,
         raising=False,
     )
     monkeypatch.setattr(
@@ -305,8 +376,4 @@ def test_enter_emits_count_only_fallback_only_when_enabled(monkeypatch):
         None,
     )
 
-    assert len(events) == 1
-    assert events[0].character == keyboard_listener.UNREADABLE_SUBMISSION_PLACEHOLDER
-    assert events[0].modifiers["submit_snapshot"] is True
-    assert events[0].modifiers["redacted_content"] is True
-    assert events[0].modifiers["char_count_override"] == 2
+    assert events == []
