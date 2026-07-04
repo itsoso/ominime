@@ -52,6 +52,7 @@ class OmniMeMenuBarApp(rumps.App):
         self._web_server_running = False
         self._last_title_update = 0.0  # 标题更新节流
         self._last_submission_snapshot = None
+        self._recording_toggle_item = None
         set_recording_status("starting")
         
         # 构建菜单
@@ -96,6 +97,7 @@ class OmniMeMenuBarApp(rumps.App):
             self.menu["📊 今日统计"].set_callback(self._show_today_stats)
             self.menu["🌐 打开 Web 后台"].set_callback(self._open_web)
             self.menu["▶️ 开始记录"].set_callback(self._toggle_recording)
+            self._recording_toggle_item = self.menu["▶️ 开始记录"]
             self.menu["⚙️ 设置"].set_callback(self._show_settings)
             self.menu["📂 打开数据目录"].set_callback(self._open_data_dir)
             self.menu["🔄 设为开机启动"].set_callback(self._setup_launch_agent)
@@ -134,7 +136,22 @@ class OmniMeMenuBarApp(rumps.App):
         """Reflect missing Accessibility permission in runtime state and title."""
         self._is_recording = False
         set_recording_status("permission_missing")
+        self._set_recording_toggle_title("▶️ 开始记录")
         self.title = "⌨️ ⚠"
+
+    def _set_recording_toggle_title(self, title: str):
+        """Keep the menu action label aligned with the recording state."""
+        item = getattr(self, "_recording_toggle_item", None)
+        if item is None:
+            for current_title in ("▶️ 开始记录", "⏸️ 暂停记录"):
+                try:
+                    item = self.menu[current_title]
+                    self._recording_toggle_item = item
+                    break
+                except Exception:
+                    continue
+        if item is not None:
+            item.title = title
     
     def _on_key_event(self, event: KeyEvent):
         """输入提交回调：只保存 Enter 时的完整输入框快照。"""
@@ -257,6 +274,7 @@ class OmniMeMenuBarApp(rumps.App):
         self.listener.start()
         self._is_recording = True
         set_recording_status("recording")
+        self._set_recording_toggle_title("⏸️ 暂停记录")
         self._refresh_today_chars(force=True)
         self._update_title()
     
@@ -275,7 +293,7 @@ class OmniMeMenuBarApp(rumps.App):
             return
         
         self._start_recording_internal()
-        sender.title = "⏸️ 暂停记录"
+        self._set_recording_toggle_title("⏸️ 暂停记录")
         
         rumps.notification(
             title="OmniMe",
@@ -295,7 +313,7 @@ class OmniMeMenuBarApp(rumps.App):
         
         self._is_recording = False
         set_recording_status("paused")
-        sender.title = "▶️ 开始记录"
+        self._set_recording_toggle_title("▶️ 开始记录")
         self.title = "⌨️ ⏸"
         
         rumps.notification(

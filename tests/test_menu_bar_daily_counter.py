@@ -157,11 +157,13 @@ def test_full_menu_bar_start_updates_runtime_recording_state(monkeypatch):
     app._is_recording = False
     app._last_title_update = 0
     app._update_title = lambda *args, **kwargs: None
+    app._recording_toggle_item = SimpleNamespace(title="▶️ 开始记录")
 
     app._start_recording_internal()
 
     state = runtime_state.get_runtime_state()
     assert app._is_recording is True
+    assert app._recording_toggle_item.title == "⏸️ 暂停记录"
     assert state.recording_status == "recording"
     assert state.is_recording is True
 
