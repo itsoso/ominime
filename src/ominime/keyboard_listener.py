@@ -118,6 +118,8 @@ MAX_TEXT_FALLBACK_BUFFER_CHARS = 2000
 MAX_KEY_EVENT_TEXT_CHARS = 64
 MAX_RECENT_TEXT_SNAPSHOT_AGE_SECONDS = 60
 TEXT_FALLBACK_EVENT_DEDUP_SECONDS = 0.2
+CLIPBOARD_COPY_FALLBACK_DELAY_SECONDS = 0.06
+CLIPBOARD_COPY_FALLBACK_MAX_CHARS = 4000
 
 
 def _clean_key_event_text(text: str) -> str:
@@ -625,6 +627,129 @@ class KeyboardListener:
             return 0
         return len(buffer)
 
+    def _copy_focused_submission_via_clipboard(
+        self,
+        app_name: str,
+        bundle_id: str,
+        fallback_count: int = 0,
+    ) -> str:
+        """Copy focused field text as a last resort for apps without AX text."""
+        if config.is_app_ignored(bundle_id):
+            return ""
+
+        snapshot = self._snapshot_general_pasteboard()
+        try:
+            if not self._post_command_key(0):  # Cmd+A
+                return ""
+            time.sleep(CLIPBOARD_COPY_FALLBACK_DELAY_SECONDS)
+            if not self._post_command_key(8):  # Cmd+C
+                return ""
+            time.sleep(CLIPBOARD_COPY_FALLBACK_DELAY_SECONDS)
+            content = normalize_submission_text(
+                self._read_general_pasteboard_text(),
+                app_name=app_name,
+                bundle_id=bundle_id,
+            )
+            self._post_plain_key(124)  # Right Arrow clears the Cmd+A selection.
+            if not content:
+                return ""
+            if not self._is_reasonable_clipboard_submission(content, fallback_count):
+                return ""
+            return content
+        except Exception as e:
+            if _DEBUG:
+                print(f"[DEBUG] clipboard copy fallback failed: {e}")
+            return ""
+        finally:
+            self._restore_general_pasteboard(snapshot)
+
+    def _post_command_key(self, keycode: int) -> bool:
+        return self._post_key(keycode, kCGEventFlagMaskCommand)
+
+    def _post_plain_key(self, keycode: int) -> bool:
+        return self._post_key(keycode, 0)
+
+    def _post_key(self, keycode: int, flags: int) -> bool:
+        create_event = getattr(Quartz, "CGEventCreateKeyboardEvent", None)
+        set_flags = getattr(Quartz, "CGEventSetFlags", None)
+        post_event = getattr(Quartz, "CGEventPost", None)
+        event_tap = getattr(Quartz, "kCGHIDEventTap", None)
+        if not create_event or not set_flags or not post_event or event_tap is None:
+            return False
+
+        for is_down in (True, False):
+            event = create_event(None, keycode, is_down)
+            if event is None:
+                return False
+            set_flags(event, flags)
+            post_event(event_tap, event)
+        return True
+
+    def _snapshot_general_pasteboard(self):
+        try:
+            from AppKit import NSPasteboard
+
+            pasteboard = NSPasteboard.generalPasteboard()
+            saved_items = []
+            for item in pasteboard.pasteboardItems() or []:
+                item_data = []
+                for type_name in item.types() or []:
+                    data = item.dataForType_(type_name)
+                    if data is not None:
+                        item_data.append((type_name, data))
+                saved_items.append(item_data)
+            return (pasteboard, saved_items)
+        except Exception as e:
+            if _DEBUG:
+                print(f"[DEBUG] pasteboard snapshot failed: {e}")
+            return None
+
+    def _restore_general_pasteboard(self, snapshot):
+        if snapshot is None:
+            return
+        try:
+            from AppKit import NSPasteboardItem
+
+            pasteboard, saved_items = snapshot
+            pasteboard.clearContents()
+            restored_items = []
+            for item_data in saved_items:
+                item = NSPasteboardItem.alloc().init()
+                has_data = False
+                for type_name, data in item_data:
+                    if item.setData_forType_(data, type_name):
+                        has_data = True
+                if has_data:
+                    restored_items.append(item)
+            if restored_items:
+                pasteboard.writeObjects_(restored_items)
+        except Exception as e:
+            if _DEBUG:
+                print(f"[DEBUG] pasteboard restore failed: {e}")
+
+    def _read_general_pasteboard_text(self) -> str:
+        try:
+            from AppKit import NSPasteboard
+
+            pasteboard = NSPasteboard.generalPasteboard()
+            return (
+                pasteboard.stringForType_("public.utf8-plain-text")
+                or pasteboard.stringForType_("NSStringPboardType")
+                or ""
+            )
+        except Exception as e:
+            if _DEBUG:
+                print(f"[DEBUG] pasteboard read failed: {e}")
+            return ""
+
+    def _is_reasonable_clipboard_submission(self, content: str, fallback_count: int) -> bool:
+        if len(content) > CLIPBOARD_COPY_FALLBACK_MAX_CHARS:
+            return False
+        if fallback_count <= 0:
+            return True
+        max_expected = max(300, fallback_count * 4, fallback_count + 120)
+        return len(content) <= max_expected
+
     def _clear_fallback_buffer(self, app_name: str, bundle_id: str):
         key = self._fallback_buffer_key(app_name, bundle_id)
         self._fallback_buffers.pop(key, None)
@@ -688,7 +813,14 @@ class KeyboardListener:
                 if getattr(config, "count_unreadable_submissions", True)
                 else 0
             )
-            if fallback_count > 0:
+            content = self._copy_focused_submission_via_clipboard(
+                app_name,
+                bundle_id,
+                fallback_count=fallback_count,
+            )
+            if content:
+                fallback_source = "clipboard_copy"
+            elif fallback_count > 0:
                 content = UNREADABLE_SUBMISSION_PLACEHOLDER
                 char_count_override = fallback_count
                 redacted_content = True
