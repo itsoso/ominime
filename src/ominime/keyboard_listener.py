@@ -120,6 +120,7 @@ MAX_RECENT_TEXT_SNAPSHOT_AGE_SECONDS = 60
 TEXT_FALLBACK_EVENT_DEDUP_SECONDS = 0.2
 CLIPBOARD_COPY_FALLBACK_DELAY_SECONDS = 0.06
 CLIPBOARD_COPY_FALLBACK_MAX_CHARS = 4000
+LATIN_IME_COMMIT_CLIPBOARD_ALLOW_SECONDS = 30
 
 
 def _clean_key_event_text(text: str) -> str:
@@ -423,6 +424,7 @@ class KeyboardListener:
         self._last_text_fallback_events: dict[tuple[str, str], tuple[int, str, float]] = {}
         self._latin_preedit_pending: dict[tuple[str, str], bool] = {}
         self._ignore_enter_keyup_until: dict[tuple[str, str], float] = {}
+        self._allow_clipboard_after_latin_commit_until: dict[tuple[str, str], tuple[float, int]] = {}
     
     def _on_rime_input(self, text: str, timestamp: datetime, app_name: str, bundle_id: str):
         """Rime log events are ignored in submission-snapshot mode."""
@@ -766,6 +768,7 @@ class KeyboardListener:
         self._fallback_buffers.pop(key, None)
         self._fallback_buffer_updated_at.pop(key, None)
         self._latin_preedit_pending.pop(key, None)
+        self._allow_clipboard_after_latin_commit_until.pop(key, None)
 
     def _clear_submission_buffers(self, app_name: str, bundle_id: str):
         self._clear_recent_text_snapshot(app_name, bundle_id)
@@ -790,6 +793,44 @@ class KeyboardListener:
     def _ignore_enter_keyup_once(self, app_name: str, bundle_id: str):
         key = self._fallback_buffer_key(app_name, bundle_id)
         self._ignore_enter_keyup_until[key] = time.monotonic() + 1.0
+
+    def _allow_clipboard_after_latin_commit(
+        self,
+        app_name: str,
+        bundle_id: str,
+        physical_key_count: int,
+    ):
+        key = self._fallback_buffer_key(app_name, bundle_id)
+        self._allow_clipboard_after_latin_commit_until[key] = (
+            time.monotonic() + LATIN_IME_COMMIT_CLIPBOARD_ALLOW_SECONDS,
+            max(physical_key_count, 0),
+        )
+
+    def _consume_latin_commit_clipboard_allowance(
+        self,
+        app_name: str,
+        bundle_id: str,
+    ) -> int | None:
+        key = self._fallback_buffer_key(app_name, bundle_id)
+        allowance = self._allow_clipboard_after_latin_commit_until.pop(key, None)
+        if allowance is None:
+            return None
+        allow_until, fallback_count = allowance
+        if time.monotonic() > allow_until:
+            return None
+        return fallback_count
+
+    def _clipboard_copy_fallback_count(
+        self,
+        app_name: str,
+        bundle_id: str,
+        physical_key_count: int,
+    ) -> int | None:
+        if not self._can_use_clipboard_copy_fallback():
+            return None
+        if physical_key_count > 0:
+            return physical_key_count
+        return self._consume_latin_commit_clipboard_allowance(app_name, bundle_id)
 
     def _should_ignore_enter_keyup(self, app_name: str, bundle_id: str, event_type) -> bool:
         if event_type != kCGEventKeyUp:
@@ -851,18 +892,28 @@ class KeyboardListener:
             if self._should_skip_latin_preedit_enter(app_name, bundle_id, event_type, physical_key_count):
                 self._clear_submission_buffers(app_name, bundle_id)
                 self._ignore_enter_keyup_once(app_name, bundle_id)
+                self._allow_clipboard_after_latin_commit(app_name, bundle_id, physical_key_count)
                 if _DEBUG:
                     print(f"[DEBUG] skip Enter capture for latin IME preedit -> {app_name} ({bundle_id})")
                 return
             fallback_count = physical_key_count if getattr(config, "count_unreadable_submissions", True) else 0
-            content = self._copy_focused_submission_via_clipboard(
+            clipboard_fallback_count = self._clipboard_copy_fallback_count(
                 app_name,
                 bundle_id,
-                fallback_count=physical_key_count,
+                physical_key_count,
             )
+            clipboard_copy_attempted = clipboard_fallback_count is not None
+            if clipboard_fallback_count is not None:
+                content = self._copy_focused_submission_via_clipboard(
+                    app_name,
+                    bundle_id,
+                    fallback_count=clipboard_fallback_count,
+                )
+            else:
+                content = ""
             if content:
                 fallback_source = "clipboard_copy"
-            elif fallback_count > 0:
+            elif fallback_count > 0 and not clipboard_copy_attempted:
                 content = UNREADABLE_SUBMISSION_PLACEHOLDER
                 char_count_override = fallback_count
                 redacted_content = True
