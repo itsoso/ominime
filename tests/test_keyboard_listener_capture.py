@@ -394,19 +394,81 @@ def test_clipboard_copy_fallback_wins_over_count_only_fallback(monkeypatch):
     )
     monkeypatch.setattr(keyboard_listener, "context_to_dict", lambda context: {})
 
-    for event in (
-        SimpleNamespace(keycode=12, text="s"),
-        SimpleNamespace(keycode=34, text="h"),
-        SimpleNamespace(keycode=45, text="u"),
+    listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyDown,
         SimpleNamespace(keycode=keyboard_listener.ENTER_KEYCODE, text=""),
-    ):
-        listener._event_callback(None, keyboard_listener.kCGEventKeyDown, event, None)
+        None,
+    )
 
     assert len(events) == 1
     assert events[0].character == "输入框原文"
     assert events[0].modifiers["fallback_source"] == "clipboard_copy"
     assert events[0].modifiers["redacted_content"] is False
     assert "char_count_override" not in events[0].modifiers
+
+
+def test_latin_ime_commit_enter_does_not_copy_or_emit_until_next_enter(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    events = []
+    copy_calls = []
+    listener = keyboard_listener.KeyboardListener(events.append)
+    listener._get_event_target_app = lambda event: ("Kim", "Kem")
+    listener._get_focused_text_snapshot = lambda: ""
+    listener._can_use_clipboard_copy_fallback = lambda: True
+    monkeypatch.setattr(
+        keyboard_listener.config,
+        "count_unreadable_submissions",
+        False,
+        raising=False,
+    )
+
+    def copy_fallback(app_name, bundle_id, fallback_count=0):
+        copy_calls.append((app_name, bundle_id, fallback_count))
+        return "mixed English"
+
+    listener._copy_focused_submission_via_clipboard = copy_fallback
+    monkeypatch.setattr(
+        keyboard_listener,
+        "capture_accessibility_context",
+        lambda: SimpleNamespace(),
+    )
+    monkeypatch.setattr(keyboard_listener, "context_to_dict", lambda context: {})
+
+    for event in (
+        SimpleNamespace(keycode=46, text="m"),
+        SimpleNamespace(keycode=34, text="i"),
+        SimpleNamespace(keycode=6, text="x"),
+    ):
+        listener._event_callback(None, keyboard_listener.kCGEventKeyDown, event, None)
+
+    listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyDown,
+        SimpleNamespace(keycode=keyboard_listener.ENTER_KEYCODE, text=""),
+        None,
+    )
+    listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyUp,
+        SimpleNamespace(keycode=keyboard_listener.ENTER_KEYCODE, text=""),
+        None,
+    )
+
+    assert events == []
+    assert copy_calls == []
+
+    listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyDown,
+        SimpleNamespace(keycode=keyboard_listener.ENTER_KEYCODE, text=""),
+        None,
+    )
+
+    assert len(events) == 1
+    assert events[0].character == "mixed English"
+    assert events[0].modifiers["fallback_source"] == "clipboard_copy"
+    assert copy_calls == [("Kim", "Kem", 0)]
 
 
 def test_key_event_text_fallback_drops_pinyin_prefix_before_committed_cjk(monkeypatch):

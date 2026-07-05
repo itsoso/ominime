@@ -421,6 +421,8 @@ class KeyboardListener:
         self._text_fallback_buffer_updated_at: dict[tuple[str, str], float] = {}
         self._recent_text_snapshots: dict[tuple[str, str], tuple[str, float]] = {}
         self._last_text_fallback_events: dict[tuple[str, str], tuple[int, str, float]] = {}
+        self._latin_preedit_pending: dict[tuple[str, str], bool] = {}
+        self._ignore_enter_keyup_until: dict[tuple[str, str], float] = {}
     
     def _on_rime_input(self, text: str, timestamp: datetime, app_name: str, bundle_id: str):
         """Rime log events are ignored in submission-snapshot mode."""
@@ -526,6 +528,7 @@ class KeyboardListener:
         if not text or not _contains_cjk(text):
             return
 
+        self._latin_preedit_pending[key] = False
         now = time.monotonic()
         previous = self._last_text_fallback_events.get(key)
         if (
@@ -591,8 +594,6 @@ class KeyboardListener:
 
     def _record_fallback_key(self, app_name: str, bundle_id: str, keycode: int, modifiers: dict):
         """Track typed key count for apps whose Accessibility value is unreadable."""
-        if not getattr(config, "count_unreadable_submissions", True):
-            return
         if config.is_app_ignored(bundle_id):
             return
         if modifiers.get("cmd") or modifiers.get("ctrl") or modifiers.get("alt"):
@@ -615,6 +616,8 @@ class KeyboardListener:
             return
 
         buffer.append(char)
+        if char.strip() and char.isascii():
+            self._latin_preedit_pending[key] = True
         if len(buffer) > MAX_FALLBACK_BUFFER_CHARS:
             del buffer[: len(buffer) - MAX_FALLBACK_BUFFER_CHARS]
         self._fallback_buffer_updated_at[key] = time.monotonic()
@@ -662,6 +665,14 @@ class KeyboardListener:
             return ""
         finally:
             self._restore_general_pasteboard(snapshot)
+
+    def _can_use_clipboard_copy_fallback(self) -> bool:
+        return bool(
+            getattr(Quartz, "CGEventCreateKeyboardEvent", None)
+            and getattr(Quartz, "CGEventSetFlags", None)
+            and getattr(Quartz, "CGEventPost", None)
+            and getattr(Quartz, "kCGHIDEventTap", None) is not None
+        )
 
     def _post_command_key(self, keycode: int) -> bool:
         return self._post_key(keycode, kCGEventFlagMaskCommand)
@@ -754,11 +765,38 @@ class KeyboardListener:
         key = self._fallback_buffer_key(app_name, bundle_id)
         self._fallback_buffers.pop(key, None)
         self._fallback_buffer_updated_at.pop(key, None)
+        self._latin_preedit_pending.pop(key, None)
 
     def _clear_submission_buffers(self, app_name: str, bundle_id: str):
         self._clear_recent_text_snapshot(app_name, bundle_id)
         self._clear_text_fallback_buffer(app_name, bundle_id)
         self._clear_fallback_buffer(app_name, bundle_id)
+
+    def _should_skip_latin_preedit_enter(
+        self,
+        app_name: str,
+        bundle_id: str,
+        event_type,
+        fallback_count: int,
+    ) -> bool:
+        if event_type != kCGEventKeyDown:
+            return False
+        if fallback_count <= 0:
+            return False
+        if not self._latin_preedit_pending.get(self._fallback_buffer_key(app_name, bundle_id), False):
+            return False
+        return self._can_use_clipboard_copy_fallback()
+
+    def _ignore_enter_keyup_once(self, app_name: str, bundle_id: str):
+        key = self._fallback_buffer_key(app_name, bundle_id)
+        self._ignore_enter_keyup_until[key] = time.monotonic() + 1.0
+
+    def _should_ignore_enter_keyup(self, app_name: str, bundle_id: str, event_type) -> bool:
+        if event_type != kCGEventKeyUp:
+            return False
+        key = self._fallback_buffer_key(app_name, bundle_id)
+        ignore_until = self._ignore_enter_keyup_until.pop(key, None)
+        return ignore_until is not None and time.monotonic() <= ignore_until
 
     def _event_modifiers(self, event) -> dict:
         flags = CGEventGetFlags(event) or 0
@@ -775,6 +813,7 @@ class KeyboardListener:
         app_name: str | None = None,
         bundle_id: str | None = None,
         key_modifiers: dict | None = None,
+        event_type=None,
     ):
         """Emit the full focused input value when Enter is pressed."""
         if app_name is None or bundle_id is None:
@@ -808,15 +847,18 @@ class KeyboardListener:
             if content:
                 fallback_source = "recent_ax_snapshot"
         if not content:
-            fallback_count = (
-                self._pop_fallback_count(app_name, bundle_id)
-                if getattr(config, "count_unreadable_submissions", True)
-                else 0
-            )
+            physical_key_count = self._pop_fallback_count(app_name, bundle_id)
+            if self._should_skip_latin_preedit_enter(app_name, bundle_id, event_type, physical_key_count):
+                self._clear_submission_buffers(app_name, bundle_id)
+                self._ignore_enter_keyup_once(app_name, bundle_id)
+                if _DEBUG:
+                    print(f"[DEBUG] skip Enter capture for latin IME preedit -> {app_name} ({bundle_id})")
+                return
+            fallback_count = physical_key_count if getattr(config, "count_unreadable_submissions", True) else 0
             content = self._copy_focused_submission_via_clipboard(
                 app_name,
                 bundle_id,
-                fallback_count=fallback_count,
+                fallback_count=physical_key_count,
             )
             if content:
                 fallback_source = "clipboard_copy"
@@ -913,11 +955,14 @@ class KeyboardListener:
                     and not modifiers.get("ctrl")
                     and not modifiers.get("alt")
                 ):
+                    if self._should_ignore_enter_keyup(app_name, bundle_id, event_type):
+                        return event
                     self._emit_submission_snapshot(
                         event,
                         app_name=app_name,
                         bundle_id=bundle_id,
                         key_modifiers=modifiers,
+                        event_type=event_type,
                     )
             except Exception as e:
                 if _DEBUG:
