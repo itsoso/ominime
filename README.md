@@ -1,438 +1,375 @@
-# 🎯 OmniMe - macOS 输入追踪系统
+# OmniMe
 
-> 记录你在不同应用中的每一次输入，智能汇总分析你的一天。
+> 本地记录你在 macOS 各个应用中实际提交的文字，按天汇总，帮助你回顾工作与思考轨迹。
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
 ![Platform](https://img.shields.io/badge/Platform-macOS-lightgrey.svg)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
 
-## ✨ 功能特点
+OmniMe 以一次按下 Enter 的提交为记录边界。它不会把连续的原始按键流逐个写入数据库，而是尽量读取输入框中真正提交的文字，再按应用、时间和会话组织成可复盘的数据。
 
-- **🔍 全局输入监听** - 使用 CGEventTap 监听所有键盘输入
-- **🇨🇳 中文输入支持** - 集成鼠须管(Rime)，完美支持中英文混合输入
-- **📱 应用识别** - 自动识别当前活跃应用（微信、Cursor、Obsidian、Kim 等）
-- **📊 分类统计** - 按应用、按时间段分类汇总输入数据
-- **📝 每日报告** - 自动生成每日输入汇总报告
-- **🎯 主线梳理** - 智能提取一天的主线活动
-- **💡 AI 建议** - 支持 OpenAI/本地 Qwen/Ollama 多种 AI 后端
-- **🖥️ Menu Bar 应用** - 状态栏驻留，随时查看统计
-- **🌐 Web 后台** - 现代化 Web 界面，数据可视化
-- **🚀 开机启动** - 支持设置开机自动启动
-- **🔒 本地存储** - 所有数据仅存储在本地，保护隐私
+## 主要功能
 
-## 📦 快速安装
+- **提交级输入记录**：在文本输入框中按 Enter 时保存本次提交，不记录普通按键流。
+- **中英文与输入法处理**：优先记录最终提交文本，过滤输入法预编辑过程，支持中英文混合内容。
+- **可信输入保护**：焦点不在文本输入控件时跳过记录，避免把网页正文、聊天历史等误当成输入。
+- **不可读输入降级**：无法安全读取原文时，可以只保存字符数，不保存拼音或不可信内容。
+- **应用与业务日统计**：按应用、会话、小时和日期查看输入量；业务日时区可配置。
+- **菜单栏状态**：自动开始或暂停记录，显示本次运行期间的实时输入量，并可直接打开数据目录和 Web 后台。
+- **Web 复盘**：查看概览、应用分布、提交内容、上下文、主题分析与工作路径。
+- **报告与导出**：支持终端报告、JSON 导出和 Obsidian Markdown 日报。
+- **本地优先**：SQLite 数据默认只保存在本机；AI 分析为可选功能。
+- **捕获诊断**：记录最近一次提交为何被保存、仅计数或跳过，方便排查漏记与误记。
 
-### 一键安装（推荐）
+> OmniMe 依赖 macOS 辅助功能接口。不同应用对输入框内容的开放程度不同，因此它会优先保证“不误记”，无法确认内容可信时可能只计数或跳过。
+
+## 快速开始
+
+### 运行要求
+
+- macOS
+- Git
+- Python 3.10 或更高版本
+- macOS「辅助功能」权限
+
+可以先检查：
 
 ```bash
-# 克隆项目
-git clone git@github.com:itsoso/ominime.git
-cd ominime
+git --version
+python3 --version
+```
 
-# 运行安装脚本（自动设置开机启动）
+如果 Git 不存在，可先运行 `xcode-select --install` 安装 Apple 命令行工具；如果 Python 低于 3.10，可从 [python.org](https://www.python.org/downloads/macos/) 安装新版 Python，或在已安装 Homebrew 时运行 `brew install python`。
+
+### 推荐安装
+
+```bash
+git clone https://github.com/itsoso/ominime.git
+cd ominime
 chmod +x scripts/install_app.sh
 ./scripts/install_app.sh
 ```
 
-安装脚本会自动：
-1. 创建虚拟环境
-2. 安装所有依赖（包括 python-dotenv）
-3. 设置开机启动
-4. 启动应用
+已经配置 GitHub SSH Key 的用户也可以使用 `git@github.com:itsoso/ominime.git`。
 
-> 💡 **提示**：首次使用建议配置 `.env` 文件启用 AI 功能（见下方说明）
+安装脚本会：
+
+1. 选择合适的原生架构 Python 并创建 `venv`。
+2. 安装 OmniMe 及运行依赖。
+3. 创建并加载 LaunchAgent，设置登录后自动启动。
+4. 启动菜单栏应用。
+
+如果网络环境需要国内镜像，可以这样运行：
+
+```bash
+USE_MIRROR=1 ./scripts/install_app.sh
+```
+
+### 授予辅助功能权限
+
+第一次启动后，前往：
+
+`系统设置 → 隐私与安全性 → 辅助功能`
+
+推荐安装方式通过项目虚拟环境中的 Python 运行 OmniMe，因此优先授权项目里的 `venv/bin/python`。列表中没有该程序时，点击 `+` 手动添加；如果你从终端直接启动 OmniMe，也按系统提示授权所使用的终端。授权后，在菜单栏中点击 `▶️ 开始记录`。
+
+可以用 LaunchAgent 可靠地重启推荐安装的应用：
+
+```bash
+launchctl kickstart -k "gui/$(id -u)/com.ominime.app"
+```
+
+状态栏显示：
+
+- `⌨️ 数字`：正在记录，数字是本次运行期间的实时字符数，并在业务日切换时归零。
+- `⌨️ ⏸`：记录已暂停。
+- `⌨️ ⚠`：缺少辅助功能权限。
 
 ### 手动安装
 
 ```bash
-# 1. 创建虚拟环境
 python3 -m venv venv
 source venv/bin/activate
-
-# 2. 安装依赖
 pip install -r requirements.txt
-
-# 3. 安装项目
 pip install -e .
-
-# 4. 启动应用
 ominime
 ```
 
-## 🚀 使用方法
+不带子命令运行 `ominime`，等同于 `ominime app`。
 
-### 🖥️ 桌面应用（推荐）
+推荐安装不会把 `ominime` 写入系统 PATH。以后在项目目录执行命令前，可以先激活虚拟环境：
 
 ```bash
-# 启动桌面应用（菜单栏）
-ominime
+source venv/bin/activate
+```
 
+也可以始终使用完整的项目内命令，例如 `./venv/bin/ominime report`。
+
+## 日常使用
+
+### 菜单栏应用
+
+```bash
+ominime
 # 或
 ominime app
 ```
 
-启动后，状态栏会出现 ⌨️ 图标，点击可以：
-- 📊 查看今日统计
-- 🌐 打开 Web 后台
-- ▶️ 开始/暂停记录
-- 🔄 设置/取消开机启动
-- 📂 打开数据目录
+菜单栏应用启动后会自动尝试开始记录，并在本机启动 Web 后台。菜单中可以：
 
-### 🌐 Web 后台管理
+- 查看今日统计。
+- 打开 Web 后台。
+- 开始或暂停记录。
+- 查看配置和数据目录。
+- 设置或取消登录后自动启动。
+
+### Web 后台
+
+菜单栏应用运行时，打开：
+
+<http://127.0.0.1:8001>
+
+也可以单独启动 Web 服务：
 
 ```bash
-# 启动 Web 后台
 ominime web
-
-# 指定端口
 ominime web -p 3000
-
-# 开发模式（热重载）
 ominime web --reload
 ```
 
-启动后访问 http://127.0.0.1:8080 查看仪表板：
-- 📊 每日输入统计
-- 📱 应用分布图表
-- 🎯 主线活动梳理
-- 📝 智能总结建议
-- 📋 输入记录详情
+默认只监听 `127.0.0.1:8001`。交互式 API 文档位于 <http://127.0.0.1:8001/docs>。
 
-### 命令行模式
+使用 `-p 3000` 等自定义端口时，下文所有 Web、健康检查和诊断地址也要把 `8001` 替换为该端口。
+
+### 报告、统计与导出
 
 ```bash
-# 命令行实时监控
-ominime monitor
-
-# 查看今日报告
+# 今日报告
 ominime report
 
-# 查看指定日期报告
-ominime report -d 2026-01-08
+# 指定业务日
+ominime report -d 2026-08-05
 
-# 查看最近7天统计
+# 最近 7 天中有记录的日期
 ominime stats
 
-# 导出数据
+# 导出今日数据为 JSON
 ominime export
-ominime export -d 2026-01-08 -o report.json
+
+# 导出指定日期和文件
+ominime export -d 2026-08-05 -o report.json
+
+# 命令行实时监控
+ominime monitor
 ```
 
-## 🔄 开机启动
+未指定 `-o` 时，JSON 会写入当前目录，文件名形如 `ominime_export_2026-08-05.json`。
 
-### 方法一：通过菜单栏设置
+### 导出到 Obsidian
 
-1. 点击菜单栏 ⌨️ 图标
-2. 选择「🔄 设为开机启动」
-
-### 方法二：通过安装脚本
+建议显式传入自己的 Obsidian vault 路径：
 
 ```bash
-# 安装并设置开机启动
-./scripts/install_app.sh
+ominime obsidian -p /path/to/your/vault
+ominime obsidian -d 2026-08-05 -p /path/to/your/vault
 
-# 卸载并移除开机启动
-./scripts/uninstall_app.sh
+# 不包含按应用分组的原始提交内容和 AI 分析
+ominime obsidian -p /path/to/your/vault --no-raw --no-ai
 ```
 
-### 方法三：手动设置
+导出文件会写入 vault 的 `10_Sources/OmniMe/` 目录。常用选项：
 
-```bash
-# 创建 LaunchAgent
-cat > ~/Library/LaunchAgents/com.ominime.app.plist << EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.ominime.app</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>$(which ominime)</string>
-        <string>app</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>LimitLoadToSessionType</key>
-    <string>Aqua</string>
-</dict>
-</plist>
-EOF
+- `--no-raw`：不在日报中包含原始输入内容。
+- `--no-ai`：不生成 AI 分析。
+- 环境变量 `OBSIDIAN_PATH`：设置默认 vault 路径。
 
-# 加载
-launchctl load ~/Library/LaunchAgents/com.ominime.app.plist
-```
+使用 `--no-raw --no-ai` 后，日报仍会包含日期、应用名、字符数、时间分布、常规总结和工作路径等统计信息，但不会包含按应用分组的原始提交正文或 AI 分析。
 
-## 🔐 权限设置
+## OmniMe 会记录什么
 
-首次运行需要授予**辅助功能权限**：
+默认 `enter-text` 模式下，OmniMe 会在文本输入控件中发生 Enter 提交时尝试保存完整内容。它会从当前输入框和近期输入中选择可信内容，尽量只保留输入法最终提交的文字；相同提交在短时间内会去重。
 
-1. 打开「系统偏好设置」
-2. 进入「隐私与安全性」→「辅助功能」
-3. 点击左下角🔒解锁
-4. 添加并勾选 OmniMe（或 Terminal/iTerm）
+下列情况可能只记录字符数或直接跳过：
 
-> ⚠️ 没有此权限，程序无法监听键盘输入
+- 当前焦点不是文本输入框。
+- 输入框没有向 macOS 辅助功能接口开放文字，且无法确认其他备用内容可信。
+- Enter 只用于确认输入法候选，而不是向应用提交内容。
+- 备用内容可能来自整页、聊天历史或其他不可信区域。
+- 使用了 Command 组合键，而不是普通 Enter 提交。
 
-## 🇨🇳 中文输入支持
+位于 `ignored_apps` 中的应用会被直接排除，不保存提交记录。
 
-OmniMe 支持鼠须管(Rime)输入法的中文输入。如果你使用鼠须管：
+默认会保存提交时的文字上下文元数据，例如应用、窗口标题、焦点控件和容器信息，用于 Web 复盘和捕获诊断；当前流程不会为每次提交保存截图。
 
-1. 在 `~/.ominime/` 目录会自动创建 Rime 日志监听
-2. 中英文混合输入（如"这个bug"）会被完整记录
-3. 拼音输入过程中的临时字符会被自动过滤
+## 数据与隐私
 
-## 📊 报告示例
+数据目录为 `~/.ominime/`：
 
-```
-📅 2026-01-08 周四 输入汇总
-========================================
+- `ominime.db`：SQLite 输入记录、提交上下文、捕获诊断和统计数据。
+- `config.json`：可选的用户配置文件；不存在时使用代码默认值。
+- `ominime.log`：应用标准输出日志。
+- `ominime.error.log`：应用错误日志。
+- `logs/`：自动导出等附加任务的日志目录。
 
-📊 总计: 15,234 字符 | 6 应用 | 23 会话
-⏱️  活跃时间: 4小时32分钟
+隐私边界：
 
-📱 应用分布:
-------------------------------
-  Cursor
-    ████████████████░░░░ 8,932字 (58.6%)
-  微信
-    ██████░░░░░░░░░░░░░░ 3,245字 (21.3%)
-  Obsidian
-    ███░░░░░░░░░░░░░░░░░ 1,567字 (10.3%)
-  Safari
-    ██░░░░░░░░░░░░░░░░░░ 980字 (6.4%)
+- 默认数据只写入本机 SQLite。
+- `enter-text` 模式保存可信提交原文和字符数。
+- `count-only` 模式不保存提交原文，但默认仍保存字符数以及应用、窗口和焦点控件等上下文元数据；如需同时关闭上下文元数据，请设置 `capture_context_on_enter` 为 `false`。
+- 无法可信读取原文时，系统会在有足够输入证据时只记录字符数；证据不足或内容可能不安全时仍会跳过。
+- 云端 AI 后端只有在用户配置并启用后才会发送用于分析的数据，其中可能包含已记录的原文或由其生成的摘要。
+- 本地 Ollama 或本地 Qwen 后端可以在本机完成分析。
+- 可以随时从菜单栏暂停记录，或通过 `ignored_apps` 排除应用。
 
-🎯 今日主线活动:
-  1. 代码开发 (8,932 字符)
-  2. 即时通讯 (3,245 字符)
-  3. 笔记写作 (1,567 字符)
+> 输入记录可能包含聊天、命令、笔记等敏感内容。启用云端 AI 前，请先检查后端配置及将要发送的数据。
 
-📝 总结:
-  今日主要精力投入在代码开发上，完成了认证模块的开发。
-  与团队进行了项目进度沟通，整理了会议笔记。
+## 配置
 
-💡 建议:
-  💡 代码输入占比很高，记得适当休息眼睛和手腕
-  ⏰ 今日活跃时间较长，注意劳逸结合
-```
+用户配置位于 `~/.ominime/config.json`。如果文件不存在，可以手动创建；只需要填写想覆盖的字段，其余字段继续使用默认值。
 
-## ⚙️ 配置
-
-配置文件位于 `~/.ominime/config.json`：
+这是 JSON 文件，至少应包含 `{}`。可以先从菜单栏选择“打开数据目录”，再用文本编辑器创建或修改它。
 
 ```json
 {
-  "ai_enabled": false,
-  "openai_model": "gpt-4o-mini",
-  "app_aliases": {
-    "com.tencent.xinWeChat": "微信",
-    "com.todesktop.230313mzl4w4u92": "Cursor",
-    "md.obsidian": "Obsidian"
-  },
+  "input_capture_mode": "enter-text",
+  "count_unreadable_submissions": true,
+  "capture_key_event_text_fallback": true,
+  "capture_context_on_enter": true,
   "ignored_apps": [
-    "com.apple.loginwindow"
+    "com.apple.loginwindow",
+    "com.apple.SecurityAgent"
   ],
   "session_timeout": 300,
-  "min_record_length": 1
+  "ai_enabled": false,
+  "openai_model": "gpt-4o-mini"
 }
 ```
 
-### 启用 AI 功能
+常用配置项：
 
-OmniMe 支持多种 AI 后端，你可以根据需求选择：
+| 配置 | 默认值 | 作用 |
+| --- | --- | --- |
+| `input_capture_mode` | `enter-text` | 使用 `enter-text` 保存可信原文；使用 `count-only` 不保存原文，但仍可保存字符数和上下文元数据。 |
+| `count_unreadable_submissions` | `true` | 输入框不可读时是否降级统计物理输入量。 |
+| `capture_key_event_text_fallback` | `true` | 输入框不可读时，是否接受可信的已提交输入事件文本。 |
+| `capture_context_on_enter` | `true` | 是否保存提交时的文字上下文元数据。 |
+| `day_timezone` | `Asia/Shanghai` | “今日”、日报和统计使用的业务日时区。 |
+| `storage_timezone` | 当前环境时区或 `America/New_York` | 解释数据库无时区时间戳时使用的时区。 |
+| `ignored_apps` | 系统登录与安全界面 | 不记录指定 bundle ID 的应用。 |
 
-#### 🚀 快速设置（推荐）
+修改配置后请重启 OmniMe。安装时也可以通过环境变量设置时区：
 
 ```bash
-# 运行设置向导
+OMINIME_DAY_TIMEZONE=Asia/Shanghai \
+OMINIME_STORAGE_TIMEZONE=America/New_York \
+./scripts/install_app.sh
+```
+
+普通用户不需要把时区写入 `config.json`：`day_timezone` 默认是 `Asia/Shanghai`，决定报告归属哪一天；`storage_timezone` 优先使用 `OMINIME_STORAGE_TIMEZONE` 或系统 `TZ`，都没有时回退到 `America/New_York`。只有跨时区使用或迁移旧数据库时通常才需要显式修改。
+
+要排除应用，需要把它的 bundle ID 加入 `ignored_apps`。例如查询 Safari 的 bundle ID：
+
+```bash
+osascript -e 'id of app "Safari"'
+```
+
+自定义 `ignored_apps` 会替换默认列表，因此建议保留示例中的两个系统安全项，再追加自己的应用。
+
+## 可选 AI 分析
+
+AI 功能用于生成每日总结、主题、工作重点、工作路径和建议。支持 OpenAI 兼容 API、本地 Ollama 和本地 Qwen；不开启 AI 不影响输入记录、统计和导出基础数据。
+
+```bash
 ./scripts/setup_local_llm.sh
-```
-
-设置向导会引导你选择并配置：
-- **Ollama**（本地，最简单）
-- **本地 Qwen 模型**（本地，更灵活）
-- **OpenAI API**（云端，质量最好）
-
-#### 📖 详细配置指南
-
-查看完整的配置文档：
-- [LLM 后端配置指南](docs/LLM_BACKENDS.md) - 各后端对比和配置
-- [本地 LLM 部署指南](docs/LOCAL_LLM_GUIDE.md) - 详细的安装和优化指南
-
-#### ⚡ 快速配置示例
-
-**使用 OpenAI API**:
-```bash
-# 编辑 .env 文件
-LLM_BACKEND=openai
-OPENAI_API_KEY=sk-xxx
-OPENAI_MODEL=gpt-4o-mini
-```
-
-**使用本地 Ollama**（推荐隐私保护）:
-```bash
-# 1. 安装 Ollama
-brew install ollama
-
-# 2. 下载模型
-ollama pull qwen2.5:7b
-
-# 3. 配置 .env
-LLM_BACKEND=ollama
-OLLAMA_MODEL=qwen2.5:7b
-```
-
-**使用本地 Qwen 模型**:
-```bash
-# 1. 安装依赖
-pip install transformers torch accelerate
-
-# 2. 配置 .env
-LLM_BACKEND=qwen-local
-QWEN_MODEL=Qwen/Qwen2.5-7B-Instruct
-```
-
-**使用公司内部模型**:
-```bash
-# 配置 .env
-LLM_BACKEND=openai
-OPENAI_API_KEY=your-company-key
-OPENAI_BASE_URL=https://your-company-api.com/v1
-OPENAI_MODEL=your-model-name
-```
-
-#### 🧪 测试配置
-
-```bash
-# 测试 LLM 后端是否正常工作
 python3 scripts/test_llm.py
 ```
 
-#### 💡 AI 功能说明
+详细说明：
 
-启用 AI 后，系统会进行：
-- 📝 **智能总结**：生成每日工作内容的深度分析（150-200字）
-- 🎯 **主题分析**：分析今日主题、工作重点、关注点和洞察启发
-- 🤖 **工作路径分析**：分析工作节奏、应用使用模式、专注度评估（300-400字）
-- 💡 **个性化建议**：基于数据生成3-5条可执行的优化建议
-- 📄 **自动导出**：每天 23:30 自动导出到 Obsidian
+- [LLM 后端配置指南](docs/LLM_BACKENDS.md)
+- [本地 LLM 部署指南](docs/LOCAL_LLM_GUIDE.md)
 
-#### 🔒 隐私对比
+## 运行检查与排障
 
-| 后端 | 数据位置 | 隐私性 | 成本 |
-|------|----------|--------|------|
-| Ollama | 完全本地 | ⭐⭐⭐⭐⭐ | 免费 |
-| 本地 Qwen | 完全本地 | ⭐⭐⭐⭐⭐ | 免费 |
-| OpenAI API | 云端 | ⭐⭐ | 按量付费 |
-| 公司模型 | 公司服务器 | ⭐⭐⭐⭐ | 取决于公司 |
+### 查看当前状态
 
-## 📁 项目结构
-
-```
-ominime/
-├── src/
-│   └── ominime/
-│       ├── __init__.py          # 包初始化
-│       ├── main.py              # 主入口
-│       ├── config.py            # 配置管理
-│       ├── keyboard_listener.py # 键盘监听
-│       ├── app_tracker.py       # 应用追踪
-│       ├── database.py          # 数据存储
-│       ├── analyzer.py          # 分析汇总
-│       ├── menu_bar.py          # Menu Bar 应用（旧版）
-│       ├── menu_bar_app.py      # Menu Bar 应用（完整版）
-│       ├── app_entry.py         # 桌面应用入口
-│       └── web/
-│           ├── api.py           # Web API
-│           ├── server.py        # Web 服务器
-│           └── templates/       # 前端模板
-├── scripts/
-│   ├── install_app.sh           # 安装脚本
-│   ├── uninstall_app.sh         # 卸载脚本
-│   └── create_icon.py           # 图标生成
-├── resources/
-│   └── com.ominime.app.plist    # LaunchAgent 模板
-├── requirements.txt
-├── setup.py
-├── setup_app.py                 # py2app 配置
-└── README.md
-```
-
-## 🗄️ 数据存储
-
-所有数据存储在 `~/.ominime/` 目录：
-
-- `ominime.db` - SQLite 数据库
-- `config.json` - 配置文件
-- `rime_input.log` - Rime 输入日志
-- `ominime.log` - 应用日志
-- `ominime.error.log` - 错误日志
-
-### 数据库表结构
-
-```sql
--- 输入记录表
-input_records (
-    timestamp, app_name, app_bundle_id, 
-    display_name, content, char_count, 
-    session_id, duration_seconds
-)
-
--- 每日应用汇总
-daily_summaries (
-    date, app_name, total_chars, 
-    session_count, content_summary, suggestions
-)
-
--- 全局每日汇总
-global_daily_summaries (
-    date, total_chars, total_apps, 
-    main_activities, summary, suggestions
-)
-```
-
-## 🔒 隐私说明
-
-- **本地存储**: 所有数据仅存储在本地 `~/.ominime/` 目录
-- **无网络传输**: 除非启用 AI 功能，否则不进行任何网络通信
-- **可选 AI**: AI 总结功能可选，需手动启用
-- **完全控制**: 你可以随时暂停记录、删除数据
-
-## 🛠️ 开发
+桌面应用运行时访问：
 
 ```bash
-# 安装开发依赖
-pip install -e ".[ai]"
-
-# 运行测试
-python -m ominime.keyboard_listener  # 测试键盘监听
-python -m ominime.database           # 测试数据库
-python -m ominime.analyzer           # 测试分析器
+curl http://127.0.0.1:8001/api/health
 ```
 
-## 📝 更新日志
+返回内容包括记录状态、今日字符数、最近写入、捕获模式、数据库路径，以及最近一次捕获诊断。
 
-### v0.1.1 (2026-01-10)
-- ✅ 完整版桌面应用（Menu Bar）
-- ✅ 开机启动支持
-- ✅ 改进应用识别（使用 CGEvent 目标进程 PID）
-- ✅ 中英文混合输入支持
-- ✅ 一键安装/卸载脚本
+`recording_status` 的常见值：
 
-### v0.1.0 (2026-01-08)
-- 🎉 首次发布
-- ✅ 全局键盘监听
-- ✅ 应用识别
-- ✅ SQLite 数据存储
-- ✅ 每日报告生成
-- ✅ Menu Bar 应用
-- ✅ 命令行界面
-- ✅ Web 后台管理
+- `recording`：正在记录。
+- `paused`：已暂停。
+- `permission_missing`：缺少辅助功能权限。
+- `starting`：正在启动。
+- `error`：监听启动或运行失败，可结合 `last_runtime_error` 和错误日志排查。
 
-## 📄 License
+查看最近的捕获决策：
+
+```bash
+curl 'http://127.0.0.1:8001/api/capture/diagnostics?limit=20'
+```
+
+诊断中的常见结果：
+
+- `persist_text`：保存了可信原文。
+- `persist_count`：只保存字符数。
+- `focused_element_not_text_input`：Enter 发生时焦点不是文本输入控件。
+- `ime_commit_only`：这次 Enter 只用于确认输入法候选。
+- `unsafe_clipboard_rejected`：备用内容可能包含非输入内容，因此被拒绝。
+- `no_trusted_content`：没有找到可信的提交内容。
+
+### 没有记录到内容
+
+1. 确认菜单栏不是 `⌨️ ⏸` 或 `⌨️ ⚠`。
+2. 重新检查辅助功能权限，并重启 OmniMe。
+3. 确认焦点位于真正的文本输入框中。
+4. 查看 `/api/health` 的 `recording_status` 和 `last_capture_diagnostic`。
+5. 检查 `~/.ominime/ominime.error.log`。
+
+### 菜单栏图标没有出现或 Web 无法访问
+
+先确认 LaunchAgent 已加载：
+
+```bash
+launchctl print "gui/$(id -u)/com.ominime.app"
+```
+
+然后重新启动：
+
+```bash
+launchctl kickstart -k "gui/$(id -u)/com.ominime.app"
+```
+
+仍未出现时，查看 `~/.ominime/ominime.log` 和 `~/.ominime/ominime.error.log`。也可以在项目目录直接运行 `./venv/bin/ominime app`，从终端输出中查看启动错误。
+
+### 卸载
+
+```bash
+./scripts/uninstall_app.sh
+```
+
+卸载脚本会停止进程并移除 LaunchAgent，然后询问是否删除 `~/.ominime/`。选择删除会永久移除本地记录，请先备份需要保留的数据。
+
+## 开发与验证
+
+```bash
+source venv/bin/activate
+pip install -e .
+python -m pytest -q
+```
+
+查看全部 CLI：
+
+```bash
+ominime --help
+```
+
+## License
 
 MIT License
-
----
-
-**OmniMe** - 了解你的时间都花在哪里 ⌨️
