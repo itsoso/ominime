@@ -86,6 +86,25 @@ class SubmissionContextRecord:
     capture_error: Optional[str] = None
 
 
+@dataclass
+class CaptureDiagnosticRecord:
+    """Enter 捕获决策诊断记录"""
+    id: Optional[int]
+    timestamp: datetime
+    app_name: str
+    app_bundle_id: str
+    event_type: str
+    decision_action: str
+    decision_reason: str
+    selected_source: Optional[str] = None
+    selected_confidence: Optional[float] = None
+    physical_key_count: Optional[int] = None
+    focused_role: Optional[str] = None
+    focused_subrole: Optional[str] = None
+    capture_status: str = "ok"
+    diagnostics_json: Optional[str] = None
+
+
 class Database:
     """
     数据库管理类
@@ -217,6 +236,34 @@ class Database:
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_submission_contexts_input_record
                 ON submission_contexts(input_record_id)
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS capture_diagnostics (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp DATETIME NOT NULL,
+                    app_name TEXT NOT NULL,
+                    app_bundle_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    decision_action TEXT NOT NULL,
+                    decision_reason TEXT NOT NULL,
+                    selected_source TEXT,
+                    selected_confidence REAL,
+                    physical_key_count INTEGER,
+                    focused_role TEXT,
+                    focused_subrole TEXT,
+                    capture_status TEXT NOT NULL,
+                    diagnostics_json TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_capture_diagnostics_timestamp
+                ON capture_diagnostics(timestamp)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_capture_diagnostics_decision
+                ON capture_diagnostics(decision_action)
             """)
     
     # ===== 输入记录操作 =====
@@ -479,6 +526,48 @@ class Database:
             capture_status=row["capture_status"],
             capture_error=row["capture_error"],
         )
+
+    # ===== 捕获诊断操作 =====
+
+    def save_capture_diagnostic(self, record: CaptureDiagnosticRecord) -> int:
+        """保存一次 Enter 捕获决策诊断。"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO capture_diagnostics
+                (timestamp, app_name, app_bundle_id, event_type, decision_action,
+                 decision_reason, selected_source, selected_confidence,
+                 physical_key_count, focused_role, focused_subrole, capture_status,
+                 diagnostics_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                record.timestamp.isoformat(),
+                record.app_name,
+                record.app_bundle_id,
+                record.event_type,
+                record.decision_action,
+                record.decision_reason,
+                record.selected_source,
+                record.selected_confidence,
+                record.physical_key_count,
+                record.focused_role,
+                record.focused_subrole,
+                record.capture_status,
+                record.diagnostics_json,
+            ))
+            return cursor.lastrowid
+
+    def get_recent_capture_diagnostics(self, limit: int = 50) -> List[Dict]:
+        """查询最近的 Enter 捕获决策诊断。"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT *
+                FROM capture_diagnostics
+                ORDER BY timestamp DESC, id DESC
+                LIMIT ?
+            """, (limit,))
+            return [dict(row) for row in cursor.fetchall()]
     
     # ===== 每日汇总操作 =====
     
@@ -668,7 +757,7 @@ class Database:
             """, (start.isoformat(), end.isoformat()))
             
             return cursor.fetchone()['total']
-    
+
     def get_recent_days_summary(self, days: int = 7) -> List[Dict]:
         """获取最近几天的汇总"""
         with self._get_connection() as conn:

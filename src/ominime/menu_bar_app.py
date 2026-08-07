@@ -10,6 +10,10 @@ import webbrowser
 import os
 import sys
 import time
+import json
+import subprocess
+from urllib.error import URLError
+from urllib.request import urlopen
 from datetime import date
 from typing import Optional
 
@@ -19,8 +23,39 @@ from .database import get_database, InputRecord
 from .config import config
 from .input_snapshot import normalize_submission_text, should_save_submission_snapshot
 from .runtime_state import set_recording_status
-from .submission_processor import save_submission_event
+from .submission_processor import save_capture_diagnostic_event, save_submission_event
 from .time_utils import business_today
+
+
+WEB_HEALTH_URL = "http://127.0.0.1:8001/api/health"
+STANDALONE_WEB_LAUNCH_AGENT = "com.ominime.web"
+
+
+def _is_web_service_healthy(timeout_seconds: float = 0.5) -> bool:
+    """Return whether the configured local port already serves OmniMe."""
+    try:
+        with urlopen(WEB_HEALTH_URL, timeout=timeout_seconds) as response:
+            if response.status != 200:
+                return False
+            payload = json.loads(response.read().decode("utf-8"))
+            return isinstance(payload, dict) and payload.get("status") == "running"
+    except (URLError, OSError, TimeoutError, ValueError, json.JSONDecodeError):
+        return False
+
+
+def _is_standalone_web_service_managed() -> bool:
+    """Return whether launchd already owns the standalone Web service."""
+    result = subprocess.run(
+        [
+            "launchctl",
+            "print",
+            f"gui/{os.getuid()}/{STANDALONE_WEB_LAUNCH_AGENT}",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode == 0
 
 
 class OmniMeMenuBarApp(rumps.App):
@@ -189,17 +224,34 @@ class OmniMeMenuBarApp(rumps.App):
             return
 
         self._last_submission_snapshot = (*current_snapshot, now)
-        self._save_submission_snapshot(event, content)
-        self._refresh_today_chars(force=True)
+        if not self._save_submission_snapshot(event, content):
+            return
+        self._refresh_today_chars()
+        self._today_chars += self._title_char_count(event, content)
         # 更新标题
         self._update_title()
 
-    def _save_submission_snapshot(self, event: KeyEvent, content: str):
+    def _save_submission_snapshot(self, event: KeyEvent, content: str) -> bool:
         """保存 Enter 提交时读取到的完整输入框内容。"""
         try:
             save_submission_event(self.db, event, content)
+            return True
         except Exception as e:
             print(f"保存提交快照失败: {e}")
+            return False
+
+    def _title_char_count(self, event: KeyEvent, content: str) -> int:
+        override = event.modifiers.get("char_count_override")
+        if isinstance(override, int) and override >= 0:
+            return override
+        return len(content)
+
+    def _save_capture_diagnostic(self, diagnostic: dict):
+        """保存 Enter 捕获诊断，不影响主输入记录链路。"""
+        try:
+            save_capture_diagnostic_event(self.db, diagnostic)
+        except Exception as e:
+            print(f"保存捕获诊断失败: {e}")
     
     def _save_session(self, session):
         """保存会话到数据库"""
@@ -240,11 +292,11 @@ class OmniMeMenuBarApp(rumps.App):
             self.title = "⌨️ ⏸"
 
     def _refresh_today_chars(self, force=False) -> bool:
-        """Refresh cached title counter and reset it across local day boundaries."""
+        """Reset the live title counter across the configured business day."""
         today = business_today()
-        if force or getattr(self, "_today_date", None) != today:
+        if getattr(self, "_today_date", None) != today:
             self._today_date = today
-            self._today_chars = self.db.get_total_chars_today()
+            self._today_chars = 0
             return True
         return False
     
@@ -270,7 +322,10 @@ class OmniMeMenuBarApp(rumps.App):
     
     def _start_recording_internal(self):
         """内部启动记录（不更新菜单）"""
-        self.listener = KeyboardListener(self._on_key_event)
+        self.listener = KeyboardListener(
+            self._on_key_event,
+            diagnostics_callback=self._save_capture_diagnostic,
+        )
         self.listener.start()
         self._is_recording = True
         set_recording_status("recording")
@@ -344,6 +399,14 @@ class OmniMeMenuBarApp(rumps.App):
     def _start_web_server(self):
         """启动 Web 服务器"""
         if self._web_server_running:
+            return
+        if _is_web_service_healthy():
+            self._web_server_running = True
+            print("✅ 已复用正在运行的 OmniMe Web 服务")
+            return
+        if _is_standalone_web_service_managed():
+            self._web_server_running = True
+            print("✅ Web 服务由独立 LaunchAgent 管理")
             return
         
         def run_server():

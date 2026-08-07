@@ -151,6 +151,27 @@ def _parse_json_field(value):
         return value
 
 
+def _serialize_capture_diagnostic(row: dict | None):
+    if not row:
+        return None
+    return {
+        "id": row["id"],
+        "timestamp": row["timestamp"],
+        "app_name": row["app_name"],
+        "app_bundle_id": row["app_bundle_id"],
+        "event_type": row["event_type"],
+        "decision_action": row["decision_action"],
+        "decision_reason": row["decision_reason"],
+        "selected_source": row["selected_source"],
+        "selected_confidence": row["selected_confidence"],
+        "physical_key_count": row["physical_key_count"],
+        "focused_role": row["focused_role"],
+        "focused_subrole": row["focused_subrole"],
+        "capture_status": row["capture_status"],
+        "diagnostics": _parse_json_field(row["diagnostics_json"]) or {},
+    }
+
+
 def _build_health_payload() -> dict:
     db = get_database()
     today = business_today()
@@ -158,6 +179,7 @@ def _build_health_payload() -> dict:
     latest = db.get_latest_input_record()
     yesterday_stats = db.get_daily_stats(yesterday)
     runtime = get_runtime_state()
+    diagnostics = db.get_recent_capture_diagnostics(limit=1)
 
     return {
         "status": "running",
@@ -173,6 +195,11 @@ def _build_health_payload() -> dict:
         ),
         "last_runtime_error": runtime.last_error,
         "process_id": os.getpid(),
+        "web_process_id": os.getpid(),
+        "listener_process_id": runtime.process_id,
+        "runtime_heartbeat_at": (
+            runtime.heartbeat_at.isoformat() if runtime.heartbeat_at else None
+        ),
         "today_date": today.isoformat(),
         "today_chars": db.get_total_chars_today(),
         "yesterday_date": yesterday.isoformat(),
@@ -183,6 +210,9 @@ def _build_health_payload() -> dict:
         "input_capture_mode": getattr(config, "input_capture_mode", "enter-text"),
         "capture_context_on_enter": config.capture_context_on_enter,
         "multimodal_context_analysis": config.multimodal_context_analysis,
+        "last_capture_diagnostic": _serialize_capture_diagnostic(
+            diagnostics[0] if diagnostics else None
+        ),
         "db_path": str(config.db_path),
         "data_dir": str(config.data_dir),
     }
@@ -212,6 +242,17 @@ async def get_status():
 async def get_health():
     """获取运行状态和最近写入诊断信息"""
     return _build_health_payload()
+
+
+@app.get("/api/capture/diagnostics")
+async def get_capture_diagnostics(limit: int = Query(default=50, ge=1, le=500)):
+    """获取最近的 Enter 捕获决策诊断。"""
+    db = get_database()
+    rows = db.get_recent_capture_diagnostics(limit=limit)
+    return {
+        "total": len(rows),
+        "diagnostics": [_serialize_capture_diagnostic(row) for row in rows],
+    }
 
 
 @app.get("/api/overview")

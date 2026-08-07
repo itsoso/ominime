@@ -74,7 +74,7 @@ def cmd_monitor(args):
         normalize_submission_text,
         should_save_submission_snapshot,
     )
-    from .submission_processor import save_submission_event
+    from .submission_processor import save_capture_diagnostic_event, save_submission_event
     
     db = get_database()
     
@@ -123,7 +123,10 @@ def cmd_monitor(args):
 
         save_submission_event(db, event, content)
     
-    listener = KeyboardListener(on_key)
+    def on_capture_diagnostic(diagnostic: dict):
+        save_capture_diagnostic_event(db, diagnostic)
+
+    listener = KeyboardListener(on_key, diagnostics_callback=on_capture_diagnostic)
     listener.start()
     
     console.print("[green]✅ 监听已启动，按 Ctrl+C 停止[/green]")

@@ -50,10 +50,21 @@ import Quartz
 import objc
 
 from .config import config
-from .context_capture import capture_accessibility_context, context_to_dict
+from .context_capture import (
+    capture_accessibility_context,
+    context_to_dict,
+    focused_field_identity,
+    is_secure_text_entry_context,
+    is_text_entry_context,
+)
 from .input_snapshot import format_submission_terminal_notice, normalize_submission_text
-from .runtime_state import set_recording_status
+from .runtime_state import refresh_runtime_heartbeat, set_recording_status
 from .time_utils import storage_now
+
+
+EVENT_TAP_DISABLED_BY_TIMEOUT = getattr(Quartz, "kCGEventTapDisabledByTimeout", -1)
+EVENT_TAP_DISABLED_BY_USER_INPUT = getattr(Quartz, "kCGEventTapDisabledByUserInput", -2)
+KEYBOARD_EVENT_AUTOREPEAT_FIELD = getattr(Quartz, "kCGKeyboardEventAutorepeat", 8)
 
 
 @dataclass
@@ -66,6 +77,20 @@ class KeyEvent:
     app_bundle_id: str
     modifiers: dict
     is_ime_input: bool = False
+
+
+@dataclass(frozen=True)
+class RawKeyboardEvent:
+    """Small immutable sample safe to move off the EventTap callback thread."""
+
+    event_type: int
+    keycode: int
+    text: str
+    app_name: str
+    bundle_id: str
+    modifiers: dict
+    target_pid: int = 0
+    is_autorepeat: bool = False
 
 
 # 键码映射
@@ -118,9 +143,51 @@ MAX_TEXT_FALLBACK_BUFFER_CHARS = 2000
 MAX_KEY_EVENT_TEXT_CHARS = 64
 MAX_RECENT_TEXT_SNAPSHOT_AGE_SECONDS = 60
 TEXT_FALLBACK_EVENT_DEDUP_SECONDS = 0.2
-CLIPBOARD_COPY_FALLBACK_DELAY_SECONDS = 0.06
-CLIPBOARD_COPY_FALLBACK_MAX_CHARS = 4000
-LATIN_IME_COMMIT_CLIPBOARD_ALLOW_SECONDS = 30
+MAX_TRUSTED_SUBMISSION_CHARS = 4000
+EVENT_QUEUE_MAX_SIZE = 4096
+EDITOR_NEWLINE_BUNDLE_PREFIXES = (
+    "com.apple.TextEdit",
+    "com.apple.Notes",
+    "com.apple.iWork.Pages",
+    "com.microsoft.Word",
+    "com.microsoft.VSCode",
+    "com.sublimetext",
+    "com.todesktop.230313mzl4w4u92",  # Cursor
+    "com.jetbrains.",
+    "com.apple.dt.Xcode",
+    "md.obsidian",
+    "com.notion.Notion",
+    "com.kingsoft.wpsoffice",
+)
+BROWSER_BUNDLE_IDS = {
+    "com.apple.Safari",
+    "com.google.Chrome",
+    "org.mozilla.firefox",
+    "com.brave.Browser",
+    "com.microsoft.edgemac",
+    "company.thebrowser.Browser",  # Arc
+    "com.operasoftware.Opera",
+    "com.vivaldi.Vivaldi",
+}
+SUBMISSION_TEXT_AREA_HINTS = (
+    "chat",
+    "command",
+    "prompt",
+    "query",
+    "search",
+)
+BROWSER_BUNDLE_HINTS = (
+    "arc",
+    "brave",
+    "browser",
+    "chrome",
+    "chromium",
+    "edge",
+    "firefox",
+    "opera",
+    "safari",
+    "vivaldi",
+)
 
 
 def _clean_key_event_text(text: str) -> str:
@@ -136,6 +203,38 @@ def _contains_cjk(text: str) -> bool:
         or ("\uf900" <= ch <= "\ufaff")
         for ch in text
     )
+
+
+def _enter_is_editor_newline(app_name: str, bundle_id: str, context) -> bool:
+    role = getattr(context, "focused_role", None)
+    if isinstance(context, dict):
+        role = context.get("focused_role")
+    if role != "AXTextArea":
+        return False
+    normalized_bundle = bundle_id or ""
+    if any(
+        normalized_bundle == prefix or normalized_bundle.startswith(prefix)
+        for prefix in EDITOR_NEWLINE_BUNDLE_PREFIXES
+    ):
+        return True
+    normalized_bundle_casefold = normalized_bundle.casefold()
+    is_browser = normalized_bundle in BROWSER_BUNDLE_IDS or any(
+        hint in normalized_bundle_casefold for hint in BROWSER_BUNDLE_HINTS
+    )
+    if not is_browser:
+        return False
+    if isinstance(context, dict):
+        semantic_text = " ".join(
+            str(context.get(key) or "")
+            for key in ("focused_identifier", "focused_title", "focused_description")
+        )
+    else:
+        semantic_text = " ".join(
+            str(getattr(context, key, None) or "")
+            for key in ("focused_identifier", "focused_title", "focused_description")
+        )
+    normalized_semantics = semantic_text.casefold()
+    return not any(hint in normalized_semantics for hint in SUBMISSION_TEXT_AREA_HINTS)
 
 
 def set_last_input_app(name: str, bundle_id: str):
@@ -402,8 +501,13 @@ class KeyboardListener:
     # 最大重试次数
     MAX_RETRY_COUNT = 3
 
-    def __init__(self, callback: Callable[[KeyEvent], None]):
+    def __init__(
+        self,
+        callback: Callable[[KeyEvent], None],
+        diagnostics_callback: Optional[Callable[[dict], None]] = None,
+    ):
         self.callback = callback
+        self.diagnostics_callback = diagnostics_callback
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._health_check_thread: Optional[threading.Thread] = None
@@ -420,11 +524,20 @@ class KeyboardListener:
         self._fallback_buffer_updated_at: dict[tuple[str, str], float] = {}
         self._text_fallback_buffers: dict[tuple[str, str], list[str]] = {}
         self._text_fallback_buffer_updated_at: dict[tuple[str, str], float] = {}
-        self._recent_text_snapshots: dict[tuple[str, str], tuple[str, float]] = {}
+        self._recent_text_snapshots: dict[tuple[str, str], tuple[str, float, str | None]] = {}
+        self._active_field_ids: dict[tuple[str, str], str | None] = {}
+        self._text_fallback_field_ids: dict[tuple[str, str], str | None] = {}
+        self._fallback_field_ids: dict[tuple[str, str], str | None] = {}
         self._last_text_fallback_events: dict[tuple[str, str], tuple[int, str, float]] = {}
-        self._latin_preedit_pending: dict[tuple[str, str], bool] = {}
-        self._ignore_enter_keyup_until: dict[tuple[str, str], float] = {}
-        self._allow_clipboard_after_latin_commit_until: dict[tuple[str, str], tuple[float, int]] = {}
+        self._pending_enter_keyups: set[tuple[str, str]] = set()
+        self._event_queue: queue.Queue[RawKeyboardEvent | None] = queue.Queue(
+            maxsize=EVENT_QUEUE_MAX_SIZE
+        )
+        self._event_worker_thread: Optional[threading.Thread] = None
+        self._event_worker_running = False
+        self._has_started = False
+        self._event_processing_lock = threading.Lock()
+        self._dropped_event_count = 0
     
     def _on_rime_input(self, text: str, timestamp: datetime, app_name: str, bundle_id: str):
         """Rime log events are ignored in submission-snapshot mode."""
@@ -468,11 +581,32 @@ class KeyboardListener:
                 print(f"[DEBUG] focused text snapshot failed: {e}")
         return ""
 
+    def _capture_focused_context(self, *, max_depth: int | None = None):
+        if max_depth is None:
+            return capture_accessibility_context()
+        try:
+            return capture_accessibility_context(max_depth=max_depth)
+        except TypeError:
+            # Lightweight test doubles and older capture implementations may
+            # only expose the zero-argument form.
+            return capture_accessibility_context()
+
+    def _context_to_dict_safe(self, context) -> dict:
+        try:
+            return context_to_dict(context)
+        except Exception:
+            return {}
+
     def _get_event_target_app(self, event) -> tuple[str, str]:
-        target_pid = CGEventGetIntegerValueField(event, 40)  # kCGEventTargetUnixProcessID
+        target_pid = self._get_event_target_pid(event)
         if target_pid > 0:
             return get_app_by_pid(target_pid)
         return get_frontmost_app()
+
+    def _get_event_target_pid(self, event) -> int:
+        return int(
+            CGEventGetIntegerValueField(event, 40) or 0
+        )  # kCGEventTargetUnixProcessID
 
     def _fallback_buffer_key(self, app_name: str, bundle_id: str) -> tuple[str, str]:
         return (app_name or "Unknown", bundle_id or "unknown")
@@ -488,9 +622,8 @@ class KeyboardListener:
             return ""
         try:
             actual_length, text = getter(event, MAX_KEY_EVENT_TEXT_CHARS, None, None)
-        except Exception as e:
-            if _DEBUG:
-                print(f"[DEBUG] keyboard unicode read failed: {e}")
+        except Exception:
+            self._dropped_event_count += 1
             return ""
 
         if not text:
@@ -503,7 +636,7 @@ class KeyboardListener:
         bundle_id: str,
         keycode: int,
         modifiers: dict,
-        event,
+        event_text: str,
         *,
         track_editing_keys: bool = True,
     ):
@@ -526,11 +659,10 @@ class KeyboardListener:
                 self._text_fallback_buffer_updated_at[key] = time.monotonic()
             return
 
-        text = self._get_keyboard_event_text(event)
+        text = event_text
         if not text or not _contains_cjk(text):
             return
 
-        self._latin_preedit_pending[key] = False
         now = time.monotonic()
         previous = self._last_text_fallback_events.get(key)
         if (
@@ -543,6 +675,7 @@ class KeyboardListener:
             return
 
         buffer = self._text_fallback_buffers.setdefault(key, [])
+        self._text_fallback_field_ids[key] = self._active_field_ids.get(key)
         buffer.append(text)
         joined_len = sum(len(part) for part in buffer)
         while buffer and joined_len > MAX_TEXT_FALLBACK_BUFFER_CHARS:
@@ -550,11 +683,23 @@ class KeyboardListener:
         self._text_fallback_buffer_updated_at[key] = now
         self._last_text_fallback_events[key] = (keycode, text, now)
 
-    def _pop_text_fallback_content(self, app_name: str, bundle_id: str) -> str:
+    def _pop_text_fallback_content(
+        self,
+        app_name: str,
+        bundle_id: str,
+        current_field_id: str | None = None,
+    ) -> str:
         key = self._fallback_buffer_key(app_name, bundle_id)
         updated_at = self._text_fallback_buffer_updated_at.pop(key, None)
         buffer = self._text_fallback_buffers.pop(key, [])
+        buffer_field_id = self._text_fallback_field_ids.pop(key, None)
         self._last_text_fallback_events.pop(key, None)
+        if (
+            current_field_id is None
+            or buffer_field_id is None
+            or current_field_id != buffer_field_id
+        ):
+            return ""
         if self._is_fallback_buffer_expired(updated_at):
             return ""
         content = "".join(buffer)
@@ -564,23 +709,57 @@ class KeyboardListener:
 
     def _record_recent_text_snapshot(self, app_name: str, bundle_id: str, *, clear_on_empty: bool = False):
         key = self._fallback_buffer_key(app_name, bundle_id)
+        context = self._capture_focused_context(max_depth=1)
+        if not is_text_entry_context(context):
+            self._recent_text_snapshots.pop(key, None)
+            return
+        if is_secure_text_entry_context(context):
+            self._clear_submission_buffers(app_name, bundle_id)
+            return
+
+        field_id = focused_field_identity(context)
+        previous_field_id = self._active_field_ids.get(key)
+        if field_id is not None and previous_field_id is not None and field_id != previous_field_id:
+            self._clear_submission_buffers(app_name, bundle_id)
+        self._active_field_ids[key] = field_id
+
+        focused_value = getattr(context, "focused_value", None)
+        if not isinstance(focused_value, str):
+            focused_value = self._get_focused_text_snapshot()
         content = normalize_submission_text(
-            self._get_focused_text_snapshot(),
+            focused_value,
             app_name=app_name,
             bundle_id=bundle_id,
         )
-        if content:
-            self._recent_text_snapshots[key] = (content, time.monotonic())
+        if content and len(content) <= MAX_TRUSTED_SUBMISSION_CHARS:
+            self._recent_text_snapshots[key] = (content, time.monotonic(), field_id)
         elif clear_on_empty:
             self._recent_text_snapshots.pop(key, None)
 
-    def _pop_recent_text_snapshot_content(self, app_name: str, bundle_id: str) -> str:
+    def _pop_recent_text_snapshot_content(
+        self,
+        app_name: str,
+        bundle_id: str,
+        current_field_id: str | None = None,
+    ) -> str:
         key = self._fallback_buffer_key(app_name, bundle_id)
         snapshot = self._recent_text_snapshots.pop(key, None)
         if snapshot is None:
             return ""
-        content, updated_at = snapshot
+        if len(snapshot) == 2:  # Compatibility with snapshots created before field scoping.
+            content, updated_at = snapshot
+            snapshot_field_id = None
+        else:
+            content, updated_at, snapshot_field_id = snapshot
+        if (
+            current_field_id is None
+            or snapshot_field_id is None
+            or current_field_id != snapshot_field_id
+        ):
+            return ""
         if time.monotonic() - updated_at > MAX_RECENT_TEXT_SNAPSHOT_AGE_SECONDS:
+            return ""
+        if len(content) > MAX_TRUSTED_SUBMISSION_CHARS:
             return ""
         return content
 
@@ -592,6 +771,7 @@ class KeyboardListener:
         key = self._fallback_buffer_key(app_name, bundle_id)
         self._text_fallback_buffers.pop(key, None)
         self._text_fallback_buffer_updated_at.pop(key, None)
+        self._text_fallback_field_ids.pop(key, None)
         self._last_text_fallback_events.pop(key, None)
 
     def _record_fallback_key(self, app_name: str, bundle_id: str, keycode: int, modifiers: dict):
@@ -618,226 +798,100 @@ class KeyboardListener:
             return
 
         buffer.append(char)
-        if char.strip() and char.isascii():
-            self._latin_preedit_pending[key] = True
+        self._fallback_field_ids[key] = self._active_field_ids.get(key)
         if len(buffer) > MAX_FALLBACK_BUFFER_CHARS:
             del buffer[: len(buffer) - MAX_FALLBACK_BUFFER_CHARS]
         self._fallback_buffer_updated_at[key] = time.monotonic()
 
-    def _pop_fallback_count(self, app_name: str, bundle_id: str) -> int:
-        key = self._fallback_buffer_key(app_name, bundle_id)
-        updated_at = self._fallback_buffer_updated_at.pop(key, None)
-        buffer = self._fallback_buffers.pop(key, [])
-        if self._is_fallback_buffer_expired(updated_at):
-            return 0
-        return len(buffer)
-
-    def _copy_focused_submission_via_clipboard(
+    def _pop_fallback_count(
         self,
         app_name: str,
         bundle_id: str,
-        fallback_count: int = 0,
-    ) -> str:
-        """Copy focused field text as a last resort for apps without AX text."""
-        if config.is_app_ignored(bundle_id):
-            return ""
-
-        snapshot = self._snapshot_general_pasteboard()
-        try:
-            if not self._post_command_key(0):  # Cmd+A
-                return ""
-            time.sleep(CLIPBOARD_COPY_FALLBACK_DELAY_SECONDS)
-            if not self._post_command_key(8):  # Cmd+C
-                return ""
-            time.sleep(CLIPBOARD_COPY_FALLBACK_DELAY_SECONDS)
-            content = normalize_submission_text(
-                self._read_general_pasteboard_text(),
-                app_name=app_name,
-                bundle_id=bundle_id,
+        current_field_id: str | None = None,
+    ) -> int:
+        key = self._fallback_buffer_key(app_name, bundle_id)
+        updated_at = self._fallback_buffer_updated_at.pop(key, None)
+        buffer = self._fallback_buffers.pop(key, [])
+        buffer_field_id = self._fallback_field_ids.pop(key, None)
+        if (
+            (current_field_id is None) != (buffer_field_id is None)
+            or (
+                current_field_id is not None
+                and buffer_field_id is not None
+                and current_field_id != buffer_field_id
             )
-            self._post_plain_key(124)  # Right Arrow clears the Cmd+A selection.
-            if not content:
-                return ""
-            if not self._is_reasonable_clipboard_submission(content, fallback_count):
-                return ""
-            return content
-        except Exception as e:
-            if _DEBUG:
-                print(f"[DEBUG] clipboard copy fallback failed: {e}")
-            return ""
-        finally:
-            self._restore_general_pasteboard(snapshot)
-
-    def _can_use_clipboard_copy_fallback(self) -> bool:
-        return bool(
-            getattr(Quartz, "CGEventCreateKeyboardEvent", None)
-            and getattr(Quartz, "CGEventSetFlags", None)
-            and getattr(Quartz, "CGEventPost", None)
-            and getattr(Quartz, "kCGHIDEventTap", None) is not None
-        )
-
-    def _post_command_key(self, keycode: int) -> bool:
-        return self._post_key(keycode, kCGEventFlagMaskCommand)
-
-    def _post_plain_key(self, keycode: int) -> bool:
-        return self._post_key(keycode, 0)
-
-    def _post_key(self, keycode: int, flags: int) -> bool:
-        create_event = getattr(Quartz, "CGEventCreateKeyboardEvent", None)
-        set_flags = getattr(Quartz, "CGEventSetFlags", None)
-        post_event = getattr(Quartz, "CGEventPost", None)
-        event_tap = getattr(Quartz, "kCGHIDEventTap", None)
-        if not create_event or not set_flags or not post_event or event_tap is None:
-            return False
-
-        for is_down in (True, False):
-            event = create_event(None, keycode, is_down)
-            if event is None:
-                return False
-            set_flags(event, flags)
-            post_event(event_tap, event)
-        return True
-
-    def _snapshot_general_pasteboard(self):
-        try:
-            from AppKit import NSPasteboard
-
-            pasteboard = NSPasteboard.generalPasteboard()
-            saved_items = []
-            for item in pasteboard.pasteboardItems() or []:
-                item_data = []
-                for type_name in item.types() or []:
-                    data = item.dataForType_(type_name)
-                    if data is not None:
-                        item_data.append((type_name, data))
-                saved_items.append(item_data)
-            return (pasteboard, saved_items)
-        except Exception as e:
-            if _DEBUG:
-                print(f"[DEBUG] pasteboard snapshot failed: {e}")
-            return None
-
-    def _restore_general_pasteboard(self, snapshot):
-        if snapshot is None:
-            return
-        try:
-            from AppKit import NSPasteboardItem
-
-            pasteboard, saved_items = snapshot
-            pasteboard.clearContents()
-            restored_items = []
-            for item_data in saved_items:
-                item = NSPasteboardItem.alloc().init()
-                has_data = False
-                for type_name, data in item_data:
-                    if item.setData_forType_(data, type_name):
-                        has_data = True
-                if has_data:
-                    restored_items.append(item)
-            if restored_items:
-                pasteboard.writeObjects_(restored_items)
-        except Exception as e:
-            if _DEBUG:
-                print(f"[DEBUG] pasteboard restore failed: {e}")
-
-    def _read_general_pasteboard_text(self) -> str:
-        try:
-            from AppKit import NSPasteboard
-
-            pasteboard = NSPasteboard.generalPasteboard()
-            return (
-                pasteboard.stringForType_("public.utf8-plain-text")
-                or pasteboard.stringForType_("NSStringPboardType")
-                or ""
-            )
-        except Exception as e:
-            if _DEBUG:
-                print(f"[DEBUG] pasteboard read failed: {e}")
-            return ""
-
-    def _is_reasonable_clipboard_submission(self, content: str, fallback_count: int) -> bool:
-        if len(content) > CLIPBOARD_COPY_FALLBACK_MAX_CHARS:
-            return False
-        if fallback_count <= 0:
-            return True
-        max_expected = max(300, fallback_count * 4, fallback_count + 120)
-        return len(content) <= max_expected
+        ):
+            return 0
+        if self._is_fallback_buffer_expired(updated_at):
+            return 0
+        return len(buffer)
 
     def _clear_fallback_buffer(self, app_name: str, bundle_id: str):
         key = self._fallback_buffer_key(app_name, bundle_id)
         self._fallback_buffers.pop(key, None)
         self._fallback_buffer_updated_at.pop(key, None)
-        self._latin_preedit_pending.pop(key, None)
-        self._allow_clipboard_after_latin_commit_until.pop(key, None)
+        self._fallback_field_ids.pop(key, None)
 
     def _clear_submission_buffers(self, app_name: str, bundle_id: str):
         self._clear_recent_text_snapshot(app_name, bundle_id)
         self._clear_text_fallback_buffer(app_name, bundle_id)
         self._clear_fallback_buffer(app_name, bundle_id)
 
-    def _should_skip_latin_preedit_enter(
-        self,
-        app_name: str,
-        bundle_id: str,
-        event_type,
-        fallback_count: int,
-    ) -> bool:
-        if event_type != kCGEventKeyDown:
-            return False
-        if fallback_count <= 0:
-            return False
-        if not self._latin_preedit_pending.get(self._fallback_buffer_key(app_name, bundle_id), False):
-            return False
-        return self._can_use_clipboard_copy_fallback()
-
     def _ignore_enter_keyup_once(self, app_name: str, bundle_id: str):
         key = self._fallback_buffer_key(app_name, bundle_id)
-        self._ignore_enter_keyup_until[key] = time.monotonic() + 1.0
+        self._pending_enter_keyups.add(key)
 
-    def _allow_clipboard_after_latin_commit(
+    def _event_type_name(self, event_type) -> str:
+        if event_type == kCGEventKeyDown:
+            return "enter_keydown"
+        if event_type == kCGEventKeyUp:
+            return "enter_keyup"
+        return "enter_unknown"
+
+    def _emit_capture_diagnostic(
         self,
         app_name: str,
         bundle_id: str,
-        physical_key_count: int,
+        *,
+        event_type,
+        decision_action: str,
+        decision_reason: str,
+        selected_source: str | None = None,
+        selected_confidence: float | None = None,
+        physical_key_count: int | None = None,
+        capture_status: str = "ok",
+        diagnostics: dict | None = None,
+        context_data: dict | None = None,
     ):
-        key = self._fallback_buffer_key(app_name, bundle_id)
-        self._allow_clipboard_after_latin_commit_until[key] = (
-            time.monotonic() + LATIN_IME_COMMIT_CLIPBOARD_ALLOW_SECONDS,
-            max(physical_key_count, 0),
+        if self.diagnostics_callback is None:
+            return
+        context_data = context_data or {}
+        self.diagnostics_callback(
+            {
+                "timestamp": storage_now(),
+                "app_name": app_name,
+                "app_bundle_id": bundle_id,
+                "event_type": self._event_type_name(event_type),
+                "decision_action": decision_action,
+                "decision_reason": decision_reason,
+                "selected_source": selected_source,
+                "selected_confidence": selected_confidence,
+                "physical_key_count": physical_key_count,
+                "focused_role": context_data.get("focused_role"),
+                "focused_subrole": context_data.get("focused_subrole"),
+                "capture_status": context_data.get("capture_status") or capture_status,
+                "diagnostics": diagnostics or {},
+            }
         )
-
-    def _consume_latin_commit_clipboard_allowance(
-        self,
-        app_name: str,
-        bundle_id: str,
-    ) -> int | None:
-        key = self._fallback_buffer_key(app_name, bundle_id)
-        allowance = self._allow_clipboard_after_latin_commit_until.pop(key, None)
-        if allowance is None:
-            return None
-        allow_until, fallback_count = allowance
-        if time.monotonic() > allow_until:
-            return None
-        return fallback_count
-
-    def _clipboard_copy_fallback_count(
-        self,
-        app_name: str,
-        bundle_id: str,
-        physical_key_count: int,
-    ) -> int | None:
-        if not self._can_use_clipboard_copy_fallback():
-            return None
-        if physical_key_count > 0:
-            return physical_key_count
-        return self._consume_latin_commit_clipboard_allowance(app_name, bundle_id)
 
     def _should_ignore_enter_keyup(self, app_name: str, bundle_id: str, event_type) -> bool:
         if event_type != kCGEventKeyUp:
             return False
         key = self._fallback_buffer_key(app_name, bundle_id)
-        ignore_until = self._ignore_enter_keyup_until.pop(key, None)
-        return ignore_until is not None and time.monotonic() <= ignore_until
+        if key not in self._pending_enter_keyups:
+            return False
+        self._pending_enter_keyups.remove(key)
+        return True
 
     def _event_modifiers(self, event) -> dict:
         flags = CGEventGetFlags(event) or 0
@@ -865,61 +919,159 @@ class KeyboardListener:
             "alt": False,
             "cmd": False,
         }
-        ax_content = normalize_submission_text(
-            self._get_focused_text_snapshot(),
-            app_name=app_name,
-            bundle_id=bundle_id,
+        context = self._capture_focused_context()
+        captured_context_data = self._context_to_dict_safe(context)
+        context_data = captured_context_data if config.capture_context_on_enter else {}
+        current_field_id = focused_field_identity(context)
+        capture_status = getattr(context, "capture_status", None) or captured_context_data.get(
+            "capture_status", "ok"
         )
+        if capture_status != "ok":
+            physical_key_count = self._pop_fallback_count(
+                app_name, bundle_id, current_field_id=current_field_id
+            )
+            self._clear_submission_buffers(app_name, bundle_id)
+            self._emit_capture_diagnostic(
+                app_name,
+                bundle_id,
+                event_type=event_type,
+                decision_action="skip",
+                decision_reason="degraded_context",
+                physical_key_count=physical_key_count,
+                context_data=captured_context_data,
+            )
+            return
+
+        if is_secure_text_entry_context(context):
+            physical_key_count = self._pop_fallback_count(
+                app_name, bundle_id, current_field_id=current_field_id
+            )
+            self._clear_submission_buffers(app_name, bundle_id)
+            self._emit_capture_diagnostic(
+                app_name,
+                bundle_id,
+                event_type=event_type,
+                decision_action="skip",
+                decision_reason="secure_text_input",
+                physical_key_count=physical_key_count,
+                context_data=captured_context_data,
+            )
+            return
+
+        if _enter_is_editor_newline(app_name, bundle_id, context):
+            physical_key_count = self._pop_fallback_count(
+                app_name, bundle_id, current_field_id=current_field_id
+            )
+            self._clear_submission_buffers(app_name, bundle_id)
+            self._emit_capture_diagnostic(
+                app_name,
+                bundle_id,
+                event_type=event_type,
+                decision_action="skip",
+                decision_reason="editor_newline",
+                physical_key_count=physical_key_count,
+                context_data=captured_context_data,
+            )
+            return
+
+        text_entry_context = is_text_entry_context(context)
+        self._active_field_ids[self._fallback_buffer_key(app_name, bundle_id)] = current_field_id
+        ax_content = ""
+        if text_entry_context:
+            focused_value = getattr(context, "focused_value", None)
+            if not isinstance(focused_value, str):
+                focused_value = self._get_focused_text_snapshot()
+            ax_content = normalize_submission_text(
+                focused_value,
+                app_name=app_name,
+                bundle_id=bundle_id,
+            )
+            if len(ax_content) > MAX_TRUSTED_SUBMISSION_CHARS:
+                physical_key_count = self._pop_fallback_count(
+                    app_name, bundle_id, current_field_id=current_field_id
+                )
+                self._clear_submission_buffers(app_name, bundle_id)
+                self._emit_capture_diagnostic(
+                    app_name,
+                    bundle_id,
+                    event_type=event_type,
+                    decision_action="skip",
+                    decision_reason="suspected_whole_document",
+                    selected_source="ax_value",
+                    physical_key_count=physical_key_count,
+                    context_data=captured_context_data,
+                    diagnostics={"candidate_char_count": len(ax_content)},
+                )
+                return
         content = ax_content
         char_count_override = None
         redacted_content = False
         fallback_source = None
-        if not content or not _contains_cjk(content):
+        if text_entry_context and (not content or not _contains_cjk(content)):
             key_event_content = normalize_submission_text(
-                self._pop_text_fallback_content(app_name, bundle_id),
+                self._pop_text_fallback_content(
+                    app_name,
+                    bundle_id,
+                    current_field_id=current_field_id,
+                ),
                 app_name=app_name,
                 bundle_id=bundle_id,
             )
             if key_event_content:
                 content = key_event_content
                 fallback_source = "key_event_text"
-        if not content:
-            content = self._pop_recent_text_snapshot_content(app_name, bundle_id)
+        if text_entry_context and not content:
+            content = self._pop_recent_text_snapshot_content(
+                app_name,
+                bundle_id,
+                current_field_id=current_field_id,
+            )
             if content:
                 fallback_source = "recent_ax_snapshot"
         if not content:
-            physical_key_count = self._pop_fallback_count(app_name, bundle_id)
-            if self._should_skip_latin_preedit_enter(app_name, bundle_id, event_type, physical_key_count):
-                self._clear_submission_buffers(app_name, bundle_id)
-                self._ignore_enter_keyup_once(app_name, bundle_id)
-                self._allow_clipboard_after_latin_commit(app_name, bundle_id, physical_key_count)
-                if _DEBUG:
-                    print(f"[DEBUG] skip Enter capture for latin IME preedit -> {app_name} ({bundle_id})")
-                return
-            fallback_count = physical_key_count if getattr(config, "count_unreadable_submissions", True) else 0
-            clipboard_fallback_count = self._clipboard_copy_fallback_count(
-                app_name,
-                bundle_id,
-                physical_key_count,
+            physical_key_count = self._pop_fallback_count(
+                app_name, bundle_id, current_field_id=current_field_id
             )
-            clipboard_copy_attempted = clipboard_fallback_count is not None
-            if clipboard_fallback_count is not None:
-                content = self._copy_focused_submission_via_clipboard(
+            if not text_entry_context:
+                self._clear_submission_buffers(app_name, bundle_id)
+                self._emit_capture_diagnostic(
                     app_name,
                     bundle_id,
-                    fallback_count=clipboard_fallback_count,
+                    event_type=event_type,
+                    decision_action="skip",
+                    decision_reason="focused_element_not_text_input",
+                    physical_key_count=physical_key_count,
+                    context_data=captured_context_data,
+                    diagnostics={
+                        "trusted_text_entry_context": False,
+                    },
                 )
-            else:
-                content = ""
-            if content:
-                fallback_source = "clipboard_copy"
-            elif fallback_count > 0 and not clipboard_copy_attempted:
+                now = time.monotonic()
+                if now - self._last_empty_submission_log >= 5.0:
+                    role = context_data.get("focused_role") or "unknown"
+                    print(f"⚠️  Enter 提交未保存：焦点不是文本输入控件 ({role}) -> {app_name} ({bundle_id})")
+                    self._last_empty_submission_log = now
+                return
+            fallback_count = physical_key_count if getattr(config, "count_unreadable_submissions", True) else 0
+            if fallback_count > 0:
                 content = UNREADABLE_SUBMISSION_PLACEHOLDER
                 char_count_override = fallback_count
                 redacted_content = True
                 fallback_source = "count_unreadable"
             else:
                 self._clear_submission_buffers(app_name, bundle_id)
+                self._emit_capture_diagnostic(
+                    app_name,
+                    bundle_id,
+                    event_type=event_type,
+                    decision_action="skip",
+                    decision_reason="no_trusted_content",
+                    physical_key_count=physical_key_count,
+                    context_data=captured_context_data,
+                    diagnostics={
+                        "count_unreadable_enabled": getattr(config, "count_unreadable_submissions", True),
+                    },
+                )
                 now = time.monotonic()
                 if now - self._last_empty_submission_log >= 5.0:
                     print(f"⚠️  Enter 提交未保存：无法读取输入框文本 -> {app_name} ({bundle_id})")
@@ -940,10 +1092,6 @@ class KeyboardListener:
                 self._last_empty_submission_log = now
 
         submission_id = uuid.uuid4().hex
-        context_data = {}
-        if config.capture_context_on_enter:
-            context = capture_accessibility_context()
-            context_data = context_to_dict(context)
 
         if _DEBUG:
             print(f"[DEBUG] Enter 提交快照: {len(content)} chars -> {app_name}")
@@ -973,51 +1121,145 @@ class KeyboardListener:
         )
         if self.callback:
             self.callback(key_event)
-    
-    def _event_callback(self, proxy, event_type, event, refcon):
-        """CGEventTap 回调"""
-        if event_type in (kCGEventKeyDown, kCGEventKeyUp, kCGEventFlagsChanged):
+
+    def _process_raw_event(self, raw_event: RawKeyboardEvent):
+        """Process a sampled key event outside the EventTap callback thread."""
+        event_type = raw_event.event_type
+        keycode = raw_event.keycode
+        app_name = raw_event.app_name
+        bundle_id = raw_event.bundle_id
+        if raw_event.target_pid > 0:
+            app_name, bundle_id = get_app_by_pid(raw_event.target_pid)
+        if config.is_app_ignored(bundle_id):
+            self._clear_submission_buffers(app_name, bundle_id)
+            self._active_field_ids.pop(self._fallback_buffer_key(app_name, bundle_id), None)
+            return
+        set_last_input_app(app_name, bundle_id)
+        modifiers = raw_event.modifiers
+
+        if event_type == kCGEventKeyUp and keycode != ENTER_KEYCODE:
+            self._record_recent_text_snapshot(
+                app_name,
+                bundle_id,
+                clear_on_empty=keycode in (51, 117),
+            )
+            self._record_text_fallback_key(
+                app_name,
+                bundle_id,
+                keycode,
+                modifiers,
+                raw_event.text,
+                track_editing_keys=False,
+            )
+        if event_type == kCGEventKeyDown and keycode != ENTER_KEYCODE:
+            self._record_text_fallback_key(
+                app_name,
+                bundle_id,
+                keycode,
+                modifiers,
+                raw_event.text,
+            )
+            self._record_fallback_key(app_name, bundle_id, keycode, modifiers)
+
+        if keycode != ENTER_KEYCODE or event_type not in (kCGEventKeyDown, kCGEventKeyUp):
+            return
+        attempt_key = self._fallback_buffer_key(app_name, bundle_id)
+        if event_type == kCGEventKeyDown:
+            if raw_event.is_autorepeat:
+                return
+            self._pending_enter_keyups.discard(attempt_key)
+            self._ignore_enter_keyup_once(app_name, bundle_id)
+        if self._should_ignore_enter_keyup(app_name, bundle_id, event_type):
+            return
+
+        if modifiers.get("shift") or modifiers.get("alt"):
+            self._emit_capture_diagnostic(
+                app_name,
+                bundle_id,
+                event_type=event_type,
+                decision_action="skip",
+                decision_reason="newline_modifier",
+            )
+        elif modifiers.get("cmd") or modifiers.get("ctrl"):
+            self._emit_capture_diagnostic(
+                app_name,
+                bundle_id,
+                event_type=event_type,
+                decision_action="skip",
+                decision_reason="shortcut_modifier",
+            )
+        else:
+            self._emit_submission_snapshot(
+                None,
+                app_name=app_name,
+                bundle_id=bundle_id,
+                key_modifiers=modifiers,
+                event_type=event_type,
+            )
+
+    def _event_worker_loop(self):
+        while self._event_worker_running or not self._event_queue.empty():
             try:
-                app_name, bundle_id = self._get_event_target_app(event)
-                set_last_input_app(app_name, bundle_id)
-                keycode = CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode)
-                modifiers = self._event_modifiers(event)
-                if event_type == kCGEventKeyUp and keycode != ENTER_KEYCODE:
-                    self._record_recent_text_snapshot(
-                        app_name,
-                        bundle_id,
-                        clear_on_empty=keycode in (51, 117),
-                    )
-                    self._record_text_fallback_key(
-                        app_name,
-                        bundle_id,
-                        keycode,
-                        modifiers,
-                        event,
-                        track_editing_keys=False,
-                    )
-                if event_type == kCGEventKeyDown and keycode != ENTER_KEYCODE:
-                    self._record_text_fallback_key(app_name, bundle_id, keycode, modifiers, event)
-                    self._record_fallback_key(app_name, bundle_id, keycode, modifiers)
-                if (
-                    keycode == ENTER_KEYCODE
-                    and event_type in (kCGEventKeyDown, kCGEventKeyUp)
-                    and not modifiers.get("cmd")
-                    and not modifiers.get("ctrl")
-                    and not modifiers.get("alt")
-                ):
-                    if self._should_ignore_enter_keyup(app_name, bundle_id, event_type):
-                        return event
-                    self._emit_submission_snapshot(
-                        event,
-                        app_name=app_name,
-                        bundle_id=bundle_id,
-                        key_modifiers=modifiers,
-                        event_type=event_type,
-                    )
+                raw_event = self._event_queue.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            try:
+                if raw_event is None:
+                    return
+                with self._event_processing_lock:
+                    if self._has_started and not self._running:
+                        continue
+                    self._process_raw_event(raw_event)
             except Exception as e:
                 if _DEBUG:
-                    print(f"[DEBUG] keyboard event callback failed: {e}")
+                    print(f"[DEBUG] queued keyboard event failed: {e}")
+            finally:
+                self._event_queue.task_done()
+
+    def _event_callback(self, proxy, event_type, event, refcon):
+        """Sample the native event quickly and return control to macOS."""
+        if event_type in (
+            EVENT_TAP_DISABLED_BY_TIMEOUT,
+            EVENT_TAP_DISABLED_BY_USER_INPUT,
+        ):
+            if self._tap is not None:
+                CGEventTapEnable(self._tap, True)
+            return event
+        if event_type in (kCGEventKeyDown, kCGEventKeyUp, kCGEventFlagsChanged):
+            try:
+                target_pid = self._get_event_target_pid(event)
+                if self._has_started:
+                    app_name, bundle_id = get_current_app()
+                else:
+                    app_name, bundle_id = self._get_event_target_app(event)
+                keycode = CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode)
+                modifiers = self._event_modifiers(event)
+                raw_event = RawKeyboardEvent(
+                    event_type=event_type,
+                    keycode=keycode,
+                    text=self._get_keyboard_event_text(event),
+                    app_name=app_name,
+                    bundle_id=bundle_id,
+                    modifiers=modifiers,
+                    target_pid=target_pid,
+                    is_autorepeat=bool(
+                        CGEventGetIntegerValueField(
+                            event,
+                            KEYBOARD_EVENT_AUTOREPEAT_FIELD,
+                        )
+                    ),
+                )
+                if self._event_worker_running:
+                    try:
+                        self._event_queue.put_nowait(raw_event)
+                    except queue.Full:
+                        self._dropped_event_count += 1
+                elif not self._has_started:
+                    self._process_raw_event(raw_event)
+                else:
+                    self._dropped_event_count += 1
+            except Exception:
+                self._dropped_event_count += 1
         
         return event
     
@@ -1085,6 +1327,13 @@ class KeyboardListener:
             time.sleep(self.HEALTH_CHECK_INTERVAL)
             if not self._running:
                 break
+
+            refresh_runtime_heartbeat()
+
+            dropped_event_count = self._dropped_event_count
+            if dropped_event_count:
+                self._dropped_event_count = 0
+                print(f"⚠️  键盘事件队列已丢弃 {dropped_event_count} 个采样事件")
 
             if not self._is_tap_healthy():
                 print("🔄 CGEventTap 不健康，尝试重建...")
@@ -1186,8 +1435,15 @@ class KeyboardListener:
     def start(self):
         if self._running:
             return
+        if self._event_worker_thread and self._event_worker_thread.is_alive():
+            raise RuntimeError("previous keyboard event worker is still stopping")
+        self._event_queue = queue.Queue(maxsize=EVENT_QUEUE_MAX_SIZE)
+        self._has_started = True
         self._running = True
         self._retry_count = 0
+        self._event_worker_running = True
+        self._event_worker_thread = threading.Thread(target=self._event_worker_loop, daemon=True)
+        self._event_worker_thread.start()
 
         # 启动应用切换监听器（基于系统通知，比轮询更准确）
         _start_app_watcher()
@@ -1208,9 +1464,6 @@ class KeyboardListener:
     def stop(self):
         if not self._running:
             return
-        self._running = False
-        self._rime_watcher.stop()
-
         with self._tap_lock:
             if self._tap:
                 try:
@@ -1220,10 +1473,25 @@ class KeyboardListener:
             if self._run_loop:
                 CFRunLoopStop(self._run_loop)
 
+        with self._event_processing_lock:
+            self._running = False
+            self._event_worker_running = False
+        while True:
+            try:
+                self._event_queue.get_nowait()
+            except queue.Empty:
+                break
+            else:
+                self._event_queue.task_done()
+        self._event_queue.put_nowait(None)
+        self._rime_watcher.stop()
+
         if self._health_check_thread:
             self._health_check_thread.join(timeout=1.0)
         if self._thread:
             self._thread.join(timeout=1.0)
+        if self._event_worker_thread:
+            self._event_worker_thread.join(timeout=1.0)
 
         # 移除唤醒监听
         if self._wake_observer:

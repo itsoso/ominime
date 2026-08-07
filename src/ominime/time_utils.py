@@ -36,6 +36,11 @@ def business_today() -> date:
     return datetime.now(day_timezone()).date()
 
 
+def storage_today() -> date:
+    """Return today's date in the configured storage/local timezone."""
+    return datetime.now(storage_timezone()).date()
+
+
 def storage_now() -> datetime:
     """Return a naive timestamp in the configured storage timezone."""
     return datetime.now(storage_timezone()).replace(tzinfo=None)

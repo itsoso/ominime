@@ -9,7 +9,8 @@ from ominime import runtime_state
 
 
 @pytest.fixture(autouse=True)
-def reset_runtime_state():
+def reset_runtime_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(runtime_state, "_state_file_path", tmp_path / "runtime-state.json")
     runtime_state.reset_runtime_state()
     yield
     runtime_state.reset_runtime_state()
@@ -79,11 +80,15 @@ def install_menu_bar_import_stubs(monkeypatch):
 
 
 class FakeDb:
-    def __init__(self, today_total):
+    def __init__(self, today_total, storage_total=None):
         self.today_total = today_total
+        self.storage_total = storage_total
 
     def get_total_chars_today(self):
         return self.today_total
+
+    def get_total_chars_for_storage_date(self, target_date):
+        return self.today_total if self.storage_total is None else self.storage_total
 
 
 def make_submit_event(
@@ -101,24 +106,26 @@ def make_submit_event(
     )
 
 
-def test_full_menu_bar_refreshes_today_total_after_submission(monkeypatch):
+def test_full_menu_bar_increments_live_counter_after_submission(monkeypatch):
     install_menu_bar_import_stubs(monkeypatch)
     menu_bar_app = importlib.import_module("ominime.menu_bar_app")
+    monkeypatch.setattr(menu_bar_app, "business_today", lambda: date(2026, 6, 17))
 
     app = object.__new__(menu_bar_app.OmniMeMenuBarApp)
-    app.db = FakeDb(today_total=5)
-    app._today_chars = 1_420_000
+    app.db = FakeDb(today_total=1_420_000)
+    app._today_chars = 4
+    app._today_date = date(2026, 6, 17)
     app._last_submission_snapshot = None
 
-    app._save_submission_snapshot = lambda event, content: None
+    app._save_submission_snapshot = lambda event, content: True
     app._update_title = lambda *args, **kwargs: None
 
     app._on_key_event(make_submit_event("hello"))
 
-    assert app._today_chars == 5
+    assert app._today_chars == 9
 
 
-def test_full_menu_bar_rolls_title_counter_when_day_changes(monkeypatch):
+def test_full_menu_bar_rolls_live_counter_when_day_changes(monkeypatch):
     install_menu_bar_import_stubs(monkeypatch)
     menu_bar_app = importlib.import_module("ominime.menu_bar_app")
     monkeypatch.setattr(menu_bar_app, "business_today", lambda: date(2026, 6, 27))
@@ -137,14 +144,87 @@ def test_full_menu_bar_rolls_title_counter_when_day_changes(monkeypatch):
     assert app.title == "⌨️ 0"
 
 
+def test_full_menu_bar_rolls_live_counter_on_business_day_even_when_storage_day_unchanged(monkeypatch):
+    install_menu_bar_import_stubs(monkeypatch)
+    menu_bar_app = importlib.import_module("ominime.menu_bar_app")
+    monkeypatch.setattr(menu_bar_app, "business_today", lambda: date(2026, 7, 7))
+
+    app = object.__new__(menu_bar_app.OmniMeMenuBarApp)
+    app.db = FakeDb(today_total=0)
+    app._is_recording = True
+    app._today_chars = 891
+    app._today_date = date(2026, 7, 6)
+    app._last_title_update = 0
+
+    app._update_title(force=True)
+
+    assert app._today_date == date(2026, 7, 7)
+    assert app._today_chars == 0
+    assert app.title == "⌨️ 0"
+
+
+def test_full_menu_bar_title_does_not_backfill_business_day_history(monkeypatch):
+    install_menu_bar_import_stubs(monkeypatch)
+    menu_bar_app = importlib.import_module("ominime.menu_bar_app")
+    monkeypatch.setattr(menu_bar_app, "business_today", lambda: date(2026, 7, 6))
+
+    app = object.__new__(menu_bar_app.OmniMeMenuBarApp)
+    app.db = FakeDb(today_total=0, storage_total=61_596)
+    app._is_recording = True
+    app._today_chars = 0
+    app._today_date = date(2026, 7, 4)
+    app._last_title_update = 0
+
+    app._update_title(force=True)
+
+    assert app._today_date == date(2026, 7, 6)
+    assert app._today_chars == 0
+    assert app.title == "⌨️ 0"
+
+
+def test_full_menu_bar_does_not_mix_skipped_key_estimate_into_saved_chars(monkeypatch):
+    install_menu_bar_import_stubs(monkeypatch)
+    menu_bar_app = importlib.import_module("ominime.menu_bar_app")
+    monkeypatch.setattr(menu_bar_app, "business_today", lambda: date(2026, 6, 17))
+
+    app = object.__new__(menu_bar_app.OmniMeMenuBarApp)
+    app.db = FakeDb(today_total=1_420_000)
+    app._today_chars = 4
+    app._today_date = date(2026, 6, 17)
+    app._last_title_update = 0
+    app._is_recording = True
+    app.title = "⌨️ 4"
+
+    app._save_capture_diagnostic(
+        {
+            "event_type": "enter_keydown",
+            "decision_action": "skip",
+            "decision_reason": "focused_element_not_text_input",
+            "physical_key_count": 5,
+        }
+    )
+    app._save_capture_diagnostic(
+        {
+            "event_type": "enter_keyup",
+            "decision_action": "skip",
+            "decision_reason": "focused_element_not_text_input",
+            "physical_key_count": 0,
+        }
+    )
+
+    assert app._today_chars == 4
+    assert app.title == "⌨️ 4"
+
+
 def test_full_menu_bar_start_updates_runtime_recording_state(monkeypatch):
     install_menu_bar_import_stubs(monkeypatch)
     menu_bar_app = importlib.import_module("ominime.menu_bar_app")
     runtime_state.reset_runtime_state()
 
     class FakeListener:
-        def __init__(self, callback):
+        def __init__(self, callback, diagnostics_callback=None):
             self.callback = callback
+            self.diagnostics_callback = diagnostics_callback
             self.started = False
 
         def start(self):
@@ -164,8 +244,44 @@ def test_full_menu_bar_start_updates_runtime_recording_state(monkeypatch):
     state = runtime_state.get_runtime_state()
     assert app._is_recording is True
     assert app._recording_toggle_item.title == "⏸️ 暂停记录"
+    assert app.listener.diagnostics_callback == app._save_capture_diagnostic
     assert state.recording_status == "recording"
     assert state.is_recording is True
+
+
+def test_full_menu_bar_reuses_existing_healthy_web_service(monkeypatch):
+    install_menu_bar_import_stubs(monkeypatch)
+    menu_bar_app = importlib.import_module("ominime.menu_bar_app")
+    monkeypatch.setattr(menu_bar_app, "_is_web_service_healthy", lambda: True)
+
+    app = object.__new__(menu_bar_app.OmniMeMenuBarApp)
+    app._web_server_running = False
+    app._web_server_thread = None
+
+    app._start_web_server()
+
+    assert app._web_server_running is True
+    assert app._web_server_thread is None
+
+
+def test_full_menu_bar_defers_to_managed_standalone_web_service(monkeypatch):
+    install_menu_bar_import_stubs(monkeypatch)
+    menu_bar_app = importlib.import_module("ominime.menu_bar_app")
+    monkeypatch.setattr(menu_bar_app, "_is_web_service_healthy", lambda: False)
+    monkeypatch.setattr(
+        menu_bar_app,
+        "_is_standalone_web_service_managed",
+        lambda: True,
+    )
+
+    app = object.__new__(menu_bar_app.OmniMeMenuBarApp)
+    app._web_server_running = False
+    app._web_server_thread = None
+
+    app._start_web_server()
+
+    assert app._web_server_running is True
+    assert app._web_server_thread is None
 
 
 def test_full_menu_bar_shows_permission_warning_when_auto_start_cannot_record(monkeypatch):
@@ -198,7 +314,11 @@ def test_full_menu_bar_saves_only_terminal_command_line(monkeypatch):
     app._last_submission_snapshot = None
     saved = []
 
-    app._save_submission_snapshot = lambda event, content: saved.append(content)
+    def save_snapshot(event, content):
+        saved.append(content)
+        return True
+
+    app._save_submission_snapshot = save_snapshot
     app._update_title = lambda *args, **kwargs: None
 
     app._on_key_event(
@@ -210,27 +330,29 @@ def test_full_menu_bar_saves_only_terminal_command_line(monkeypatch):
     )
 
     assert saved == ["➜  ominime pytest"]
-    assert app._today_chars == 12
+    assert app._today_chars == len("➜  ominime pytest")
 
 
-def test_legacy_menu_bar_refreshes_today_total_after_submission(monkeypatch):
+def test_legacy_menu_bar_increments_live_counter_after_submission(monkeypatch):
     install_menu_bar_import_stubs(monkeypatch)
     menu_bar = importlib.import_module("ominime.menu_bar")
+    monkeypatch.setattr(menu_bar, "business_today", lambda: date(2026, 6, 17))
 
     app = object.__new__(menu_bar.OmniMeApp)
-    app.db = FakeDb(today_total=5)
-    app._today_chars = 1_420_000
+    app.db = FakeDb(today_total=1_420_000)
+    app._today_chars = 4
+    app._today_date = date(2026, 6, 17)
     app._last_submission_snapshot = None
 
-    app._save_submission_snapshot = lambda event, content: None
+    app._save_submission_snapshot = lambda event, content: True
     app._update_title = lambda: None
 
     app._on_key_event(make_submit_event("hello"))
 
-    assert app._today_chars == 5
+    assert app._today_chars == 9
 
 
-def test_legacy_menu_bar_rolls_title_counter_when_day_changes(monkeypatch):
+def test_legacy_menu_bar_rolls_live_counter_when_day_changes(monkeypatch):
     install_menu_bar_import_stubs(monkeypatch)
     menu_bar = importlib.import_module("ominime.menu_bar")
     monkeypatch.setattr(menu_bar, "business_today", lambda: date(2026, 6, 27))
@@ -246,6 +368,75 @@ def test_legacy_menu_bar_rolls_title_counter_when_day_changes(monkeypatch):
     assert app._today_date == date(2026, 6, 27)
     assert app._today_chars == 0
     assert app.title == "⌨️ 0"
+
+
+def test_legacy_menu_bar_rolls_live_counter_on_business_day_even_when_storage_day_unchanged(monkeypatch):
+    install_menu_bar_import_stubs(monkeypatch)
+    menu_bar = importlib.import_module("ominime.menu_bar")
+    monkeypatch.setattr(menu_bar, "business_today", lambda: date(2026, 7, 7))
+
+    app = object.__new__(menu_bar.OmniMeApp)
+    app.db = FakeDb(today_total=0)
+    app._is_recording = True
+    app._today_chars = 891
+    app._today_date = date(2026, 7, 6)
+
+    app._update_title()
+
+    assert app._today_date == date(2026, 7, 7)
+    assert app._today_chars == 0
+    assert app.title == "⌨️ 0"
+
+
+def test_legacy_menu_bar_title_does_not_backfill_business_day_history(monkeypatch):
+    install_menu_bar_import_stubs(monkeypatch)
+    menu_bar = importlib.import_module("ominime.menu_bar")
+    monkeypatch.setattr(menu_bar, "business_today", lambda: date(2026, 7, 6))
+
+    app = object.__new__(menu_bar.OmniMeApp)
+    app.db = FakeDb(today_total=0, storage_total=61_596)
+    app._is_recording = True
+    app._today_chars = 0
+    app._today_date = date(2026, 7, 4)
+
+    app._update_title()
+
+    assert app._today_date == date(2026, 7, 6)
+    assert app._today_chars == 0
+    assert app.title == "⌨️ 0"
+
+
+def test_legacy_menu_bar_does_not_mix_skipped_key_estimate_into_saved_chars(monkeypatch):
+    install_menu_bar_import_stubs(monkeypatch)
+    menu_bar = importlib.import_module("ominime.menu_bar")
+    monkeypatch.setattr(menu_bar, "business_today", lambda: date(2026, 6, 17))
+
+    app = object.__new__(menu_bar.OmniMeApp)
+    app.db = FakeDb(today_total=1_420_000)
+    app._today_chars = 4
+    app._today_date = date(2026, 6, 17)
+    app._is_recording = True
+    app.title = "⌨️ 4"
+
+    app._save_capture_diagnostic(
+        {
+            "event_type": "enter_keydown",
+            "decision_action": "skip",
+            "decision_reason": "focused_element_not_text_input",
+            "physical_key_count": 5,
+        }
+    )
+    app._save_capture_diagnostic(
+        {
+            "event_type": "enter_keyup",
+            "decision_action": "skip",
+            "decision_reason": "focused_element_not_text_input",
+            "physical_key_count": 0,
+        }
+    )
+
+    assert app._today_chars == 4
+    assert app.title == "⌨️ 4"
 
 
 def test_legacy_menu_bar_shows_permission_warning_when_start_fails(monkeypatch):
@@ -268,3 +459,34 @@ def test_legacy_menu_bar_shows_permission_warning_when_start_fails(monkeypatch):
     assert sender.title == "▶️ 开始记录"
     assert state.recording_status == "permission_missing"
     assert state.is_recording is False
+
+
+def test_legacy_menu_bar_start_passes_diagnostics_callback(monkeypatch):
+    install_menu_bar_import_stubs(monkeypatch)
+    menu_bar = importlib.import_module("ominime.menu_bar")
+    runtime_state.reset_runtime_state()
+    monkeypatch.setattr(menu_bar, "check_accessibility_permission", lambda: True)
+
+    class FakeListener:
+        def __init__(self, callback, diagnostics_callback=None):
+            self.callback = callback
+            self.diagnostics_callback = diagnostics_callback
+            self.started = False
+
+        def start(self):
+            self.started = True
+
+    monkeypatch.setattr(menu_bar, "KeyboardListener", FakeListener)
+
+    app = object.__new__(menu_bar.OmniMeApp)
+    app.db = FakeDb(today_total=3)
+    app._is_recording = False
+    app._today_date = date(2026, 6, 17)
+    app._today_chars = 0
+    app._update_title = lambda *args, **kwargs: None
+    sender = SimpleNamespace(title="▶️ 开始记录")
+
+    app._start_recording(sender)
+
+    assert app.listener.diagnostics_callback == app._save_capture_diagnostic
+    assert app.listener.started is True

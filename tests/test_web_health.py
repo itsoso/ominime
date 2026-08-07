@@ -4,14 +4,15 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from ominime.database import Database, InputRecord
+from ominime.database import CaptureDiagnosticRecord, Database, InputRecord
 from ominime import database as database_module
 from ominime import runtime_state
 from ominime.web import api as web_api
 
 
 @pytest.fixture(autouse=True)
-def reset_runtime_state():
+def reset_runtime_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(runtime_state, "_state_file_path", tmp_path / "runtime-state.json")
     runtime_state.reset_runtime_state()
     yield
     runtime_state.reset_runtime_state()
@@ -29,6 +30,27 @@ def save_record(db: Database, timestamp: datetime, chars: int = 12):
             char_count=chars,
             session_id=f"session-{timestamp.isoformat()}",
             duration_seconds=0,
+        )
+    )
+
+
+def save_diagnostic(db: Database, timestamp: datetime):
+    return db.save_capture_diagnostic(
+        CaptureDiagnosticRecord(
+            id=None,
+            timestamp=timestamp,
+            app_name="Claude",
+            app_bundle_id="com.anthropic.claudefordesktop",
+            event_type="enter_keydown",
+            decision_action="skip",
+            decision_reason="no_trusted_content",
+            selected_source=None,
+            selected_confidence=None,
+            physical_key_count=0,
+            focused_role=None,
+            focused_subrole=None,
+            capture_status="ok",
+            diagnostics_json='{"clipboard_copy_attempted": false}',
         )
     )
 
@@ -64,10 +86,40 @@ def test_health_reports_current_capture_state_and_recent_records(tmp_path, monke
     assert payload["status"] == "running"
     assert payload["is_recording"] is True
     assert payload["recording_status"] == "recording"
+    assert payload["listener_process_id"] == runtime_state.get_runtime_state().process_id
+    assert payload["web_process_id"] == payload["process_id"]
     assert payload["input_capture_mode"] == "enter-text"
     assert payload["today_date"] == "2026-06-27"
     assert payload["today_chars"] == 15
     assert payload["last_recorded_at"].startswith("2026-06-26T12:00:00")
+
+
+def test_health_includes_latest_capture_diagnostic(tmp_path, monkeypatch):
+    db = Database(tmp_path / "test.db")
+    install_test_api_state(monkeypatch, db, tmp_path)
+    save_diagnostic(db, datetime(2026, 7, 5, 10, 1, 0))
+
+    response = TestClient(web_api.app).get("/api/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["last_capture_diagnostic"]["decision_action"] == "skip"
+    assert payload["last_capture_diagnostic"]["decision_reason"] == "no_trusted_content"
+    assert payload["last_capture_diagnostic"]["app_name"] == "Claude"
+
+
+def test_capture_diagnostics_endpoint_returns_recent_rows(tmp_path, monkeypatch):
+    db = Database(tmp_path / "test.db")
+    install_test_api_state(monkeypatch, db, tmp_path)
+    save_diagnostic(db, datetime(2026, 7, 5, 10, 1, 0))
+
+    response = TestClient(web_api.app).get("/api/capture/diagnostics?limit=5")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    assert payload["diagnostics"][0]["decision_reason"] == "no_trusted_content"
+    assert payload["diagnostics"][0]["diagnostics"]["clipboard_copy_attempted"] is False
 
 
 def test_status_includes_non_misleading_recording_status(tmp_path, monkeypatch):

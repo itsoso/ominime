@@ -16,7 +16,7 @@ from .analyzer import get_analyzer
 from .config import config
 from .input_snapshot import normalize_submission_text, should_save_submission_snapshot
 from .runtime_state import set_recording_status
-from .submission_processor import save_submission_event
+from .submission_processor import save_capture_diagnostic_event, save_submission_event
 from .time_utils import business_today
 
 
@@ -106,17 +106,34 @@ class OmniMeApp(rumps.App):
             return
 
         self._last_submission_snapshot = (*current_snapshot, now)
-        self._save_submission_snapshot(event, content)
-        self._refresh_today_chars(force=True)
+        if not self._save_submission_snapshot(event, content):
+            return
+        self._refresh_today_chars()
+        self._today_chars += self._title_char_count(event, content)
         # 更新标题显示字符数
         self._update_title()
 
-    def _save_submission_snapshot(self, event: KeyEvent, content: str):
+    def _save_submission_snapshot(self, event: KeyEvent, content: str) -> bool:
         """保存 Enter 提交时读取到的完整输入框内容。"""
         try:
             save_submission_event(self.db, event, content)
+            return True
         except Exception as e:
             print(f"保存提交快照失败: {e}")
+            return False
+
+    def _title_char_count(self, event: KeyEvent, content: str) -> int:
+        override = event.modifiers.get("char_count_override")
+        if isinstance(override, int) and override >= 0:
+            return override
+        return len(content)
+
+    def _save_capture_diagnostic(self, diagnostic: dict):
+        """保存 Enter 捕获诊断，不影响主输入记录链路。"""
+        try:
+            save_capture_diagnostic_event(self.db, diagnostic)
+        except Exception as e:
+            print(f"保存捕获诊断失败: {e}")
     
     def _save_session(self, session):
         """保存会话到数据库"""
@@ -158,11 +175,11 @@ class OmniMeApp(rumps.App):
         self.title = "⌨️ ⚠"
 
     def _refresh_today_chars(self, force=False) -> bool:
-        """Refresh cached title counter and reset it across local day boundaries."""
+        """Reset the live title counter across the configured business day."""
         today = business_today()
-        if force or getattr(self, "_today_date", None) != today:
+        if getattr(self, "_today_date", None) != today:
             self._today_date = today
-            self._today_chars = self.db.get_total_chars_today()
+            self._today_chars = 0
             return True
         return False
     
@@ -194,7 +211,10 @@ class OmniMeApp(rumps.App):
             return
         
         # 启动监听
-        self.listener = KeyboardListener(self._on_key_event)
+        self.listener = KeyboardListener(
+            self._on_key_event,
+            diagnostics_callback=self._save_capture_diagnostic,
+        )
         self.listener.start()
         
         self._is_recording = True

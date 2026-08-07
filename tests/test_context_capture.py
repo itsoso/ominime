@@ -1,4 +1,13 @@
-from ominime.context_capture import AXFrame, CapturedContext, choose_screenshot_scope
+from ominime.context_capture import (
+    AXFrame,
+    CapturedContext,
+    choose_screenshot_scope,
+    context_to_dict,
+    is_text_entry_context,
+    is_text_entry_role,
+    is_secure_text_entry_context,
+    read_ax_node,
+)
 
 
 def test_choose_container_scope_before_window_scope():
@@ -43,3 +52,61 @@ def test_select_container_falls_back_to_window():
 
 def test_frame_from_dict_rejects_incomplete_frames():
     assert frame_from_dict({"x": 1, "y": 2}) is None
+
+
+def test_text_entry_role_detection_accepts_text_controls():
+    assert is_text_entry_role("AXTextArea")
+    assert is_text_entry_role("AXTextField")
+    assert is_text_entry_role("AXComboBox")
+    assert is_text_entry_role("AXGroup", "AXSearchField")
+
+
+def test_text_entry_context_rejects_non_input_roles():
+    assert is_text_entry_context(CapturedContext(focused_role="AXTextArea"))
+    assert not is_text_entry_context(CapturedContext(focused_role="AXGroup"))
+    assert not is_text_entry_context(CapturedContext(focused_role="AXWebArea"))
+
+
+def test_secure_text_entry_context_detects_secure_subrole_and_protected_content():
+    assert is_secure_text_entry_context(
+        CapturedContext(focused_role="AXTextField", focused_subrole="AXSecureTextField")
+    )
+    assert is_secure_text_entry_context(
+        CapturedContext(focused_role="AXTextField", focused_protected=True)
+    )
+    assert not is_secure_text_entry_context(CapturedContext(focused_role="AXTextField"))
+
+
+def test_serialized_context_never_contains_ax_values():
+    context = CapturedContext(
+        focused_role="AXTextArea",
+        focused_value="private draft",
+        hierarchy=[
+            {"role": "AXTextArea", "value": "private draft"},
+            {"role": "AXGroup", "value": "whole page"},
+        ],
+    )
+
+    payload = context_to_dict(context)
+    assert "focused_value" not in payload
+    assert all("value" not in node for node in payload["hierarchy"])
+
+
+def test_secure_ax_node_never_reads_value(monkeypatch):
+    reads = []
+
+    def fake_copy(_element, attribute):
+        reads.append(attribute)
+        return {
+            "AXRole": "AXTextField",
+            "AXSubrole": "AXSecureTextField",
+            "AXProtectedContent": True,
+        }.get(attribute)
+
+    monkeypatch.setattr("ominime.context_capture.copy_ax_attribute", fake_copy)
+
+    node = read_ax_node(object(), include_value=True)
+
+    assert node["protected"] is True
+    assert node["value"] is None
+    assert "AXValue" not in reads

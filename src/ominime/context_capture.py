@@ -36,12 +36,85 @@ class CapturedContext:
     focused_title: str | None = None
     focused_description: str | None = None
     focused_identifier: str | None = None
+    focused_protected: bool = False
+    focused_value: str | None = field(default=None, repr=False)
     container_role: str | None = None
     container_title: str | None = None
     window_title: str | None = None
     hierarchy: list[dict] = field(default_factory=list)
     capture_status: str = "ok"
     capture_error: str | None = None
+
+
+TEXT_ENTRY_ROLES = {
+    "AXComboBox",
+    "AXTextArea",
+    "AXTextField",
+}
+
+TEXT_ENTRY_SUBROLES = {
+    "AXSearchField",
+}
+
+SECURE_TEXT_ENTRY_SUBROLES = {
+    "AXSecureTextField",
+}
+
+
+def is_text_entry_context(context: CapturedContext | dict | None) -> bool:
+    """Return whether the focused AX element is a text-entry control."""
+    if context is None:
+        return False
+
+    if isinstance(context, dict):
+        role = context.get("focused_role")
+        subrole = context.get("focused_subrole")
+    else:
+        role = getattr(context, "focused_role", None)
+        subrole = getattr(context, "focused_subrole", None)
+
+    return is_text_entry_role(role, subrole)
+
+
+def is_text_entry_role(role: str | None, subrole: str | None = None) -> bool:
+    if role in TEXT_ENTRY_ROLES:
+        return True
+    return subrole in TEXT_ENTRY_SUBROLES
+
+
+def is_secure_text_entry_context(context: CapturedContext | dict | None) -> bool:
+    """Return whether the focused control can contain protected credentials."""
+    if context is None:
+        return False
+    if isinstance(context, dict):
+        subrole = context.get("focused_subrole")
+        protected = context.get("focused_protected")
+    else:
+        subrole = getattr(context, "focused_subrole", None)
+        protected = getattr(context, "focused_protected", False)
+    return subrole in SECURE_TEXT_ENTRY_SUBROLES or protected is True
+
+
+def focused_field_identity(context: CapturedContext | dict | None) -> str | None:
+    """Build a stable-enough identity for isolating focused-field caches."""
+    if context is None:
+        return None
+    if isinstance(context, dict):
+        identifier = context.get("focused_identifier")
+        window_title = context.get("window_title")
+        frame = context.get("focused_frame")
+    else:
+        identifier = getattr(context, "focused_identifier", None)
+        window_title = getattr(context, "window_title", None)
+        raw_frame = getattr(context, "focused_frame", None)
+        frame = raw_frame.to_dict() if isinstance(raw_frame, AXFrame) else raw_frame
+
+    if identifier:
+        return f"id:{window_title or ''}:{identifier}"
+    if isinstance(frame, dict) and all(key in frame for key in ("x", "y", "width", "height")):
+        values = tuple(round(float(frame[key]), 1) for key in ("x", "y", "width", "height"))
+        return f"frame:{window_title or ''}:{values[0]}:{values[1]}:{values[2]}:{values[3]}"
+    return None
 
 
 def choose_screenshot_scope(context: CapturedContext) -> ScreenshotScope:
@@ -64,10 +137,14 @@ def context_to_dict(context: CapturedContext) -> dict[str, Any]:
         "focused_title": context.focused_title,
         "focused_description": context.focused_description,
         "focused_identifier": context.focused_identifier,
+        "focused_protected": context.focused_protected,
         "container_role": context.container_role,
         "container_title": context.container_title,
         "window_title": context.window_title,
-        "hierarchy": context.hierarchy,
+        "hierarchy": [
+            {key: value for key, value in node.items() if key != "value"}
+            for node in context.hierarchy
+        ],
         "capture_status": context.capture_status,
         "capture_error": context.capture_error,
     }
@@ -143,6 +220,8 @@ def capture_accessibility_context(max_depth: int = 12) -> CapturedContext:
             focused_title=focused_node.get("title"),
             focused_description=focused_node.get("description"),
             focused_identifier=focused_node.get("identifier"),
+            focused_protected=focused_node.get("protected") is True,
+            focused_value=focused_node.get("value"),
             container_role=container_node.get("role") if container_node else None,
             container_title=container_node.get("title") if container_node else None,
             window_title=window_node.get("title") if window_node else None,
@@ -175,24 +254,34 @@ def walk_ax_hierarchy(element, max_depth: int = 12) -> list[dict]:
             break
         seen.add(marker)
 
-        node = read_ax_node(current)
+        node = read_ax_node(current, include_value=not hierarchy)
         hierarchy.append(node)
         current = copy_ax_attribute(current, "AXParent")
 
     return hierarchy
 
 
-def read_ax_node(element) -> dict[str, Any]:
+def read_ax_node(element, *, include_value: bool = True) -> dict[str, Any]:
     frame = copy_ax_attribute(element, "AXFrame")
-    return {
-        "role": _string_or_none(copy_ax_attribute(element, "AXRole")),
-        "subrole": _string_or_none(copy_ax_attribute(element, "AXSubrole")),
+    role = _string_or_none(copy_ax_attribute(element, "AXRole"))
+    subrole = _string_or_none(copy_ax_attribute(element, "AXSubrole"))
+    protected = copy_ax_attribute(element, "AXProtectedContent")
+    is_secure = subrole in SECURE_TEXT_ENTRY_SUBROLES or bool(protected)
+    node = {
+        "role": role,
+        "subrole": subrole,
         "title": _string_or_none(copy_ax_attribute(element, "AXTitle")),
         "description": _string_or_none(copy_ax_attribute(element, "AXDescription")),
         "identifier": _string_or_none(copy_ax_attribute(element, "AXIdentifier")),
-        "value": _string_or_none(copy_ax_attribute(element, "AXValue")),
+        "protected": bool(protected) if protected is not None else False,
         "frame": _frame_value_to_dict(frame),
     }
+    node["value"] = (
+        _string_or_none(copy_ax_attribute(element, "AXValue"))
+        if include_value and not is_secure
+        else None
+    )
+    return node
 
 
 def copy_ax_attribute(element, attribute: str):
