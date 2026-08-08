@@ -1,6 +1,8 @@
+from ominime import context_capture
 from ominime.context_capture import (
     AXFrame,
     CapturedContext,
+    capture_accessibility_context,
     choose_screenshot_scope,
     context_to_dict,
     is_text_entry_context,
@@ -110,3 +112,56 @@ def test_secure_ax_node_never_reads_value(monkeypatch):
     assert node["protected"] is True
     assert node["value"] is None
     assert "AXValue" not in reads
+
+
+def test_capture_prefers_systemwide_focused_element(monkeypatch):
+    focused = object()
+    calls = []
+
+    def fake_get_focused_element(target_pid=None):
+        calls.append(target_pid)
+        return focused
+
+    monkeypatch.setattr(context_capture, "get_focused_element", fake_get_focused_element)
+    monkeypatch.setattr(
+        context_capture,
+        "walk_ax_hierarchy",
+        lambda element, max_depth: [{"role": "AXTextArea", "value": "hello"}],
+    )
+
+    result = capture_accessibility_context(target_pid=123)
+
+    assert result.capture_status == "ok"
+    assert result.focused_role == "AXTextArea"
+    assert calls == [None]
+
+
+def test_capture_retries_focused_element_for_target_process(monkeypatch):
+    process_focused = object()
+    calls = []
+
+    def fake_get_focused_element(target_pid=None):
+        calls.append(target_pid)
+        return process_focused if target_pid == 123 else None
+
+    monkeypatch.setattr(context_capture, "get_focused_element", fake_get_focused_element)
+    monkeypatch.setattr(
+        context_capture,
+        "walk_ax_hierarchy",
+        lambda element, max_depth: [{"role": "AXTextArea", "value": "hello"}],
+    )
+
+    result = capture_accessibility_context(target_pid=123)
+
+    assert result.capture_status == "ok"
+    assert result.focused_role == "AXTextArea"
+    assert calls == [None, 123]
+
+
+def test_capture_reports_systemwide_and_process_focus_unavailable(monkeypatch):
+    monkeypatch.setattr(context_capture, "get_focused_element", lambda target_pid=None: None)
+
+    result = capture_accessibility_context(target_pid=123)
+
+    assert result.capture_status == "degraded"
+    assert result.capture_error == "focused element unavailable (system-wide and pid 123)"

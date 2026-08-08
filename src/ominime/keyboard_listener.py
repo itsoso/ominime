@@ -188,6 +188,10 @@ BROWSER_BUNDLE_HINTS = (
     "safari",
     "vivaldi",
 )
+DEGRADED_CHAT_COMPATIBILITY_BUNDLE_IDS = {
+    "Kem",
+    "com.tencent.xinWeChat",
+}
 
 
 def _clean_key_event_text(text: str) -> str:
@@ -581,11 +585,21 @@ class KeyboardListener:
                 print(f"[DEBUG] focused text snapshot failed: {e}")
         return ""
 
-    def _capture_focused_context(self, *, max_depth: int | None = None):
-        if max_depth is None:
+    def _capture_focused_context(
+        self,
+        *,
+        max_depth: int | None = None,
+        target_pid: int | None = None,
+    ):
+        kwargs = {}
+        if max_depth is not None:
+            kwargs["max_depth"] = max_depth
+        if target_pid is not None and target_pid > 0:
+            kwargs["target_pid"] = target_pid
+        if not kwargs:
             return capture_accessibility_context()
         try:
-            return capture_accessibility_context(max_depth=max_depth)
+            return capture_accessibility_context(**kwargs)
         except TypeError:
             # Lightweight test doubles and older capture implementations may
             # only expose the zero-argument form.
@@ -688,13 +702,18 @@ class KeyboardListener:
         app_name: str,
         bundle_id: str,
         current_field_id: str | None = None,
+        *,
+        allow_unscoped: bool = False,
     ) -> str:
         key = self._fallback_buffer_key(app_name, bundle_id)
         updated_at = self._text_fallback_buffer_updated_at.pop(key, None)
         buffer = self._text_fallback_buffers.pop(key, [])
         buffer_field_id = self._text_fallback_field_ids.pop(key, None)
         self._last_text_fallback_events.pop(key, None)
-        if (
+        if current_field_id is None and buffer_field_id is None:
+            if not allow_unscoped:
+                return ""
+        elif (
             current_field_id is None
             or buffer_field_id is None
             or current_field_id != buffer_field_id
@@ -866,6 +885,10 @@ class KeyboardListener:
         if self.diagnostics_callback is None:
             return
         context_data = context_data or {}
+        diagnostic_details = dict(diagnostics or {})
+        capture_error = context_data.get("capture_error")
+        if capture_error:
+            diagnostic_details["capture_error"] = capture_error
         self.diagnostics_callback(
             {
                 "timestamp": storage_now(),
@@ -880,7 +903,7 @@ class KeyboardListener:
                 "focused_role": context_data.get("focused_role"),
                 "focused_subrole": context_data.get("focused_subrole"),
                 "capture_status": context_data.get("capture_status") or capture_status,
-                "diagnostics": diagnostics or {},
+                "diagnostics": diagnostic_details,
             }
         )
 
@@ -902,6 +925,47 @@ class KeyboardListener:
             "cmd": bool(flags & kCGEventFlagMaskCommand),
         }
 
+    def _emit_submission_event(
+        self,
+        *,
+        app_name: str,
+        bundle_id: str,
+        content: str,
+        key_modifiers: dict,
+        context_data: dict,
+        fallback_source: str | None = None,
+        char_count_override: int | None = None,
+        redacted_content: bool = False,
+        physical_key_count: int | None = None,
+    ):
+        modifiers = {
+            "shift": key_modifiers.get("shift", False),
+            "ctrl": key_modifiers.get("ctrl", False),
+            "alt": key_modifiers.get("alt", False),
+            "cmd": key_modifiers.get("cmd", False),
+            "submit_snapshot": True,
+            "submission_id": uuid.uuid4().hex,
+            "context": context_data,
+            "redacted_content": redacted_content,
+        }
+        if fallback_source is not None:
+            modifiers["fallback_source"] = fallback_source
+        if char_count_override is not None:
+            modifiers["char_count_override"] = char_count_override
+        if physical_key_count is not None:
+            modifiers["physical_key_count"] = physical_key_count
+        key_event = KeyEvent(
+            timestamp=storage_now(),
+            keycode=ENTER_KEYCODE,
+            character=content,
+            app_name=app_name,
+            app_bundle_id=bundle_id,
+            modifiers=modifiers,
+            is_ime_input=True,
+        )
+        if self.callback:
+            self.callback(key_event)
+
     def _emit_submission_snapshot(
         self,
         event,
@@ -909,6 +973,7 @@ class KeyboardListener:
         bundle_id: str | None = None,
         key_modifiers: dict | None = None,
         event_type=None,
+        target_pid: int | None = None,
     ):
         """Emit the full focused input value when Enter is pressed."""
         if app_name is None or bundle_id is None:
@@ -919,29 +984,13 @@ class KeyboardListener:
             "alt": False,
             "cmd": False,
         }
-        context = self._capture_focused_context()
+        context = self._capture_focused_context(target_pid=target_pid)
         captured_context_data = self._context_to_dict_safe(context)
         context_data = captured_context_data if config.capture_context_on_enter else {}
         current_field_id = focused_field_identity(context)
         capture_status = getattr(context, "capture_status", None) or captured_context_data.get(
             "capture_status", "ok"
         )
-        if capture_status != "ok":
-            physical_key_count = self._pop_fallback_count(
-                app_name, bundle_id, current_field_id=current_field_id
-            )
-            self._clear_submission_buffers(app_name, bundle_id)
-            self._emit_capture_diagnostic(
-                app_name,
-                bundle_id,
-                event_type=event_type,
-                decision_action="skip",
-                decision_reason="degraded_context",
-                physical_key_count=physical_key_count,
-                context_data=captured_context_data,
-            )
-            return
-
         if is_secure_text_entry_context(context):
             physical_key_count = self._pop_fallback_count(
                 app_name, bundle_id, current_field_id=current_field_id
@@ -953,6 +1002,76 @@ class KeyboardListener:
                 event_type=event_type,
                 decision_action="skip",
                 decision_reason="secure_text_input",
+                physical_key_count=physical_key_count,
+                context_data=captured_context_data,
+            )
+            return
+
+        if capture_status != "ok":
+            if bundle_id in DEGRADED_CHAT_COMPATIBILITY_BUNDLE_IDS:
+                physical_key_count = self._pop_fallback_count(
+                    app_name, bundle_id, current_field_id=current_field_id
+                )
+                content = normalize_submission_text(
+                    self._pop_text_fallback_content(
+                        app_name,
+                        bundle_id,
+                        current_field_id=current_field_id,
+                        allow_unscoped=True,
+                    ),
+                    app_name=app_name,
+                    bundle_id=bundle_id,
+                )
+                self._clear_recent_text_snapshot(app_name, bundle_id)
+                if content:
+                    self._emit_submission_event(
+                        app_name=app_name,
+                        bundle_id=bundle_id,
+                        content=content,
+                        key_modifiers=key_modifiers,
+                        context_data=context_data,
+                        fallback_source="degraded_key_event_text",
+                        physical_key_count=physical_key_count,
+                    )
+                    return
+                if (
+                    physical_key_count > 0
+                    and getattr(config, "count_unreadable_submissions", True)
+                ):
+                    self._emit_submission_event(
+                        app_name=app_name,
+                        bundle_id=bundle_id,
+                        content=UNREADABLE_SUBMISSION_PLACEHOLDER,
+                        key_modifiers=key_modifiers,
+                        context_data=context_data,
+                        fallback_source="degraded_count_unreadable",
+                        char_count_override=physical_key_count,
+                        redacted_content=True,
+                        physical_key_count=physical_key_count,
+                    )
+                    return
+                self._clear_submission_buffers(app_name, bundle_id)
+                self._emit_capture_diagnostic(
+                    app_name,
+                    bundle_id,
+                    event_type=event_type,
+                    decision_action="skip",
+                    decision_reason="no_trusted_content",
+                    physical_key_count=physical_key_count,
+                    context_data=captured_context_data,
+                )
+                return
+
+            physical_key_count = self._pop_fallback_count(
+                app_name, bundle_id, current_field_id=current_field_id
+            )
+            self._clear_submission_buffers(app_name, bundle_id)
+            self._emit_capture_diagnostic(
+                app_name,
+                bundle_id,
+                event_type=event_type,
+                decision_action="skip",
+                decision_reason="degraded_context",
                 physical_key_count=physical_key_count,
                 context_data=captured_context_data,
             )
@@ -1091,36 +1210,19 @@ class KeyboardListener:
                 print(f"⚠️  Enter 提交使用键盘文本降级：{len(content)} chars -> {app_name} ({bundle_id})")
                 self._last_empty_submission_log = now
 
-        submission_id = uuid.uuid4().hex
-
         if _DEBUG:
             print(f"[DEBUG] Enter 提交快照: {len(content)} chars -> {app_name}")
 
-        modifiers = {
-            "shift": key_modifiers.get("shift", False),
-            "ctrl": key_modifiers.get("ctrl", False),
-            "alt": key_modifiers.get("alt", False),
-            "cmd": key_modifiers.get("cmd", False),
-            "submit_snapshot": True,
-            "submission_id": submission_id,
-            "context": context_data,
-            "redacted_content": redacted_content,
-        }
-        if fallback_source is not None:
-            modifiers["fallback_source"] = fallback_source
-        if char_count_override is not None:
-            modifiers["char_count_override"] = char_count_override
-        key_event = KeyEvent(
-            timestamp=storage_now(),
-            keycode=ENTER_KEYCODE,
-            character=content,
+        self._emit_submission_event(
             app_name=app_name,
-            app_bundle_id=bundle_id,
-            modifiers=modifiers,
-            is_ime_input=True,
+            bundle_id=bundle_id,
+            content=content,
+            key_modifiers=key_modifiers,
+            context_data=context_data,
+            fallback_source=fallback_source,
+            char_count_override=char_count_override,
+            redacted_content=redacted_content,
         )
-        if self.callback:
-            self.callback(key_event)
 
     def _process_raw_event(self, raw_event: RawKeyboardEvent):
         """Process a sampled key event outside the EventTap callback thread."""
@@ -1195,6 +1297,7 @@ class KeyboardListener:
                 bundle_id=bundle_id,
                 key_modifiers=modifiers,
                 event_type=event_type,
+                target_pid=raw_event.target_pid,
             )
 
     def _event_worker_loop(self):

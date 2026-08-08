@@ -195,12 +195,20 @@ def _is_useful_container_frame(focused: AXFrame, candidate: AXFrame) -> bool:
     return candidate.height >= max(160, focused.height * 3)
 
 
-def capture_accessibility_context(max_depth: int = 12) -> CapturedContext:
+def capture_accessibility_context(
+    max_depth: int = 12,
+    target_pid: int | None = None,
+) -> CapturedContext:
     """Capture focused element metadata through macOS Accessibility APIs."""
     try:
         focused = get_focused_element()
+        if focused is None and target_pid is not None and target_pid > 0:
+            focused = get_focused_element(target_pid)
         if focused is None:
-            return CapturedContext(capture_status="degraded", capture_error="focused element unavailable")
+            error = "focused element unavailable"
+            if target_pid is not None and target_pid > 0:
+                error = f"{error} (system-wide and pid {target_pid})"
+            return CapturedContext(capture_status="degraded", capture_error=error)
 
         hierarchy = walk_ax_hierarchy(focused, max_depth=max_depth)
         focused_node = hierarchy[0] if hierarchy else {}
@@ -231,14 +239,18 @@ def capture_accessibility_context(max_depth: int = 12) -> CapturedContext:
         return CapturedContext(capture_status="degraded", capture_error=str(exc))
 
 
-def get_focused_element():
+def get_focused_element(target_pid: int | None = None):
     try:
-        from ApplicationServices import AXUIElementCreateSystemWide
+        from ApplicationServices import AXUIElementCreateApplication, AXUIElementCreateSystemWide
     except Exception:
         return None
 
-    system = AXUIElementCreateSystemWide()
-    return copy_ax_attribute(system, "AXFocusedUIElement")
+    root = (
+        AXUIElementCreateApplication(target_pid)
+        if target_pid is not None and target_pid > 0
+        else AXUIElementCreateSystemWide()
+    )
+    return copy_ax_attribute(root, "AXFocusedUIElement")
 
 
 def walk_ax_hierarchy(element, max_depth: int = 12) -> list[dict]:

@@ -4,6 +4,8 @@ import time
 import types
 from types import SimpleNamespace
 
+import pytest
+
 
 def import_keyboard_listener(monkeypatch):
     quartz = types.ModuleType("Quartz")
@@ -170,6 +172,46 @@ def test_event_tap_callback_never_processes_synchronously_after_start(monkeypatc
     )
 
     assert listener._dropped_event_count == 1
+
+
+def test_submission_context_capture_receives_event_target_pid(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    events = []
+    capture_calls = []
+    listener = keyboard_listener.KeyboardListener(events.append)
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_app_by_pid",
+        lambda pid: ("Codex", "com.openai.codex"),
+    )
+
+    def fake_capture(*, target_pid=None, **_kwargs):
+        capture_calls.append(target_pid)
+        return SimpleNamespace(
+            focused_role="AXTextArea",
+            focused_subrole=None,
+            focused_protected=False,
+            focused_value="targeted context",
+            capture_status="ok",
+        )
+
+    listener._capture_focused_context = fake_capture
+    listener._context_to_dict_safe = lambda context: {"capture_status": "ok"}
+
+    listener._process_raw_event(
+        keyboard_listener.RawKeyboardEvent(
+            event_type=keyboard_listener.kCGEventKeyDown,
+            keycode=keyboard_listener.ENTER_KEYCODE,
+            text="",
+            app_name="Codex",
+            bundle_id="com.openai.codex",
+            modifiers={"shift": False, "ctrl": False, "alt": False, "cmd": False},
+            target_pid=123,
+        )
+    )
+
+    assert capture_calls == [123]
+    assert len(events) == 1
 
 
 def test_start_refuses_to_spawn_second_live_event_worker(monkeypatch):
@@ -517,8 +559,12 @@ def test_enter_in_browser_message_composer_defaults_to_newline(monkeypatch):
 
 def test_degraded_context_is_not_reported_as_non_text_focus(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    events = []
     diagnostics = []
-    listener = keyboard_listener.KeyboardListener(lambda event: None, diagnostics_callback=diagnostics.append)
+    listener = keyboard_listener.KeyboardListener(
+        events.append,
+        diagnostics_callback=diagnostics.append,
+    )
     listener._get_event_target_app = lambda event: ("Codex", "com.openai.codex")
     monkeypatch.setattr(
         keyboard_listener,
@@ -543,7 +589,189 @@ def test_degraded_context_is_not_reported_as_non_text_focus(monkeypatch):
         None,
     )
 
+    assert events == []
     assert diagnostics[-1]["decision_reason"] == "degraded_context"
+
+
+def test_degraded_diagnostic_retains_capture_error(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    diagnostics = []
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None,
+        diagnostics_callback=diagnostics.append,
+    )
+    listener._get_event_target_app = lambda event: ("Codex", "com.openai.codex")
+    monkeypatch.setattr(
+        keyboard_listener,
+        "capture_accessibility_context",
+        lambda: SimpleNamespace(
+            focused_role=None,
+            focused_subrole=None,
+            focused_protected=False,
+            capture_status="degraded",
+            capture_error="focused element unavailable (system-wide and pid 123)",
+        ),
+    )
+    monkeypatch.setattr(
+        keyboard_listener,
+        "context_to_dict",
+        lambda context: {
+            "capture_status": context.capture_status,
+            "capture_error": context.capture_error,
+        },
+    )
+
+    listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyDown,
+        SimpleNamespace(keycode=keyboard_listener.ENTER_KEYCODE, text=""),
+        None,
+    )
+
+    assert diagnostics[-1]["diagnostics"]["capture_error"] == (
+        "focused element unavailable (system-wide and pid 123)"
+    )
+
+
+@pytest.mark.parametrize(
+    ("app_name", "bundle_id"),
+    (("Kim", "Kem"), ("微信", "com.tencent.xinWeChat")),
+)
+def test_degraded_chat_app_persists_cjk_key_event_text(
+    monkeypatch,
+    app_name,
+    bundle_id,
+):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    events = []
+    listener = keyboard_listener.KeyboardListener(events.append)
+    listener._get_event_target_app = lambda event: (app_name, bundle_id)
+    monkeypatch.setattr(
+        keyboard_listener,
+        "capture_accessibility_context",
+        lambda: SimpleNamespace(
+            focused_role=None,
+            focused_subrole=None,
+            focused_protected=False,
+            capture_status="degraded",
+            capture_error="focused element unavailable",
+        ),
+    )
+    monkeypatch.setattr(
+        keyboard_listener,
+        "context_to_dict",
+        lambda context: {
+            "capture_status": context.capture_status,
+            "capture_error": context.capture_error,
+        },
+    )
+
+    listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyDown,
+        SimpleNamespace(keycode=0, text="你"),
+        None,
+    )
+    listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyDown,
+        SimpleNamespace(keycode=keyboard_listener.ENTER_KEYCODE, text=""),
+        None,
+    )
+
+    assert len(events) == 1
+    assert events[0].character == "你"
+    assert events[0].modifiers["fallback_source"] == "degraded_key_event_text"
+    assert events[0].modifiers["redacted_content"] is False
+    assert events[0].modifiers["context"]["capture_status"] == "degraded"
+
+
+def test_degraded_chat_app_persists_only_count_for_latin_input(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    events = []
+    listener = keyboard_listener.KeyboardListener(events.append)
+    listener._get_event_target_app = lambda event: ("Kim", "Kem")
+    monkeypatch.setattr(
+        keyboard_listener,
+        "capture_accessibility_context",
+        lambda: SimpleNamespace(
+            focused_role=None,
+            focused_subrole=None,
+            focused_protected=False,
+            capture_status="degraded",
+        ),
+    )
+    monkeypatch.setattr(
+        keyboard_listener,
+        "context_to_dict",
+        lambda context: {"capture_status": context.capture_status},
+    )
+
+    listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyDown,
+        SimpleNamespace(keycode=0, text="a"),
+        None,
+    )
+    listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyDown,
+        SimpleNamespace(keycode=keyboard_listener.ENTER_KEYCODE, text=""),
+        None,
+    )
+
+    assert len(events) == 1
+    assert events[0].character == keyboard_listener.UNREADABLE_SUBMISSION_PLACEHOLDER
+    assert events[0].modifiers["fallback_source"] == "degraded_count_unreadable"
+    assert events[0].modifiers["redacted_content"] is True
+    assert events[0].modifiers["char_count_override"] == 1
+
+
+def test_secure_chat_field_still_skips_compatibility_fallback(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    events = []
+    diagnostics = []
+    listener = keyboard_listener.KeyboardListener(
+        events.append,
+        diagnostics_callback=diagnostics.append,
+    )
+    listener._get_event_target_app = lambda event: ("Kim", "Kem")
+    monkeypatch.setattr(
+        keyboard_listener,
+        "capture_accessibility_context",
+        lambda: SimpleNamespace(
+            focused_role="AXTextField",
+            focused_subrole="AXSecureTextField",
+            focused_protected=True,
+            capture_status="ok",
+        ),
+    )
+    monkeypatch.setattr(
+        keyboard_listener,
+        "context_to_dict",
+        lambda context: {
+            "focused_role": context.focused_role,
+            "focused_subrole": context.focused_subrole,
+            "focused_protected": context.focused_protected,
+            "capture_status": context.capture_status,
+        },
+    )
+
+    listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyDown,
+        SimpleNamespace(keycode=0, text="密"),
+        None,
+    )
+    listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyDown,
+        SimpleNamespace(keycode=keyboard_listener.ENTER_KEYCODE, text=""),
+        None,
+    )
+
+    assert events == []
+    assert diagnostics[-1]["decision_reason"] == "secure_text_input"
 
 
 def test_enter_does_not_reuse_recent_snapshot_from_another_field(monkeypatch):
