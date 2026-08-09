@@ -39,6 +39,34 @@ def test_assemble_recognized_text_ignores_empty_and_chrome_only_lines():
     assert assemble_recognized_text(lines) == "有效内容"
 
 
+def test_assemble_recognized_text_ignores_tiled_watermarks():
+    lines = (
+        RecognizedLine(
+            "panbaokun", x=0.31, y=0.15, width=0.05, height=0.03,
+            slant_ratio=1.5,
+        ),
+        RecognizedLine(
+            "panbaokun", x=0.46, y=0.15, width=0.05, height=0.03,
+            slant_ratio=1.5,
+        ),
+        RecognizedLine(
+            "panbaokun", x=0.31, y=0.09, width=0.05, height=0.03,
+            slant_ratio=1.5,
+        ),
+        RecognizedLine(
+            "panbaokun", x=0.46, y=0.09, width=0.05, height=0.03,
+            slant_ratio=1.5,
+        ),
+        RecognizedLine(
+            "panbaoku", x=0.72, y=0.15, width=0.05, height=0.03,
+            slant_ratio=1.5,
+        ),
+        RecognizedLine("测试", x=0.32, y=0.12, width=0.08, height=0.03),
+    )
+
+    assert assemble_recognized_text(lines) == "测试"
+
+
 def test_assemble_recognized_text_bounds_output():
     text = assemble_recognized_text(
         (RecognizedLine("测" * 5000, x=0, y=0.5, width=1, height=0.1),)
@@ -244,3 +272,34 @@ def test_recognize_rejects_multiline_or_edge_clipped_text():
     assert multiline.recognize(frame) == ("", "kim_ocr_multiline_untrusted")
     assert bottom_clipped.recognize(frame) == ("", "kim_ocr_edge_clipped")
     assert top_clipped.recognize(frame) == ("", "kim_ocr_edge_clipped")
+
+
+def test_recognize_does_not_treat_repeated_horizontal_text_as_watermark():
+    frame = CapturedFrame("image", 123, 1197, 925, 12.5, DOUBAO_BUNDLE_ID)
+    capture = KimPreSubmitCapture(
+        ocr_provider=lambda image, roi: (
+            RecognizedLine("测试", 0.31, 0.15, 0.05, 0.02),
+            RecognizedLine("测试", 0.46, 0.15, 0.05, 0.02),
+            RecognizedLine("测试", 0.31, 0.09, 0.05, 0.02),
+            RecognizedLine("测试", 0.46, 0.09, 0.05, 0.02),
+            RecognizedLine("提交", 0.32, 0.12, 0.08, 0.02),
+        )
+    )
+
+    assert capture.recognize(frame) == ("", "kim_ocr_multiline_untrusted")
+
+
+def test_recognize_keeps_horizontal_prefix_of_slanted_watermark():
+    frame = CapturedFrame("image", 123, 1197, 925, 12.5, DOUBAO_BUNDLE_ID)
+    capture = KimPreSubmitCapture(
+        ocr_provider=lambda image, roi: (
+            RecognizedLine("panbaokun", 0.31, 0.15, 0.05, 0.02, 1.5),
+            RecognizedLine("panbaokun", 0.46, 0.15, 0.05, 0.02, 1.5),
+            RecognizedLine("panbaokun", 0.31, 0.09, 0.05, 0.02, 1.5),
+            RecognizedLine("panbaokun", 0.46, 0.09, 0.05, 0.02, 1.5),
+            RecognizedLine("panbaoku", 0.32, 0.13, 0.08, 0.02, 0.0),
+            RecognizedLine("提交", 0.32, 0.11, 0.08, 0.02, 0.0),
+        )
+    )
+
+    assert capture.recognize(frame) == ("", "kim_ocr_multiline_untrusted")

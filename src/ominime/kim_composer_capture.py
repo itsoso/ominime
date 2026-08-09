@@ -3,6 +3,7 @@
 import re
 import threading
 import time
+from collections import defaultdict
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Callable, Iterable
@@ -22,6 +23,7 @@ KIM_CHROME_LABELS = frozenset(
 MIN_KIM_WINDOW_WIDTH = 300
 MIN_KIM_WINDOW_HEIGHT = 200
 WINDOW_CACHE_TTL_SECONDS = 5.0
+MIN_WATERMARK_SLANT_RATIO = 0.5
 
 
 @dataclass(frozen=True)
@@ -66,6 +68,7 @@ class RecognizedLine:
     y: float
     width: float
     height: float
+    slant_ratio: float = 0.0
 
 
 def assemble_recognized_text(lines) -> str:
@@ -76,6 +79,47 @@ def assemble_recognized_text(lines) -> str:
         if line.text.strip()
         and line.text.strip() not in KIM_CHROME_LABELS
         and any(character.isalnum() for character in line.text)
+    ]
+    grouped: dict[str, list[RecognizedLine]] = defaultdict(list)
+    for line in usable:
+        grouped[line.text.strip().casefold()].append(line)
+    tiled_watermarks = {
+        normalized_text
+        for normalized_text, repeated_lines in grouped.items()
+        if len(repeated_lines) >= 4
+        and all(
+            line.slant_ratio >= MIN_WATERMARK_SLANT_RATIO
+            for line in repeated_lines
+        )
+        and max(line.x for line in repeated_lines)
+        - min(line.x for line in repeated_lines)
+        > max(line.width for line in repeated_lines) * 1.5
+        and max(line.y for line in repeated_lines)
+        - min(line.y for line in repeated_lines)
+        > max(line.height for line in repeated_lines) * 1.5
+    }
+
+    def is_tiled_watermark_variant(line: RecognizedLine) -> bool:
+        if line.slant_ratio < MIN_WATERMARK_SLANT_RATIO:
+            return False
+        candidate = line.text.strip().casefold()
+        return any(
+            candidate == watermark
+            or (
+                min(len(candidate), len(watermark)) >= 4
+                and abs(len(candidate) - len(watermark)) <= 2
+                and (
+                    candidate.startswith(watermark)
+                    or watermark.startswith(candidate)
+                )
+            )
+            for watermark in tiled_watermarks
+        )
+
+    usable = [
+        line
+        for line in usable
+        if not is_tiled_watermark_variant(line)
     ]
     usable.sort(key=lambda line: (-(line.y + line.height / 2), line.x))
 
@@ -335,6 +379,12 @@ class KimPreSubmitCapture:
             if candidate.confidence() < 0.35:
                 continue
             bounds = observation.boundingBox()
+            top_left = observation.topLeft()
+            top_right = observation.topRight()
+            slant_ratio = abs(float(top_right.y) - float(top_left.y)) / max(
+                abs(float(top_right.x) - float(top_left.x)),
+                0.0001,
+            )
             lines.append(
                 RecognizedLine(
                     text=str(candidate.string()),
@@ -342,6 +392,7 @@ class KimPreSubmitCapture:
                     y=roi.y + float(bounds.origin.y) * roi.height,
                     width=float(bounds.size.width) * roi.width,
                     height=float(bounds.size.height) * roi.height,
+                    slant_ratio=slant_ratio,
                 )
             )
         return tuple(lines)
