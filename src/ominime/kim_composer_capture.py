@@ -197,10 +197,7 @@ class KimPreSubmitCapture:
                 prepared = self._prepared_windows.get(target_pid)
                 if prepared is None:
                     return None
-                window, prepared_at = prepared
-                if self._clock() - prepared_at > WINDOW_CACHE_TTL_SECONDS:
-                    self._prepared_windows.pop(target_pid, None)
-                    return None
+                window, _ = prepared
             if window is None:
                 return None
             image = self._image_provider(window.window_id)

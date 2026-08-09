@@ -158,7 +158,7 @@ def test_failed_or_expired_window_cache_can_be_prepared_again():
     assert capture.freeze(123).image == "image-2"
 
     now[0] = 10.0
-    assert capture.freeze(123) is None
+    assert capture.freeze(123).image == "image-2"
     window_id[0] = 3
     assert capture.prepare(123)
     assert capture.freeze(123).image == "image-3"
