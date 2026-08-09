@@ -1147,6 +1147,7 @@ class KeyboardListener:
         key_modifiers: dict | None = None,
         event_type=None,
         target_pid: int | None = None,
+        pre_submit_frame: object | None = None,
     ):
         """Emit the full focused input value when Enter is pressed."""
         if app_name is None or bundle_id is None:
@@ -1239,6 +1240,41 @@ class KeyboardListener:
                         capture_diagnostics=candidate_diagnostics,
                     )
                     return
+                if (
+                    bundle_id == LEGACY_KIM_BUNDLE_ID
+                    and pre_submit_frame is not None
+                ):
+                    try:
+                        recognized_text, ocr_failure = (
+                            self._kim_composer_capture.recognize(
+                                pre_submit_frame
+                            )
+                        )
+                    except Exception:
+                        recognized_text = ""
+                        ocr_failure = "kim_ocr_native_error"
+                    recognized_content = normalize_submission_text(
+                        recognized_text,
+                        app_name=app_name,
+                        bundle_id=bundle_id,
+                    )
+                    if recognized_content:
+                        self._clear_text_fallback_buffer(app_name, bundle_id)
+                        self._emit_submission_event(
+                            app_name=app_name,
+                            bundle_id=bundle_id,
+                            content=recognized_content,
+                            key_modifiers=key_modifiers,
+                            context_data=context_data,
+                            fallback_source="kim_presubmit_ocr",
+                            physical_key_count=physical_key_count,
+                        )
+                        return
+                    if ocr_failure:
+                        candidate_diagnostics = dict(
+                            candidate_diagnostics or {}
+                        )
+                        candidate_diagnostics["kim_ocr_failure"] = ocr_failure
                 if (
                     physical_key_count > 0
                     and getattr(config, "count_unreadable_submissions", True)
@@ -1564,6 +1600,7 @@ class KeyboardListener:
                 key_modifiers=modifiers,
                 event_type=event_type,
                 target_pid=raw_event.target_pid,
+                pre_submit_frame=raw_event.pre_submit_frame,
             )
 
     def _event_worker_loop(self):
