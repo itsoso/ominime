@@ -169,6 +169,11 @@ class FakeKimComposerCapture:
         self.recognize_result = recognize_result
         self.freeze_calls = []
         self.recognize_calls = []
+        self.prepare_calls = []
+
+    def prepare(self, target_pid):
+        self.prepare_calls.append(target_pid)
+        return True
 
     def freeze(self, target_pid):
         self.freeze_calls.append(target_pid)
@@ -189,6 +194,7 @@ def test_kim_presubmit_frame_is_frozen_before_enter_is_enqueued(monkeypatch):
         kim_composer_capture=capture,
     )
     monkeypatch.setattr(keyboard_listener, "get_current_app", lambda: ("Kim", "Kem"))
+    listener._target_app_identities[123] = ("Kim", "Kem")
     listener._has_started = True
     listener._event_worker_running = True
     native_event = SimpleNamespace(
@@ -234,6 +240,7 @@ def test_kim_presubmit_frame_is_not_frozen_outside_exact_plain_enter(
         kim_composer_capture=capture,
     )
     monkeypatch.setattr(keyboard_listener, "get_current_app", lambda: app)
+    listener._target_app_identities[123] = app
     listener._has_started = True
     listener._event_worker_running = True
 
@@ -257,6 +264,7 @@ def test_kim_presubmit_capture_failure_does_not_block_enter(monkeypatch):
         kim_composer_capture=capture,
     )
     monkeypatch.setattr(keyboard_listener, "get_current_app", lambda: ("Kim", "Kem"))
+    listener._target_app_identities[123] = ("Kim", "Kem")
     listener._has_started = True
     listener._event_worker_running = True
     native_event = SimpleNamespace(
@@ -286,6 +294,7 @@ def test_kim_presubmit_missing_frame_is_diagnosable(monkeypatch):
         kim_composer_capture=capture,
     )
     monkeypatch.setattr(keyboard_listener, "get_current_app", lambda: ("Kim", "Kem"))
+    listener._target_app_identities[123] = ("Kim", "Kem")
     listener._has_started = True
     listener._event_worker_running = True
 
@@ -303,6 +312,60 @@ def test_kim_presubmit_missing_frame_is_diagnosable(monkeypatch):
     queued = listener._event_queue.get_nowait()
     assert queued.pre_submit_frame is None
     assert queued.pre_submit_capture_failure == "kim_ocr_frame_unavailable"
+
+
+def test_kim_presubmit_does_not_trust_stale_app_identity(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    capture = FakeKimComposerCapture()
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None,
+        kim_composer_capture=capture,
+    )
+    monkeypatch.setattr(keyboard_listener, "get_current_app", lambda: ("Kim", "Kem"))
+    listener._target_app_identities[999] = ("Chrome", "com.google.Chrome")
+    listener._has_started = True
+    listener._event_worker_running = True
+
+    listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyDown,
+        SimpleNamespace(
+            keycode=keyboard_listener.ENTER_KEYCODE,
+            text="",
+            target_pid=999,
+        ),
+        None,
+    )
+
+    queued = listener._event_queue.get_nowait()
+    assert capture.freeze_calls == []
+    assert queued.pre_submit_frame is None
+
+
+def test_kim_window_is_prepared_on_worker_before_enter(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    capture = FakeKimComposerCapture()
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None,
+        kim_composer_capture=capture,
+    )
+    listener._record_recent_text_snapshot = lambda *args, **kwargs: None
+    monkeypatch.setattr(keyboard_listener, "get_app_by_pid", lambda pid: ("Kim", "Kem"))
+
+    listener._process_raw_event(
+        keyboard_listener.RawKeyboardEvent(
+            event_type=keyboard_listener.kCGEventKeyDown,
+            keycode=8,
+            text="c",
+            app_name="Kim",
+            bundle_id="Kem",
+            modifiers={"shift": False, "ctrl": False, "alt": False, "cmd": False},
+            target_pid=123,
+        )
+    )
+
+    assert capture.prepare_calls == [123]
+    assert listener._target_app_identities[123] == ("Kim", "Kem")
 
 
 def test_event_tap_callback_never_processes_synchronously_after_start(monkeypatch):
@@ -2149,6 +2212,37 @@ def test_kim_presubmit_missing_frame_failure_is_saved_without_content(monkeypatc
 
     assert events[0].modifiers["capture_diagnostics"]["kim_ocr_failure"] == (
         "kim_ocr_frame_unavailable"
+    )
+
+
+def test_kim_presubmit_rejects_partial_text_for_large_key_count(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    events = []
+    capture = FakeKimComposerCapture(recognize_result=("测试", None))
+    listener = keyboard_listener.KeyboardListener(
+        events.append,
+        candidate_reader=FakeDoubaoCandidateReader([None]),
+        kim_composer_capture=capture,
+    )
+    configure_listener_context(listener)
+    monkeypatch.setattr(keyboard_listener, "get_app_by_pid", lambda pid: ("Kim", "Kem"))
+    key = ("Kim", "Kem")
+    listener._fallback_buffers[key] = ["x"] * 100
+    listener._fallback_buffer_updated_at[key] = time.monotonic()
+
+    listener._process_raw_event(
+        doubao_raw_event(
+            keyboard_listener,
+            keyboard_listener.kCGEventKeyDown,
+            keyboard_listener.ENTER_KEYCODE,
+            pre_submit_frame="kim-frame",
+        )
+    )
+
+    assert events[0].modifiers["fallback_source"] == "degraded_count_unreadable"
+    assert events[0].modifiers["char_count_override"] == 100
+    assert events[0].modifiers["capture_diagnostics"]["kim_ocr_failure"] == (
+        "kim_ocr_key_count_mismatch"
     )
 
 

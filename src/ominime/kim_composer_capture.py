@@ -1,6 +1,8 @@
 """Local pre-submit text recovery for the legacy Kim desktop client."""
 
 import time
+import re
+import threading
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Callable, Iterable
@@ -53,6 +55,7 @@ class CapturedFrame:
     width: float
     height: float
     captured_at: float
+    input_source_bundle_id: str
 
 
 @dataclass(frozen=True)
@@ -104,11 +107,24 @@ def ocr_text_is_trusted(text: str, input_source_bundle_id: str) -> bool:
         return False
     if input_source_bundle_id != DOUBAO_BUNDLE_ID:
         return True
+    if re.search(r"[a-z]+(?:'[a-z]+)*\s*$", text):
+        return False
     return any(
         "\u3400" <= character <= "\u4dbf"
         or "\u4e00" <= character <= "\u9fff"
         or "\uf900" <= character <= "\ufaff"
         for character in text
+    )
+
+
+def ocr_text_matches_physical_count(text: str, physical_key_count: int) -> bool:
+    """Reject OCR that is implausibly small or large for observed input."""
+    visible_chars = sum(1 for character in text if not character.isspace())
+    if visible_chars <= 0 or physical_key_count <= 0:
+        return False
+    return (
+        visible_chars <= physical_key_count * 4
+        and physical_key_count <= visible_chars * 8 + 8
     )
 
 
@@ -134,11 +150,16 @@ class KimPreSubmitCapture:
         self._input_source_provider = (
             input_source_provider or self._current_input_source_bundle_id
         )
+        self._prepared_windows: dict[int, WindowInfo] = {}
+        self._window_lock = threading.Lock()
 
-    def freeze(self, target_pid: int) -> CapturedFrame | None:
-        """Copy the largest normal window for the exact target PID."""
+    def prepare(self, target_pid: int) -> bool:
+        """Resolve the target window off the EventTap callback thread."""
         if target_pid <= 0:
-            return None
+            return False
+        with self._window_lock:
+            if target_pid in self._prepared_windows:
+                return True
         try:
             windows = tuple(
                 window
@@ -149,8 +170,25 @@ class KimPreSubmitCapture:
                 and window.height >= MIN_KIM_WINDOW_HEIGHT
             )
             if not windows:
-                return None
+                with self._window_lock:
+                    self._prepared_windows.pop(target_pid, None)
+                return False
             window = max(windows, key=lambda item: item.width * item.height)
+            with self._window_lock:
+                self._prepared_windows = {target_pid: window}
+            return True
+        except Exception:
+            return False
+
+    def freeze(self, target_pid: int) -> CapturedFrame | None:
+        """Copy a prepared target window without enumerating applications."""
+        if target_pid <= 0:
+            return None
+        try:
+            with self._window_lock:
+                window = self._prepared_windows.get(target_pid)
+            if window is None:
+                return None
             image = self._image_provider(window.window_id)
             if image is None:
                 return None
@@ -160,6 +198,7 @@ class KimPreSubmitCapture:
                 width=window.width,
                 height=window.height,
                 captured_at=self._clock(),
+                input_source_bundle_id=self._input_source_provider(),
             )
         except Exception:
             return None
@@ -169,12 +208,22 @@ class KimPreSubmitCapture:
         if frame is None:
             return "", "kim_ocr_frame_unavailable"
         try:
-            text = assemble_recognized_text(
-                self._ocr_provider(frame.image, KIM_COMPOSER_ROI)
-            )
+            lines = tuple(self._ocr_provider(frame.image, KIM_COMPOSER_ROI))
+            if any(
+                line.y <= 0.02 or line.y + line.height >= 0.98
+                for line in lines
+                if line.text.strip()
+            ):
+                return "", "kim_ocr_edge_clipped"
+            text = assemble_recognized_text(lines)
             if not text:
                 return "", "kim_ocr_empty"
-            if not ocr_text_is_trusted(text, self._input_source_provider()):
+            if "\n" in text:
+                return "", "kim_ocr_multiline_untrusted"
+            if not ocr_text_is_trusted(
+                text,
+                frame.input_source_bundle_id,
+            ):
                 return "", "kim_ocr_uncommitted_text"
             return text, None
         except Exception:

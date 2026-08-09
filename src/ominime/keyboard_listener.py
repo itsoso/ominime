@@ -68,7 +68,11 @@ from .ime_candidate_capture import (
     NUMBER_KEYCODE_TO_INDEX,
     SUPPORTED_TARGET_BUNDLE_IDS,
 )
-from .kim_composer_capture import LEGACY_KIM_BUNDLE_ID, KimPreSubmitCapture
+from .kim_composer_capture import (
+    LEGACY_KIM_BUNDLE_ID,
+    KimPreSubmitCapture,
+    ocr_text_matches_physical_count,
+)
 from .runtime_state import refresh_runtime_heartbeat, set_recording_status
 from .time_utils import storage_now
 
@@ -552,6 +556,7 @@ class KeyboardListener:
         self._pending_enter_keyups: set[tuple[str, str]] = set()
         self._candidate_reader = candidate_reader or DoubaoCandidateReader()
         self._kim_composer_capture = kim_composer_capture or KimPreSubmitCapture()
+        self._target_app_identities: dict[int, tuple[str, str]] = {}
         self._doubao_states: dict[tuple[str, str], DoubaoCompositionState] = {}
         self._doubao_failure_reasons: dict[tuple[str, str], str] = {}
         self._last_doubao_target: tuple[str, str, int] | None = None
@@ -1269,7 +1274,10 @@ class KeyboardListener:
                         app_name=app_name,
                         bundle_id=bundle_id,
                     )
-                    if recognized_content:
+                    if recognized_content and ocr_text_matches_physical_count(
+                        recognized_content,
+                        physical_key_count,
+                    ):
                         self._clear_text_fallback_buffer(app_name, bundle_id)
                         self._emit_submission_event(
                             app_name=app_name,
@@ -1281,6 +1289,8 @@ class KeyboardListener:
                             physical_key_count=physical_key_count,
                         )
                         return
+                    if recognized_content and not ocr_failure:
+                        ocr_failure = "kim_ocr_key_count_mismatch"
                     if ocr_failure:
                         candidate_diagnostics = dict(
                             candidate_diagnostics or {}
@@ -1485,6 +1495,18 @@ class KeyboardListener:
         bundle_id = raw_event.bundle_id
         if raw_event.target_pid > 0:
             app_name, bundle_id = get_app_by_pid(raw_event.target_pid)
+            if len(self._target_app_identities) >= 32:
+                self._target_app_identities.clear()
+            self._target_app_identities[raw_event.target_pid] = (
+                app_name,
+                bundle_id,
+            )
+            if (
+                bundle_id == LEGACY_KIM_BUNDLE_ID
+                and raw_event.event_type == kCGEventKeyDown
+                and raw_event.keycode != ENTER_KEYCODE
+            ):
+                self._kim_composer_capture.prepare(raw_event.target_pid)
         self._update_doubao_target(
             app_name,
             bundle_id,
@@ -1683,6 +1705,8 @@ class KeyboardListener:
                     and keycode == ENTER_KEYCODE
                     and bundle_id == LEGACY_KIM_BUNDLE_ID
                     and target_pid > 0
+                    and self._target_app_identities.get(target_pid)
+                    == (app_name, bundle_id)
                     and not is_autorepeat
                     and not any(modifiers.values())
                 ):
