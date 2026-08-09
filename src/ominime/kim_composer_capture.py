@@ -1,8 +1,8 @@
 """Local pre-submit text recovery for the legacy Kim desktop client."""
 
-import time
 import re
 import threading
+import time
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Callable, Iterable
@@ -21,6 +21,7 @@ KIM_CHROME_LABELS = frozenset(
 )
 MIN_KIM_WINDOW_WIDTH = 300
 MIN_KIM_WINDOW_HEIGHT = 200
+WINDOW_CACHE_TTL_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -150,16 +151,21 @@ class KimPreSubmitCapture:
         self._input_source_provider = (
             input_source_provider or self._current_input_source_bundle_id
         )
-        self._prepared_windows: dict[int, WindowInfo] = {}
+        self._prepared_windows: dict[int, tuple[WindowInfo, float]] = {}
         self._window_lock = threading.Lock()
 
     def prepare(self, target_pid: int) -> bool:
         """Resolve the target window off the EventTap callback thread."""
         if target_pid <= 0:
             return False
+        now = self._clock()
         with self._window_lock:
-            if target_pid in self._prepared_windows:
-                return True
+            prepared = self._prepared_windows.get(target_pid)
+            if prepared is not None:
+                _, prepared_at = prepared
+                if now - prepared_at <= WINDOW_CACHE_TTL_SECONDS:
+                    return True
+                self._prepared_windows.pop(target_pid, None)
         try:
             windows = tuple(
                 window
@@ -175,7 +181,9 @@ class KimPreSubmitCapture:
                 return False
             window = max(windows, key=lambda item: item.width * item.height)
             with self._window_lock:
-                self._prepared_windows = {target_pid: window}
+                self._prepared_windows = {
+                    target_pid: (window, self._clock())
+                }
             return True
         except Exception:
             return False
@@ -186,11 +194,18 @@ class KimPreSubmitCapture:
             return None
         try:
             with self._window_lock:
-                window = self._prepared_windows.get(target_pid)
+                prepared = self._prepared_windows.get(target_pid)
+                if prepared is None:
+                    return None
+                window, prepared_at = prepared
+                if self._clock() - prepared_at > WINDOW_CACHE_TTL_SECONDS:
+                    self._prepared_windows.pop(target_pid, None)
+                    return None
             if window is None:
                 return None
             image = self._image_provider(window.window_id)
             if image is None:
+                self._invalidate_window(target_pid, window.window_id)
                 return None
             return CapturedFrame(
                 image=image,
@@ -201,7 +216,24 @@ class KimPreSubmitCapture:
                 input_source_bundle_id=self._input_source_provider(),
             )
         except Exception:
+            self._invalidate_window(target_pid)
             return None
+
+    def _invalidate_window(
+        self,
+        target_pid: int,
+        expected_window_id: int | None = None,
+    ) -> None:
+        with self._window_lock:
+            prepared = self._prepared_windows.get(target_pid)
+            if prepared is None:
+                return
+            window, _ = prepared
+            if (
+                expected_window_id is None
+                or window.window_id == expected_window_id
+            ):
+                self._prepared_windows.pop(target_pid, None)
 
     def recognize(self, frame: CapturedFrame | None) -> tuple[str, str | None]:
         """Return trusted local OCR text or a non-content failure code."""
@@ -209,8 +241,15 @@ class KimPreSubmitCapture:
             return "", "kim_ocr_frame_unavailable"
         try:
             lines = tuple(self._ocr_provider(frame.image, KIM_COMPOSER_ROI))
+            bottom_edge = (
+                KIM_COMPOSER_ROI.y + KIM_COMPOSER_ROI.height * 0.02
+            )
+            top_edge = (
+                KIM_COMPOSER_ROI.y + KIM_COMPOSER_ROI.height * 0.98
+            )
             if any(
-                line.y <= 0.02 or line.y + line.height >= 0.98
+                line.y <= bottom_edge
+                or line.y + line.height >= top_edge
                 for line in lines
                 if line.text.strip()
             ):
@@ -302,10 +341,10 @@ class KimPreSubmitCapture:
             lines.append(
                 RecognizedLine(
                     text=str(candidate.string()),
-                    x=float(bounds.origin.x),
-                    y=float(bounds.origin.y),
-                    width=float(bounds.size.width),
-                    height=float(bounds.size.height),
+                    x=roi.x + float(bounds.origin.x) * roi.width,
+                    y=roi.y + float(bounds.origin.y) * roi.height,
+                    width=float(bounds.size.width) * roi.width,
+                    height=float(bounds.size.height) * roi.height,
                 )
             )
         return tuple(lines)

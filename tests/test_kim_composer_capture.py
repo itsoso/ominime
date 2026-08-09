@@ -137,12 +137,39 @@ def test_freeze_returns_none_when_native_image_capture_fails():
     assert capture.freeze(123) is None
 
 
+def test_failed_or_expired_window_cache_can_be_prepared_again():
+    now = [0.0]
+    window_id = [1]
+    capture = KimPreSubmitCapture(
+        clock=lambda: now[0],
+        window_provider=lambda: (
+            WindowInfo(window_id[0], 123, 0, 1197, 925),
+        ),
+        image_provider=lambda selected_id: (
+            None if selected_id == 1 else f"image-{selected_id}"
+        ),
+        input_source_provider=lambda: DOUBAO_BUNDLE_ID,
+    )
+
+    assert capture.prepare(123)
+    assert capture.freeze(123) is None
+    window_id[0] = 2
+    assert capture.prepare(123)
+    assert capture.freeze(123).image == "image-2"
+
+    now[0] = 10.0
+    assert capture.freeze(123) is None
+    window_id[0] = 3
+    assert capture.prepare(123)
+    assert capture.freeze(123).image == "image-3"
+
+
 def test_recognize_uses_kim_roi_and_returns_trusted_text():
     calls = []
     capture = KimPreSubmitCapture(
         input_source_provider=lambda: DOUBAO_BUNDLE_ID,
         ocr_provider=lambda image, roi: calls.append((image, roi))
-        or (RecognizedLine("测试成功", 0.1, 0.5, 0.4, 0.1),),
+        or (RecognizedLine("测试成功", 0.31, 0.10, 0.2, 0.02),),
     )
     frame = CapturedFrame("image", 123, 1197, 925, 12.5, DOUBAO_BUNDLE_ID)
 
@@ -159,7 +186,7 @@ def test_recognize_rejects_empty_and_uncommitted_doubao_text():
     pinyin = KimPreSubmitCapture(
         input_source_provider=lambda: DOUBAO_BUNDLE_ID,
         ocr_provider=lambda image, roi: (
-            RecognizedLine("ce'shi", 0.1, 0.5, 0.4, 0.1),
+            RecognizedLine("ce'shi", 0.31, 0.10, 0.2, 0.02),
         ),
     )
 
@@ -186,7 +213,7 @@ def test_recognize_uses_input_source_captured_with_frame():
     capture = KimPreSubmitCapture(
         input_source_provider=lambda: current_source[0],
         ocr_provider=lambda image, roi: (
-            RecognizedLine("nihao", 0.1, 0.5, 0.3, 0.1),
+            RecognizedLine("nihao", 0.31, 0.10, 0.2, 0.02),
         ),
     )
     frame = CapturedFrame("image", 123, 1197, 925, 12.5, DOUBAO_BUNDLE_ID)
@@ -199,15 +226,21 @@ def test_recognize_rejects_multiline_or_edge_clipped_text():
     frame = CapturedFrame("image", 123, 1197, 925, 12.5, DOUBAO_BUNDLE_ID)
     multiline = KimPreSubmitCapture(
         ocr_provider=lambda image, roi: (
-            RecognizedLine("第一行", 0.1, 0.8, 0.3, 0.1),
-            RecognizedLine("第二行", 0.1, 0.2, 0.3, 0.1),
+            RecognizedLine("第一行", 0.31, 0.14, 0.2, 0.02),
+            RecognizedLine("第二行", 0.31, 0.08, 0.2, 0.02),
         )
     )
-    clipped = KimPreSubmitCapture(
+    bottom_clipped = KimPreSubmitCapture(
         ocr_provider=lambda image, roi: (
-            RecognizedLine("可能被截断", 0.1, 0.01, 0.4, 0.1),
+            RecognizedLine("底部被截断", 0.31, 0.051, 0.2, 0.02),
+        )
+    )
+    top_clipped = KimPreSubmitCapture(
+        ocr_provider=lambda image, roi: (
+            RecognizedLine("顶部被截断", 0.31, 0.164, 0.2, 0.02),
         )
     )
 
     assert multiline.recognize(frame) == ("", "kim_ocr_multiline_untrusted")
-    assert clipped.recognize(frame) == ("", "kim_ocr_edge_clipped")
+    assert bottom_clipped.recognize(frame) == ("", "kim_ocr_edge_clipped")
+    assert top_clipped.recognize(frame) == ("", "kim_ocr_edge_clipped")
