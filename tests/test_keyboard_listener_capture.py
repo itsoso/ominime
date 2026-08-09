@@ -2053,6 +2053,29 @@ def test_doubao_commit_key_recovers_when_keyup_candidate_was_early(monkeypatch):
     assert diagnostics[-1]["decision_reason"] == "ime_candidate_commit"
 
 
+def test_doubao_later_keyup_miss_preserves_confirmed_prefix_after_recovery(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    first = keyboard_listener.CandidateSnapshot(("测试",), 123, time.monotonic())
+    second = keyboard_listener.CandidateSnapshot(("你好",), 123, time.monotonic())
+    reader = FakeDoubaoCandidateReader([first, first, None, second])
+    listener = keyboard_listener.KeyboardListener(lambda event: None, candidate_reader=reader)
+    listener._record_recent_text_snapshot = lambda *args, **kwargs: None
+    monkeypatch.setattr(keyboard_listener, "get_app_by_pid", lambda pid: ("Kim", "Kem"))
+
+    for raw_event in (
+        doubao_raw_event(keyboard_listener, keyboard_listener.kCGEventKeyDown, 8, "c"),
+        doubao_raw_event(keyboard_listener, keyboard_listener.kCGEventKeyUp, 8, "c"),
+        doubao_raw_event(keyboard_listener, keyboard_listener.kCGEventKeyDown, 49, " "),
+        doubao_raw_event(keyboard_listener, keyboard_listener.kCGEventKeyDown, 45, "n"),
+        doubao_raw_event(keyboard_listener, keyboard_listener.kCGEventKeyUp, 45, "n"),
+        doubao_raw_event(keyboard_listener, keyboard_listener.kCGEventKeyDown, 49, " "),
+    ):
+        listener._process_raw_event(raw_event)
+
+    assert reader.calls == [(123, "Kem")] * 4
+    assert listener._doubao_states[("Kim", "Kem")].confirmed_text == "测试你好"
+
+
 def test_doubao_app_switch_discards_confirmed_composition(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     snapshot = keyboard_listener.CandidateSnapshot(("测试",), 123, time.monotonic())

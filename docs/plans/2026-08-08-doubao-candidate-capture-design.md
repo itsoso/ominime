@@ -131,6 +131,10 @@ change, mouse click, or an editing operation the adapter cannot replay safely
 (including paste, cut, undo, select-all, Delete, Tab, and Escape).
 The five-second lifetime applies only to an uncommitted candidate snapshot;
 confirmed message content retains the normal application session timeout.
+If a later key-up misses its candidate window, the confirmed prefix is retained
+in memory but the submission is marked ambiguous. A successful commit-key
+revalidation restores the full prefix-plus-candidate message; otherwise the
+whole submission falls back to count-only rather than saving a partial suffix.
 
 ## Privacy and Failure Behavior
 

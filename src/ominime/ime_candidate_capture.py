@@ -422,6 +422,7 @@ class DoubaoCompositionState:
         self._pending_preedit = ""
         self._confirmed_text = ""
         self._composer_trusted = False
+        self._tainted = False
 
     def _prepare(self, target_pid: int) -> bool:
         if target_pid <= 0:
@@ -463,7 +464,12 @@ class DoubaoCompositionState:
         if not self._prepare(target_pid):
             return
         if snapshot is None:
-            self.clear()
+            had_unconfirmed_input = bool(self._pending_preedit or self._candidates)
+            self._candidates = ()
+            self._selected_index = 0
+            self._pending_preedit = ""
+            if self._confirmed_text and had_unconfirmed_input:
+                self._tainted = True
             return
         if snapshot.target_pid != target_pid:
             self.clear()
@@ -495,6 +501,7 @@ class DoubaoCompositionState:
         self._candidates = ()
         self._selected_index = 0
         self._pending_preedit = ""
+        self._tainted = False
         return CompositionResult(candidate_committed=True, committed_text=selected)
 
     def handle_key(self, *, keycode: int, text: str, target_pid: int) -> CompositionResult:
@@ -528,6 +535,9 @@ class DoubaoCompositionState:
 
     def pop_submission(self, *, target_pid: int) -> str:
         if not self._prepare(target_pid) or self._candidates:
+            return ""
+        if self._tainted:
+            self.clear()
             return ""
         content = self._confirmed_text
         self.clear()
