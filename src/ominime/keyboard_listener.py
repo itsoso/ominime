@@ -138,9 +138,11 @@ KEYCODE_TO_CHAR = {
 # 全局变量：当前活跃应用（通过应用切换通知更新）
 _current_app_name = "Unknown"
 _current_app_bundle = "unknown"
+_current_app_pid = 0
 _app_lock = threading.Lock()
 _DEBUG = False  # 调试模式
 _app_watcher_started = False
+_app_activation_callback: Callable[[str, str, int], None] | None = None
 
 # 最近接收键盘输入的应用（用于 Rime 中文输入归属）
 _last_input_app_name = "Unknown"
@@ -319,20 +321,47 @@ def is_pinyin_mode() -> bool:
         return _pinyin_mode
 
 
-def _on_app_activated(name: str, bundle_id: str):
+def _set_app_activation_callback(
+    callback: Callable[[str, str, int], None] | None,
+):
+    """Replace the listener notified by the process-wide app watcher."""
+    global _app_activation_callback
+    with _app_lock:
+        _app_activation_callback = callback
+        current = (_current_app_name, _current_app_bundle, _current_app_pid)
+    if callback is not None and current[2] > 0:
+        callback(*current)
+
+
+def _refresh_app_activation_callback():
+    with _app_lock:
+        callback = _app_activation_callback
+        current = (_current_app_name, _current_app_bundle, _current_app_pid)
+    if callback is not None and current[2] > 0:
+        callback(*current)
+
+
+def _on_app_activated(name: str, bundle_id: str, pid: int = 0):
     """应用切换回调"""
-    global _current_app_name, _current_app_bundle
+    global _current_app_name, _current_app_bundle, _current_app_pid
     with _app_lock:
         if _DEBUG:
             print(f"[DEBUG] 应用切换: {_current_app_name} -> {name} ({bundle_id})")
         _current_app_name = name
         _current_app_bundle = bundle_id
+        _current_app_pid = pid
+        callback = _app_activation_callback
+    if callback is not None and pid > 0:
+        callback(name, bundle_id, pid)
 
 
-def _start_app_watcher():
+def _start_app_watcher(
+    activation_callback: Callable[[str, str, int], None] | None = None,
+):
     """启动应用切换监听器（在单独线程中运行）"""
-    global _app_watcher_started, _current_app_name, _current_app_bundle
-    
+    global _app_watcher_started
+
+    _set_app_activation_callback(activation_callback)
     if _app_watcher_started:
         return
     _app_watcher_started = True
@@ -350,7 +379,8 @@ def _start_app_watcher():
                 app = notification.userInfo()["NSWorkspaceApplicationKey"]
                 name = app.localizedName() or "Unknown"
                 bundle_id = app.bundleIdentifier() or "unknown"
-                _on_app_activated(name, bundle_id)
+                pid = int(app.processIdentifier())
+                _on_app_activated(name, bundle_id, pid)
             except Exception as e:
                 if _DEBUG:
                     print(f"[DEBUG] App watcher error: {e}")
@@ -375,7 +405,8 @@ def _start_app_watcher():
         if front_app:
             _on_app_activated(
                 front_app.localizedName() or "Unknown",
-                front_app.bundleIdentifier() or "unknown"
+                front_app.bundleIdentifier() or "unknown",
+                int(front_app.processIdentifier()),
             )
         
         # 运行 RunLoop（应用切换由系统通知驱动）
@@ -384,6 +415,7 @@ def _start_app_watcher():
         run_loop = NSRunLoop.currentRunLoop()
         while True:
             run_loop.runMode_beforeDate_(NSDefaultRunLoopMode, NSDate.dateWithTimeIntervalSinceNow_(1.0))
+            _refresh_app_activation_callback()
             time.sleep(0.1)  # 防止 RunLoop 立即返回导致忙循环
     
     thread = threading.Thread(target=run_watcher, daemon=True)
@@ -426,6 +458,12 @@ def get_current_app() -> tuple[str, str]:
     """获取当前应用（从缓存读取，由应用切换通知更新）"""
     with _app_lock:
         return (_current_app_name, _current_app_bundle)
+
+
+def get_current_app_target() -> tuple[str, str, int]:
+    """Atomically read the cached frontmost application and its PID."""
+    with _app_lock:
+        return (_current_app_name, _current_app_bundle, _current_app_pid)
 
 
 def get_current_app_fresh() -> tuple[str, str]:
@@ -584,6 +622,23 @@ class KeyboardListener:
         self._has_started = False
         self._event_processing_lock = threading.Lock()
         self._dropped_event_count = 0
+
+    def _prepare_activated_composer(
+        self,
+        app_name: str,
+        bundle_id: str,
+        target_pid: int,
+    ) -> None:
+        """Resolve composer window metadata outside the EventTap callback."""
+        composer_capture = self._presubmit_composer_captures.get(bundle_id)
+        prepared = bool(
+            composer_capture is not None
+            and target_pid > 0
+            and composer_capture.prepare(target_pid)
+        )
+        self._target_app_identities = (
+            {target_pid: (app_name, bundle_id)} if prepared else {}
+        )
     
     def _on_rime_input(self, text: str, timestamp: datetime, app_name: str, bundle_id: str):
         """Rime log events are ignored in submission-snapshot mode."""
@@ -1760,9 +1815,12 @@ class KeyboardListener:
             try:
                 target_pid = self._get_event_target_pid(event)
                 if self._has_started:
-                    app_name, bundle_id = get_current_app()
+                    app_name, bundle_id, frontmost_pid = (
+                        get_current_app_target()
+                    )
                 else:
                     app_name, bundle_id = self._get_event_target_app(event)
+                    frontmost_pid = target_pid
                 is_mouse_event = event_type in (
                     kCGEventLeftMouseDown,
                     kCGEventRightMouseDown,
@@ -1790,8 +1848,9 @@ class KeyboardListener:
                     and keycode == ENTER_KEYCODE
                     and composer_capture is not None
                     and target_pid > 0
+                    and target_pid == frontmost_pid
                     and self._target_app_identities.get(target_pid)
-                    in (None, (app_name, bundle_id))
+                    == (app_name, bundle_id)
                     and not is_autorepeat
                     and not any(modifiers.values())
                 ):
@@ -2019,7 +2078,7 @@ class KeyboardListener:
         self._event_worker_thread.start()
 
         # 启动应用切换监听器（基于系统通知，比轮询更准确）
-        _start_app_watcher()
+        _start_app_watcher(self._prepare_activated_composer)
 
         # 启动系统唤醒监听
         self._start_wake_observer()
@@ -2037,6 +2096,7 @@ class KeyboardListener:
     def stop(self):
         if not self._running:
             return
+        _set_app_activation_callback(None)
         with self._tap_lock:
             if self._tap:
                 try:

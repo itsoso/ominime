@@ -132,8 +132,8 @@ def test_running_event_tap_callback_only_enqueues_raw_event(monkeypatch):
     listener = keyboard_listener.KeyboardListener(lambda event: None)
     monkeypatch.setattr(
         keyboard_listener,
-        "get_current_app",
-        lambda: ("Codex", "com.openai.codex"),
+        "get_current_app_target",
+        lambda: ("Codex", "com.openai.codex", 0),
     )
     listener._capture_focused_context = lambda: (_ for _ in ()).throw(
         AssertionError("EventTap callback must not read Accessibility")
@@ -162,23 +162,29 @@ class FakeKimComposerCapture:
         frame="kim-frame",
         *,
         raises=False,
+        requires_prepare=False,
         recognize_result=("", "kim_ocr_empty"),
     ):
         self.frame = frame
         self.raises = raises
+        self.requires_prepare = requires_prepare
         self.recognize_result = recognize_result
         self.freeze_calls = []
         self.recognize_calls = []
         self.prepare_calls = []
+        self.prepared_pids = set()
 
     def prepare(self, target_pid):
         self.prepare_calls.append(target_pid)
+        self.prepared_pids.add(target_pid)
         return True
 
     def freeze(self, target_pid):
         self.freeze_calls.append(target_pid)
         if self.raises:
             raise RuntimeError("capture failed")
+        if self.requires_prepare and target_pid not in self.prepared_pids:
+            return None
         return self.frame
 
     def recognize(self, frame):
@@ -193,7 +199,11 @@ def test_kim_presubmit_frame_is_frozen_before_enter_is_enqueued(monkeypatch):
         lambda event: None,
         kim_composer_capture=capture,
     )
-    monkeypatch.setattr(keyboard_listener, "get_current_app", lambda: ("Kim", "Kem"))
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_current_app_target",
+        lambda: ("Kim", "Kem", 123),
+    )
     listener._target_app_identities[123] = ("Kim", "Kem")
     listener._has_started = True
     listener._event_worker_running = True
@@ -239,7 +249,11 @@ def test_kim_presubmit_frame_is_not_frozen_outside_exact_plain_enter(
         lambda event: None,
         kim_composer_capture=capture,
     )
-    monkeypatch.setattr(keyboard_listener, "get_current_app", lambda: app)
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_current_app_target",
+        lambda: (*app, 123),
+    )
     listener._target_app_identities[123] = app
     listener._has_started = True
     listener._event_worker_running = True
@@ -263,7 +277,11 @@ def test_kim_presubmit_capture_failure_does_not_block_enter(monkeypatch):
         lambda event: None,
         kim_composer_capture=capture,
     )
-    monkeypatch.setattr(keyboard_listener, "get_current_app", lambda: ("Kim", "Kem"))
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_current_app_target",
+        lambda: ("Kim", "Kem", 123),
+    )
     listener._target_app_identities[123] = ("Kim", "Kem")
     listener._has_started = True
     listener._event_worker_running = True
@@ -293,7 +311,11 @@ def test_kim_presubmit_missing_frame_is_diagnosable(monkeypatch):
         lambda event: None,
         kim_composer_capture=capture,
     )
-    monkeypatch.setattr(keyboard_listener, "get_current_app", lambda: ("Kim", "Kem"))
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_current_app_target",
+        lambda: ("Kim", "Kem", 123),
+    )
     listener._target_app_identities[123] = ("Kim", "Kem")
     listener._has_started = True
     listener._event_worker_running = True
@@ -321,7 +343,11 @@ def test_kim_presubmit_does_not_trust_stale_app_identity(monkeypatch):
         lambda event: None,
         kim_composer_capture=capture,
     )
-    monkeypatch.setattr(keyboard_listener, "get_current_app", lambda: ("Kim", "Kem"))
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_current_app_target",
+        lambda: ("Kim", "Kem", 999),
+    )
     listener._target_app_identities[999] = ("Chrome", "com.google.Chrome")
     listener._has_started = True
     listener._event_worker_running = True
@@ -333,6 +359,41 @@ def test_kim_presubmit_does_not_trust_stale_app_identity(monkeypatch):
             keycode=keyboard_listener.ENTER_KEYCODE,
             text="",
             target_pid=999,
+        ),
+        None,
+    )
+
+    queued = listener._event_queue.get_nowait()
+    assert capture.freeze_calls == []
+    assert queued.pre_submit_frame is None
+
+
+def test_wechat_presubmit_does_not_trust_a_different_frontmost_pid(
+    monkeypatch,
+):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    capture = FakeKimComposerCapture(frame="wechat-frame")
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None,
+        wechat_composer_capture=capture,
+    )
+    app = ("微信", "com.tencent.xinWeChat")
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_current_app_target",
+        lambda: (*app, 999),
+    )
+    listener._target_app_identities[4318] = app
+    listener._has_started = True
+    listener._event_worker_running = True
+
+    listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyDown,
+        SimpleNamespace(
+            keycode=keyboard_listener.ENTER_KEYCODE,
+            text="",
+            target_pid=4318,
         ),
         None,
     )
@@ -376,7 +437,11 @@ def test_wechat_presubmit_frame_is_frozen_before_enter_is_enqueued(monkeypatch):
         wechat_composer_capture=capture,
     )
     app = ("微信", "com.tencent.xinWeChat")
-    monkeypatch.setattr(keyboard_listener, "get_current_app", lambda: app)
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_current_app_target",
+        lambda: (*app, 4318),
+    )
     listener._target_app_identities[4318] = app
     listener._has_started = True
     listener._event_worker_running = True
@@ -401,18 +466,25 @@ def test_wechat_first_enter_after_restart_freezes_without_cached_identity(
     monkeypatch,
 ):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
-    capture = FakeKimComposerCapture(frame="wechat-frame")
+    capture = FakeKimComposerCapture(
+        frame="wechat-frame",
+        requires_prepare=True,
+    )
     listener = keyboard_listener.KeyboardListener(
         lambda event: None,
         wechat_composer_capture=capture,
     )
-    monkeypatch.setattr(
-        keyboard_listener,
-        "get_current_app",
-        lambda: ("微信", "com.tencent.xinWeChat"),
-    )
+    app = ("微信", "com.tencent.xinWeChat")
     listener._has_started = True
     listener._event_worker_running = True
+
+    keyboard_listener._set_app_activation_callback(
+        listener._prepare_activated_composer
+    )
+    keyboard_listener._on_app_activated(*app, 4318)
+    keyboard_listener._refresh_app_activation_callback()
+
+    assert capture.prepare_calls == [4318, 4318]
 
     listener._event_callback(
         None,
@@ -473,8 +545,8 @@ def test_event_tap_callback_never_processes_synchronously_after_start(monkeypatc
     )
     monkeypatch.setattr(
         keyboard_listener,
-        "get_current_app",
-        lambda: ("Codex", "com.openai.codex"),
+        "get_current_app_target",
+        lambda: ("Codex", "com.openai.codex", 0),
     )
 
     listener._event_callback(

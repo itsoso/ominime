@@ -172,7 +172,7 @@ Ask the user to send a unique short, single-line message with Enter. Verify the 
 
 **Step 1: Write the failing listener test**
 
-Add a callback-level test where WeChat is the current application, the Enter event has a valid WeChat PID, and `_target_app_identities` has no entry because no ordinary keydown occurred after restart. Assert that the prepared capture is frozen and attached to the queued event. Keep the existing mismatched-identity test passing.
+Add a callback-level test with a stateful fake capture that returns a frame only after `prepare(pid)`. Deliver a WeChat activation notification before the first Enter and assert that the notification prepares the PID and the callback freezes that frame. Keep mismatched-identity and mismatched-frontmost-PID tests passing.
 
 **Step 2: Run the focused test and verify it fails**
 
@@ -182,11 +182,11 @@ Run:
 PYTHONPATH="$PWD/src" /Users/liqiuhua/work/ominime/venv/bin/pytest tests/test_keyboard_listener_capture.py -k "wechat and first_enter" -q
 ```
 
-Expected: FAIL because the callback currently requires an exact cached identity before freezing.
+Expected: FAIL because activation notifications do not yet carry the PID or prepare the composer window.
 
 **Step 3: Implement the minimal cold-start allowance**
 
-Read the cached identity once. Allow freezing only when it is absent or exactly matches `(app_name, bundle_id)`; continue rejecting a cache entry that explicitly identifies another application. Do not enumerate windows or run OCR in the callback.
+Extend the existing application watcher to cache `(app_name, bundle_id, pid)` atomically and notify the listener outside the EventTap callback. On activation and periodic refresh, prepare only the matching composer window metadata. Keep the callback strict: the cached frontmost PID, event target PID, and prepared identity must all match. Do not enumerate windows or run OCR in the callback.
 
 **Step 4: Run focused, related, and full tests**
 
