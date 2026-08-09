@@ -13,6 +13,8 @@ KIM_CHROME_LABELS = frozenset(
     {
         "↩︎ 发送 / ⌘↩︎ 换行",
         "↩ 发送 / ⌘↩ 换行",
+        "B I S",
+        "B I 8",
     }
 )
 MIN_KIM_WINDOW_WIDTH = 300
@@ -31,7 +33,7 @@ KIM_COMPOSER_ROI = NormalizedRect(
     x=0.29,
     y=0.05,
     width=0.55,
-    height=0.16,
+    height=0.135,
 )
 
 

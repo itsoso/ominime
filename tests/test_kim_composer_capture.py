@@ -31,6 +31,7 @@ def test_assemble_recognized_text_ignores_empty_and_chrome_only_lines():
             width=0.5,
             height=0.1,
         ),
+        RecognizedLine("B I S", x=0.5, y=0.4, width=0.3, height=0.1),
         RecognizedLine("有效内容", x=0.1, y=0.2, width=0.3, height=0.1),
     )
 
