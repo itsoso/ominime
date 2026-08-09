@@ -368,6 +368,68 @@ def test_kim_window_is_prepared_on_worker_before_enter(monkeypatch):
     assert listener._target_app_identities[123] == ("Kim", "Kem")
 
 
+def test_wechat_presubmit_frame_is_frozen_before_enter_is_enqueued(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    capture = FakeKimComposerCapture(frame="wechat-frame")
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None,
+        wechat_composer_capture=capture,
+    )
+    app = ("微信", "com.tencent.xinWeChat")
+    monkeypatch.setattr(keyboard_listener, "get_current_app", lambda: app)
+    listener._target_app_identities[4318] = app
+    listener._has_started = True
+    listener._event_worker_running = True
+
+    listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyDown,
+        SimpleNamespace(
+            keycode=keyboard_listener.ENTER_KEYCODE,
+            text="",
+            target_pid=4318,
+        ),
+        None,
+    )
+
+    queued = listener._event_queue.get_nowait()
+    assert capture.freeze_calls == [4318]
+    assert queued.pre_submit_frame == "wechat-frame"
+
+
+def test_wechat_window_is_prepared_on_worker_before_enter(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    capture = FakeKimComposerCapture(frame="wechat-frame")
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None,
+        wechat_composer_capture=capture,
+    )
+    listener._record_recent_text_snapshot = lambda *args, **kwargs: None
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_app_by_pid",
+        lambda pid: ("微信", "com.tencent.xinWeChat"),
+    )
+
+    listener._process_raw_event(
+        keyboard_listener.RawKeyboardEvent(
+            event_type=keyboard_listener.kCGEventKeyDown,
+            keycode=8,
+            text="c",
+            app_name="微信",
+            bundle_id="com.tencent.xinWeChat",
+            modifiers={"shift": False, "ctrl": False, "alt": False, "cmd": False},
+            target_pid=4318,
+        )
+    )
+
+    assert capture.prepare_calls == [4318]
+    assert listener._target_app_identities[4318] == (
+        "微信",
+        "com.tencent.xinWeChat",
+    )
+
+
 def test_event_tap_callback_never_processes_synchronously_after_start(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     listener = keyboard_listener.KeyboardListener(lambda event: None)
@@ -2180,6 +2242,104 @@ def test_kim_presubmit_ocr_failure_keeps_count_only_without_text_in_diagnostics(
         "kim_ocr_failure": "kim_ocr_uncommitted_text",
     }
     assert "ocr_text" not in events[0].modifiers["capture_diagnostics"]
+
+
+def test_wechat_presubmit_ocr_persists_degraded_content(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    events = []
+    capture = FakeKimComposerCapture(
+        frame="wechat-frame",
+        recognize_result=("微信验收", None),
+    )
+    listener = keyboard_listener.KeyboardListener(
+        events.append,
+        candidate_reader=FakeDoubaoCandidateReader([None]),
+        wechat_composer_capture=capture,
+    )
+    configure_listener_context(listener)
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_app_by_pid",
+        lambda pid: ("微信", "com.tencent.xinWeChat"),
+    )
+
+    for event in (
+        keyboard_listener.RawKeyboardEvent(
+            event_type=keyboard_listener.kCGEventKeyDown,
+            keycode=8,
+            text="c",
+            app_name="微信",
+            bundle_id="com.tencent.xinWeChat",
+            modifiers={"shift": False, "ctrl": False, "alt": False, "cmd": False},
+            target_pid=4318,
+        ),
+        keyboard_listener.RawKeyboardEvent(
+            event_type=keyboard_listener.kCGEventKeyDown,
+            keycode=keyboard_listener.ENTER_KEYCODE,
+            text="",
+            app_name="微信",
+            bundle_id="com.tencent.xinWeChat",
+            modifiers={"shift": False, "ctrl": False, "alt": False, "cmd": False},
+            target_pid=4318,
+            pre_submit_frame="wechat-frame",
+        ),
+    ):
+        listener._process_raw_event(event)
+
+    assert capture.recognize_calls == ["wechat-frame"]
+    assert len(events) == 1
+    assert events[0].character == "微信验收"
+    assert events[0].modifiers["fallback_source"] == "wechat_presubmit_ocr"
+    assert events[0].modifiers["redacted_content"] is False
+
+
+def test_wechat_presubmit_ocr_failure_keeps_count_only(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    events = []
+    capture = FakeKimComposerCapture(
+        frame="wechat-frame",
+        recognize_result=("", "wechat_ocr_uncommitted_text"),
+    )
+    listener = keyboard_listener.KeyboardListener(
+        events.append,
+        candidate_reader=FakeDoubaoCandidateReader([None]),
+        wechat_composer_capture=capture,
+    )
+    configure_listener_context(listener)
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_app_by_pid",
+        lambda pid: ("微信", "com.tencent.xinWeChat"),
+    )
+
+    for event in (
+        keyboard_listener.RawKeyboardEvent(
+            event_type=keyboard_listener.kCGEventKeyDown,
+            keycode=8,
+            text="c",
+            app_name="微信",
+            bundle_id="com.tencent.xinWeChat",
+            modifiers={"shift": False, "ctrl": False, "alt": False, "cmd": False},
+            target_pid=4318,
+        ),
+        keyboard_listener.RawKeyboardEvent(
+            event_type=keyboard_listener.kCGEventKeyDown,
+            keycode=keyboard_listener.ENTER_KEYCODE,
+            text="",
+            app_name="微信",
+            bundle_id="com.tencent.xinWeChat",
+            modifiers={"shift": False, "ctrl": False, "alt": False, "cmd": False},
+            target_pid=4318,
+            pre_submit_frame="wechat-frame",
+        ),
+    ):
+        listener._process_raw_event(event)
+
+    assert events[0].modifiers["fallback_source"] == "degraded_count_unreadable"
+    assert events[0].modifiers["capture_diagnostics"] == {
+        "doubao_candidate_failure": "candidate_ax_unavailable",
+        "wechat_ocr_failure": "wechat_ocr_uncommitted_text",
+    }
 
 
 def test_kim_presubmit_missing_frame_failure_is_saved_without_content(monkeypatch):

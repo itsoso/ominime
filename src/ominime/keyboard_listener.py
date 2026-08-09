@@ -73,6 +73,10 @@ from .kim_composer_capture import (
     KimPreSubmitCapture,
     ocr_text_matches_physical_count,
 )
+from .wechat_composer_capture import (
+    WECHAT_BUNDLE_ID,
+    WeChatPreSubmitCapture,
+)
 from .runtime_state import refresh_runtime_heartbeat, set_recording_status
 from .time_utils import storage_now
 
@@ -209,6 +213,10 @@ BROWSER_BUNDLE_HINTS = (
 DEGRADED_CHAT_COMPATIBILITY_BUNDLE_IDS = {
     "Kem",
     "com.tencent.xinWeChat",
+}
+PRESUBMIT_OCR_METADATA = {
+    LEGACY_KIM_BUNDLE_ID: ("kim_ocr", "kim_presubmit_ocr"),
+    WECHAT_BUNDLE_ID: ("wechat_ocr", "wechat_presubmit_ocr"),
 }
 
 
@@ -529,6 +537,7 @@ class KeyboardListener:
         diagnostics_callback: Optional[Callable[[dict], None]] = None,
         candidate_reader: DoubaoCandidateReader | None = None,
         kim_composer_capture: KimPreSubmitCapture | None = None,
+        wechat_composer_capture: WeChatPreSubmitCapture | None = None,
     ):
         self.callback = callback
         self.diagnostics_callback = diagnostics_callback
@@ -556,6 +565,13 @@ class KeyboardListener:
         self._pending_enter_keyups: set[tuple[str, str]] = set()
         self._candidate_reader = candidate_reader or DoubaoCandidateReader()
         self._kim_composer_capture = kim_composer_capture or KimPreSubmitCapture()
+        self._wechat_composer_capture = (
+            wechat_composer_capture or WeChatPreSubmitCapture()
+        )
+        self._presubmit_composer_captures = {
+            LEGACY_KIM_BUNDLE_ID: self._kim_composer_capture,
+            WECHAT_BUNDLE_ID: self._wechat_composer_capture,
+        }
         self._target_app_identities: dict[int, tuple[str, str]] = {}
         self._doubao_states: dict[tuple[str, str], DoubaoCompositionState] = {}
         self._doubao_failure_reasons: dict[tuple[str, str], str] = {}
@@ -1199,11 +1215,10 @@ class KeyboardListener:
                     if candidate_failure
                     else {}
                 )
-                if (
-                    bundle_id == LEGACY_KIM_BUNDLE_ID
-                    and pre_submit_capture_failure
-                ):
-                    candidate_diagnostics["kim_ocr_failure"] = (
+                capture_metadata = PRESUBMIT_OCR_METADATA.get(bundle_id)
+                if capture_metadata and pre_submit_capture_failure:
+                    failure_prefix, _ = capture_metadata
+                    candidate_diagnostics[f"{failure_prefix}_failure"] = (
                         pre_submit_capture_failure
                     )
                 if not candidate_diagnostics:
@@ -1256,19 +1271,20 @@ class KeyboardListener:
                         capture_diagnostics=candidate_diagnostics,
                     )
                     return
-                if (
-                    bundle_id == LEGACY_KIM_BUNDLE_ID
-                    and pre_submit_frame is not None
-                ):
+                composer_capture = self._presubmit_composer_captures.get(
+                    bundle_id
+                )
+                if composer_capture is not None and pre_submit_frame is not None:
+                    failure_prefix, fallback_source = PRESUBMIT_OCR_METADATA[
+                        bundle_id
+                    ]
                     try:
                         recognized_text, ocr_failure = (
-                            self._kim_composer_capture.recognize(
-                                pre_submit_frame
-                            )
+                            composer_capture.recognize(pre_submit_frame)
                         )
                     except Exception:
                         recognized_text = ""
-                        ocr_failure = "kim_ocr_native_error"
+                        ocr_failure = f"{failure_prefix}_native_error"
                     recognized_content = normalize_submission_text(
                         recognized_text,
                         app_name=app_name,
@@ -1285,17 +1301,19 @@ class KeyboardListener:
                             content=recognized_content,
                             key_modifiers=key_modifiers,
                             context_data=context_data,
-                            fallback_source="kim_presubmit_ocr",
+                            fallback_source=fallback_source,
                             physical_key_count=physical_key_count,
                         )
                         return
                     if recognized_content and not ocr_failure:
-                        ocr_failure = "kim_ocr_key_count_mismatch"
+                        ocr_failure = f"{failure_prefix}_key_count_mismatch"
                     if ocr_failure:
                         candidate_diagnostics = dict(
                             candidate_diagnostics or {}
                         )
-                        candidate_diagnostics["kim_ocr_failure"] = ocr_failure
+                        candidate_diagnostics[
+                            f"{failure_prefix}_failure"
+                        ] = ocr_failure
                 if (
                     physical_key_count > 0
                     and getattr(config, "count_unreadable_submissions", True)
@@ -1501,12 +1519,13 @@ class KeyboardListener:
                 app_name,
                 bundle_id,
             )
+            composer_capture = self._presubmit_composer_captures.get(bundle_id)
             if (
-                bundle_id == LEGACY_KIM_BUNDLE_ID
+                composer_capture is not None
                 and raw_event.event_type == kCGEventKeyDown
                 and raw_event.keycode != ENTER_KEYCODE
             ):
-                self._kim_composer_capture.prepare(raw_event.target_pid)
+                composer_capture.prepare(raw_event.target_pid)
         self._update_doubao_target(
             app_name,
             bundle_id,
@@ -1700,27 +1719,31 @@ class KeyboardListener:
                 )
                 pre_submit_frame = None
                 pre_submit_capture_failure = None
+                composer_capture = self._presubmit_composer_captures.get(
+                    bundle_id
+                )
                 if (
                     event_type == kCGEventKeyDown
                     and keycode == ENTER_KEYCODE
-                    and bundle_id == LEGACY_KIM_BUNDLE_ID
+                    and composer_capture is not None
                     and target_pid > 0
                     and self._target_app_identities.get(target_pid)
                     == (app_name, bundle_id)
                     and not is_autorepeat
                     and not any(modifiers.values())
                 ):
+                    failure_prefix, _ = PRESUBMIT_OCR_METADATA[bundle_id]
                     try:
-                        pre_submit_frame = self._kim_composer_capture.freeze(
-                            target_pid
-                        )
+                        pre_submit_frame = composer_capture.freeze(target_pid)
                         if pre_submit_frame is None:
                             pre_submit_capture_failure = (
-                                "kim_ocr_frame_unavailable"
+                                f"{failure_prefix}_frame_unavailable"
                             )
                     except Exception:
                         pre_submit_frame = None
-                        pre_submit_capture_failure = "kim_ocr_capture_error"
+                        pre_submit_capture_failure = (
+                            f"{failure_prefix}_capture_error"
+                        )
                 raw_event = RawKeyboardEvent(
                     event_type=event_type,
                     keycode=keycode,
