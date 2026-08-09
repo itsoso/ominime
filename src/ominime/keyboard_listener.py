@@ -68,6 +68,7 @@ from .ime_candidate_capture import (
     NUMBER_KEYCODE_TO_INDEX,
     SUPPORTED_TARGET_BUNDLE_IDS,
 )
+from .kim_composer_capture import LEGACY_KIM_BUNDLE_ID, KimPreSubmitCapture
 from .runtime_state import refresh_runtime_heartbeat, set_recording_status
 from .time_utils import storage_now
 
@@ -101,6 +102,7 @@ class RawKeyboardEvent:
     modifiers: dict
     target_pid: int = 0
     is_autorepeat: bool = False
+    pre_submit_frame: object | None = None
 
 
 # 键码映射
@@ -521,6 +523,7 @@ class KeyboardListener:
         callback: Callable[[KeyEvent], None],
         diagnostics_callback: Optional[Callable[[dict], None]] = None,
         candidate_reader: DoubaoCandidateReader | None = None,
+        kim_composer_capture: KimPreSubmitCapture | None = None,
     ):
         self.callback = callback
         self.diagnostics_callback = diagnostics_callback
@@ -547,6 +550,7 @@ class KeyboardListener:
         self._last_text_fallback_events: dict[tuple[str, str], tuple[int, str, float]] = {}
         self._pending_enter_keyups: set[tuple[str, str]] = set()
         self._candidate_reader = candidate_reader or DoubaoCandidateReader()
+        self._kim_composer_capture = kim_composer_capture or KimPreSubmitCapture()
         self._doubao_states: dict[tuple[str, str], DoubaoCompositionState] = {}
         self._doubao_failure_reasons: dict[tuple[str, str], str] = {}
         self._last_doubao_target: tuple[str, str, int] | None = None
@@ -1615,6 +1619,27 @@ class KeyboardListener:
                     else CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode)
                 )
                 modifiers = self._event_modifiers(event)
+                is_autorepeat = bool(
+                    CGEventGetIntegerValueField(
+                        event,
+                        KEYBOARD_EVENT_AUTOREPEAT_FIELD,
+                    )
+                )
+                pre_submit_frame = None
+                if (
+                    event_type == kCGEventKeyDown
+                    and keycode == ENTER_KEYCODE
+                    and bundle_id == LEGACY_KIM_BUNDLE_ID
+                    and target_pid > 0
+                    and not is_autorepeat
+                    and not any(modifiers.values())
+                ):
+                    try:
+                        pre_submit_frame = self._kim_composer_capture.freeze(
+                            target_pid
+                        )
+                    except Exception:
+                        pre_submit_frame = None
                 raw_event = RawKeyboardEvent(
                     event_type=event_type,
                     keycode=keycode,
@@ -1623,12 +1648,8 @@ class KeyboardListener:
                     bundle_id=bundle_id,
                     modifiers=modifiers,
                     target_pid=target_pid,
-                    is_autorepeat=bool(
-                        CGEventGetIntegerValueField(
-                            event,
-                            KEYBOARD_EVENT_AUTOREPEAT_FIELD,
-                        )
-                    ),
+                    is_autorepeat=is_autorepeat,
+                    pre_submit_frame=pre_submit_frame,
                 )
                 if self._event_worker_running:
                     try:

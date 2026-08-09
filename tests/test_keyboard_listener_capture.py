@@ -156,6 +156,115 @@ def test_running_event_tap_callback_only_enqueues_raw_event(monkeypatch):
     assert returned is raw_event
 
 
+class FakeKimComposerCapture:
+    def __init__(self, frame="kim-frame", *, raises=False):
+        self.frame = frame
+        self.raises = raises
+        self.freeze_calls = []
+
+    def freeze(self, target_pid):
+        self.freeze_calls.append(target_pid)
+        if self.raises:
+            raise RuntimeError("capture failed")
+        return self.frame
+
+
+def test_kim_presubmit_frame_is_frozen_before_enter_is_enqueued(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    capture = FakeKimComposerCapture()
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None,
+        kim_composer_capture=capture,
+    )
+    monkeypatch.setattr(keyboard_listener, "get_current_app", lambda: ("Kim", "Kem"))
+    listener._has_started = True
+    listener._event_worker_running = True
+    native_event = SimpleNamespace(
+        keycode=keyboard_listener.ENTER_KEYCODE,
+        text="",
+        target_pid=123,
+    )
+
+    returned = listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyDown,
+        native_event,
+        None,
+    )
+
+    queued = listener._event_queue.get_nowait()
+    assert capture.freeze_calls == [123]
+    assert queued.pre_submit_frame == "kim-frame"
+    assert returned is native_event
+
+
+@pytest.mark.parametrize(
+    ("event_type", "keycode", "app", "flags"),
+    (
+        (1, 0, ("Kim", "Kem"), 0),
+        (2, 36, ("Kim", "Kem"), 0),
+        (1, 36, ("Kima", "Kim"), 0),
+        (1, 36, ("微信", "com.tencent.xinWeChat"), 0),
+        (1, 36, ("Kim", "Kem"), 1 << 17),
+    ),
+)
+def test_kim_presubmit_frame_is_not_frozen_outside_exact_plain_enter(
+    monkeypatch,
+    event_type,
+    keycode,
+    app,
+    flags,
+):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    capture = FakeKimComposerCapture()
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None,
+        kim_composer_capture=capture,
+    )
+    monkeypatch.setattr(keyboard_listener, "get_current_app", lambda: app)
+    listener._has_started = True
+    listener._event_worker_running = True
+
+    listener._event_callback(
+        None,
+        event_type,
+        SimpleNamespace(keycode=keycode, text="", target_pid=123, flags=flags),
+        None,
+    )
+
+    queued = listener._event_queue.get_nowait()
+    assert capture.freeze_calls == []
+    assert queued.pre_submit_frame is None
+
+
+def test_kim_presubmit_capture_failure_does_not_block_enter(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    capture = FakeKimComposerCapture(raises=True)
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None,
+        kim_composer_capture=capture,
+    )
+    monkeypatch.setattr(keyboard_listener, "get_current_app", lambda: ("Kim", "Kem"))
+    listener._has_started = True
+    listener._event_worker_running = True
+    native_event = SimpleNamespace(
+        keycode=keyboard_listener.ENTER_KEYCODE,
+        text="",
+        target_pid=123,
+    )
+
+    returned = listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyDown,
+        native_event,
+        None,
+    )
+
+    queued = listener._event_queue.get_nowait()
+    assert queued.pre_submit_frame is None
+    assert returned is native_event
+
+
 def test_event_tap_callback_never_processes_synchronously_after_start(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     listener = keyboard_listener.KeyboardListener(lambda event: None)

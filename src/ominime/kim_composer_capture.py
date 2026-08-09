@@ -7,6 +7,7 @@ from typing import Callable, Iterable
 
 
 DOUBAO_BUNDLE_ID = "com.bytedance.inputmethod.doubaoime"
+LEGACY_KIM_BUNDLE_ID = "Kem"
 MAX_OCR_TEXT_CHARS = 4000
 KIM_CHROME_LABELS = frozenset(
     {
