@@ -1431,7 +1431,11 @@ class KeyboardListener:
                     bundle_id,
                     current_field_id=current_field_id,
                 )
-        if text_entry_context and (not content or not _contains_cjk(content)):
+        if (
+            text_entry_context
+            and fallback_source != "doubao_candidate_text"
+            and (not content or not _contains_cjk(content))
+        ):
             key_event_content = normalize_submission_text(
                 self._pop_text_fallback_content(
                     app_name,

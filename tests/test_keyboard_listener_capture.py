@@ -2315,13 +2315,14 @@ def test_wechat_presubmit_ocr_runs_when_ax_context_is_ok_but_empty(monkeypatch):
         wechat_composer_capture=capture,
     )
     listener._record_recent_text_snapshot = lambda *args, **kwargs: None
-    listener._capture_focused_context = lambda **kwargs: SimpleNamespace(
+    context = SimpleNamespace(
         focused_role="AXTextArea",
         focused_subrole=None,
         focused_protected=False,
         focused_value="",
         capture_status="ok",
     )
+    listener._capture_focused_context = lambda **kwargs: context
     listener._context_to_dict_safe = lambda context: {
         "focused_role": "AXTextArea",
         "capture_status": "ok",
@@ -2414,6 +2415,74 @@ def test_wechat_ax_content_wins_without_running_ocr(monkeypatch):
 
     assert events[0].character == "辅助功能正文"
     assert "fallback_source" not in events[0].modifiers
+    assert capture.recognize_calls == []
+
+
+def test_wechat_confirmed_latin_candidate_wins_over_key_event_text(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    events = []
+    capture = FakeKimComposerCapture(
+        frame="wechat-frame",
+        recognize_result=("不应读取", None),
+    )
+    listener = keyboard_listener.KeyboardListener(
+        events.append,
+        wechat_composer_capture=capture,
+    )
+    listener._record_recent_text_snapshot = lambda *args, **kwargs: None
+    context = SimpleNamespace(
+        focused_role="AXTextArea",
+        focused_subrole=None,
+        focused_protected=False,
+        focused_value="",
+        focused_identifier="composer",
+        focused_frame=None,
+        window_title=None,
+        capture_status="ok",
+    )
+    listener._capture_focused_context = lambda **kwargs: context
+    listener._context_to_dict_safe = lambda context: {
+        "focused_role": "AXTextArea",
+        "capture_status": "ok",
+    }
+    listener._get_focused_text_snapshot = lambda: ""
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_app_by_pid",
+        lambda pid: ("微信", "com.tencent.xinWeChat"),
+    )
+    key = ("微信", "com.tencent.xinWeChat")
+    state = listener._doubao_state(*key)
+    state.update_candidates(
+        keyboard_listener.CandidateSnapshot(
+            ("OpenAI",),
+            4318,
+            time.monotonic(),
+        ),
+        target_pid=4318,
+    )
+    state.handle_key(keycode=49, text=" ", target_pid=4318)
+    listener._text_fallback_buffers[key] = ["错误中文"]
+    listener._text_fallback_buffer_updated_at[key] = time.monotonic()
+    listener._text_fallback_field_ids[key] = (
+        keyboard_listener.focused_field_identity(context)
+    )
+
+    listener._process_raw_event(
+        keyboard_listener.RawKeyboardEvent(
+            event_type=keyboard_listener.kCGEventKeyDown,
+            keycode=keyboard_listener.ENTER_KEYCODE,
+            text="",
+            app_name="微信",
+            bundle_id="com.tencent.xinWeChat",
+            modifiers={"shift": False, "ctrl": False, "alt": False, "cmd": False},
+            target_pid=4318,
+            pre_submit_frame="wechat-frame",
+        )
+    )
+
+    assert events[0].character == "OpenAI"
+    assert events[0].modifiers["fallback_source"] == "doubao_candidate_text"
     assert capture.recognize_calls == []
 
 
