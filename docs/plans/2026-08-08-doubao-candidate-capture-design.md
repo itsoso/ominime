@@ -51,23 +51,25 @@ The adapter is enabled only when all of the following match exactly:
   in its lower composer region.
 
 Other applications and input methods retain the existing accessibility and
-count-only behavior. This first version intentionally does not claim complete
-support for pure-English messages: English and digits can be reconstructed
-only after a trusted Doubao composer session has been established.
+count-only behavior. This first version intentionally does not persist raw
+Latin/pinyin text from the adapter. Pure-English messages therefore remain
+count-only unless the application exposes them through the normal trusted
+accessibility path.
 
 ## Selected Design
 
 Add a small Doubao-specific candidate reader and an in-memory composition state
-machine. The accessibility reader discovers the exact Doubao process through
+machine. The accessibility reader first verifies that Doubao is the currently
+selected macOS input source, then discovers the exact Doubao process through
 `NSWorkspace`, traverses its candidate windows, and extracts non-empty,
 deduplicated `AXStaticText` values. Quartz window bounds are used to associate
-the candidate window with the lower portion of the current Kim or WeChat
-window.
+a single unambiguous candidate window with the lower portion of the current
+Kim or WeChat window.
 
 The keyboard listener keeps a separate, expiring state for each exact target
-application. It combines confirmed candidate selections with trusted Latin
-characters, digits, and backspace operations. No candidate or draft text is
-written to the database until a real message submission occurs.
+application. It combines confirmed candidate selections with supported editing
+operations. No candidate or draft text is written to the database until a real
+message submission occurs.
 
 ## Data Flow
 
@@ -82,7 +84,8 @@ written to the database until a real message submission occurs.
 5. An Enter that commits a candidate is consumed as `ime_candidate_commit`; it
    does not run the message-submission path and does not clear composed text.
 6. Backspace edits active pre-edit text first and otherwise removes the last
-   committed character.
+   committed character. Raw pre-edit text is never promoted to submitted text
+   when the candidate window disappears.
 7. A later Enter with no active candidate window is treated as message
    submission. The confirmed composed buffer is persisted with source
    `doubao_candidate_text`.
@@ -99,11 +102,14 @@ state transitions can be tested separately.
 - Enumerate accessibility windows and collect visible non-empty candidate text.
 - Deduplicate repeated accessibility nodes while retaining visual order.
 - Resolve the candidate and target window bounds through Quartz.
+- Require exactly one candidate-bearing AX window and exactly one matching
+  visible Doubao candidate window; reject cross-window ambiguity.
 - Accept a snapshot only when its horizontal center lies inside the target
   window and its vertical center lies in approximately the lower 45 percent of
   that window.
-- Bind each snapshot to the target PID and expire it quickly; do not reuse it
-  after application changes or inactivity.
+- Bind each snapshot to the target PID, expire it after five seconds, and
+  revalidate the candidate window immediately before Space, number, or Enter
+  commits it.
 
 ## Input State
 
@@ -118,9 +124,9 @@ Each `(app_name, bundle_id)` session holds:
 Space and Enter choose the current/default candidate; digits 1–9 choose the
 corresponding visible candidate; arrow keys move the selected index. When an
 active candidate is committed, pending pinyin is discarded and only the chosen
-candidate is appended. When no candidate is active, raw Latin text is appended
-only for a session already anchored to a trusted composer. State is cleared on
-expiry, target PID change, or application-session change.
+candidate is appended. State is cleared on expiry, target PID/application
+change, mouse click, or an editing operation the adapter cannot replay safely
+(including paste, cut, undo, select-all, Delete, Tab, and Escape).
 
 ## Privacy and Failure Behavior
 
@@ -133,6 +139,8 @@ expiry, target PID change, or application-session change.
 - Secure, readable accessibility fields remain unconditional skips.
 - Ambiguous or unavailable candidates fall back to the current
   `[unreadable input]` count-only record.
+- Candidate failure reasons are diagnostic codes only; discarded candidate and
+  pre-edit strings are never written to diagnostics.
 - Diagnostics distinguish candidate commit, candidate-text persistence,
   untrusted candidate position, expiry, and count-only fallback without storing
   discarded pre-edit content.

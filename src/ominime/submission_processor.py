@@ -91,6 +91,14 @@ def _save_persisted_capture_diagnostic(
     if physical_key_count is None and modifiers.get("char_count_override") is not None:
         physical_key_count = modifiers.get("char_count_override")
     context_data = modifiers.get("context") or {}
+    diagnostic_details = {
+        "submission_id": modifiers.get("submission_id"),
+        "redacted_content": redacted_content,
+        "input_capture_mode": config.input_capture_mode,
+    }
+    extra_diagnostics = modifiers.get("capture_diagnostics")
+    if isinstance(extra_diagnostics, dict):
+        diagnostic_details.update(extra_diagnostics)
     db.save_capture_diagnostic(
         CaptureDiagnosticRecord(
             id=None,
@@ -106,13 +114,7 @@ def _save_persisted_capture_diagnostic(
             focused_role=context_data.get("focused_role"),
             focused_subrole=context_data.get("focused_subrole"),
             capture_status=context_data.get("capture_status", "ok"),
-            diagnostics_json=_json_or_none(
-                {
-                    "submission_id": modifiers.get("submission_id"),
-                    "redacted_content": redacted_content,
-                    "input_capture_mode": config.input_capture_mode,
-                }
-            ),
+            diagnostics_json=_json_or_none(diagnostic_details),
         )
     )
 

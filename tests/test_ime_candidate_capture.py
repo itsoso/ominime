@@ -1,4 +1,4 @@
-from collections import UserDict
+from collections import UserDict, UserList
 
 from ominime.ime_candidate_capture import (
     CandidateSnapshot,
@@ -9,6 +9,7 @@ from ominime.ime_candidate_capture import (
     WindowRecord,
     candidate_is_in_composer,
     collect_static_text_values,
+    object_sequence,
     rect_from_window_bounds,
 )
 
@@ -131,7 +132,7 @@ def test_composition_never_submits_unconfirmed_raw_pinyin():
     assert state.pop_submission(target_pid=123) == ""
 
 
-def test_composition_accepts_latin_only_after_trusted_candidate_session():
+def test_composition_does_not_promote_latin_after_trusted_candidate_session():
     clock = FakeClock()
     state = DoubaoCompositionState(timeout_seconds=30, clock=clock)
     state.record_printable("c", target_pid=123)
@@ -141,7 +142,29 @@ def test_composition_accepts_latin_only_after_trusted_candidate_session():
 
     state.update_candidates(None, target_pid=123)
 
-    assert state.pop_submission(target_pid=123) == "测试A"
+    assert state.pop_submission(target_pid=123) == ""
+
+
+def test_composition_discards_pinyin_when_active_candidate_disappears():
+    clock = FakeClock()
+    state = DoubaoCompositionState(timeout_seconds=5, clock=clock)
+    for character in "ceshi":
+        state.record_printable(character, target_pid=123)
+    state.update_candidates(candidate_snapshot(clock), target_pid=123)
+
+    state.update_candidates(None, target_pid=123)
+
+    assert state.pop_submission(target_pid=123) == ""
+
+
+def test_composition_rejects_stale_candidate_snapshot():
+    clock = FakeClock()
+    state = DoubaoCompositionState(timeout_seconds=5, clock=clock)
+    stale = CandidateSnapshot(("测试",), 123, clock() - 6)
+
+    state.update_candidates(stale, target_pid=123)
+
+    assert not state.has_active_candidate
 
 
 def test_composition_pid_change_discards_previous_content():
@@ -204,11 +227,27 @@ def test_reader_static_text_traversal_is_bounded():
     assert values == ()
 
 
+def test_reader_accepts_objective_c_style_sequences():
+    children = UserList(["candidate"])
+    attributes = {
+        ("window", "AXChildren"): children,
+        ("candidate", "AXRole"): "AXStaticText",
+        ("candidate", "AXValue"): "测试",
+    }
+
+    assert object_sequence(children) == ("candidate",)
+    assert collect_static_text_values(
+        ["window"],
+        lambda node, attribute: attributes.get((node, attribute)),
+    ) == ("测试",)
+
+
 def make_reader(
     clock,
     *,
     processes=((DOUBAO_BUNDLE_ID, 88),),
     candidate_bounds=Rect(2500, 760, 400, 64),
+    input_source_bundle=DOUBAO_BUNDLE_ID,
 ):
     attributes = {
         ("window", "AXChildren"): ["first", "second"],
@@ -223,6 +262,7 @@ def make_reader(
     ]
     return DoubaoCandidateReader(
         clock=clock,
+        input_source_provider=lambda: input_source_bundle,
         process_provider=lambda: processes,
         ax_roots_provider=lambda pid: ["window"],
         window_provider=lambda: windows,
@@ -250,6 +290,14 @@ def test_reader_requires_exact_doubao_process_bundle():
     assert reader.read(target_pid=123, target_bundle_id="Kem") is None
 
 
+def test_reader_requires_doubao_to_be_current_input_source():
+    clock = FakeClock()
+    reader = make_reader(clock, input_source_bundle="com.apple.keylayout.ABC")
+
+    assert reader.read(target_pid=123, target_bundle_id="Kem") is None
+    assert reader.last_failure_reason == "input_source_mismatch"
+
+
 def test_reader_rejects_candidate_outside_lower_composer_region():
     clock = FakeClock()
     reader = make_reader(clock, candidate_bounds=Rect(2500, 180, 400, 64))
@@ -270,6 +318,7 @@ def test_reader_returns_none_when_candidate_ax_values_are_unavailable():
     clock = FakeClock()
     reader = DoubaoCandidateReader(
         clock=clock,
+        input_source_provider=lambda: DOUBAO_BUNDLE_ID,
         process_provider=lambda: ((DOUBAO_BUNDLE_ID, 88),),
         ax_roots_provider=lambda pid: ["window"],
         window_provider=lambda: [
@@ -280,6 +329,43 @@ def test_reader_returns_none_when_candidate_ax_values_are_unavailable():
     )
 
     assert reader.read(target_pid=123, target_bundle_id="Kem") is None
+
+
+def test_reader_rejects_text_from_multiple_candidate_ax_windows():
+    clock = FakeClock()
+    attributes = {
+        ("window-one", "AXRole"): "AXStaticText",
+        ("window-one", "AXValue"): "测试",
+        ("window-two", "AXRole"): "AXStaticText",
+        ("window-two", "AXValue"): "其他窗口",
+    }
+    reader = DoubaoCandidateReader(
+        clock=clock,
+        input_source_provider=lambda: DOUBAO_BUNDLE_ID,
+        process_provider=lambda: ((DOUBAO_BUNDLE_ID, 88),),
+        ax_roots_provider=lambda pid: ["window-one", "window-two"],
+        window_provider=lambda: [
+            WindowRecord(pid=88, bounds=Rect(2500, 760, 400, 64)),
+            WindowRecord(pid=123, bounds=Rect(2000, 100, 1200, 800)),
+        ],
+        attribute_reader=lambda node, attribute: attributes.get((node, attribute)),
+    )
+
+    assert reader.read(target_pid=123, target_bundle_id="Kem") is None
+    assert reader.last_failure_reason == "ambiguous_ax_windows"
+
+
+def test_reader_rejects_multiple_doubao_windows_in_composer_region():
+    clock = FakeClock()
+    reader = make_reader(clock)
+    reader._window_provider = lambda: [
+        WindowRecord(pid=88, bounds=Rect(2400, 760, 300, 64)),
+        WindowRecord(pid=88, bounds=Rect(2750, 760, 300, 64)),
+        WindowRecord(pid=123, bounds=Rect(2000, 100, 1200, 800)),
+    ]
+
+    assert reader.read(target_pid=123, target_bundle_id="Kem") is None
+    assert reader.last_failure_reason == "ambiguous_candidate_windows"
 
 
 def test_reader_parses_macos_mapping_without_requiring_python_dict():

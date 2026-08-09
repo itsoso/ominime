@@ -10,6 +10,25 @@
 
 ---
 
+## Review Hardening Applied
+
+The implementation adds stricter safety gates discovered during independent
+review:
+
+- verify the active macOS input-source bundle, not merely a running Doubao
+  process;
+- reject multiple candidate-bearing AX roots or multiple matching candidate
+  windows;
+- never promote raw Latin/pinyin pre-edit text to submitted content;
+- expire candidate snapshots after five seconds and revalidate before every
+  Space, number, or Enter candidate commit;
+- clear in-memory candidate content on target-app/PID changes, mouse clicks,
+  and editing commands that cannot be reconstructed safely;
+- attach a non-content failure code to count-only capture diagnostics.
+
+These gates deliberately prefer a count-only record over partial or ambiguous
+text.
+
 ### Task 1: Pure candidate geometry and composition state
 
 **Files:**

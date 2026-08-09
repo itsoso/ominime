@@ -1,4 +1,5 @@
 from datetime import datetime
+import json
 from types import SimpleNamespace
 
 from ominime.database import Database
@@ -61,6 +62,34 @@ def test_redacted_submission_writes_count_diagnostic(tmp_path, monkeypatch):
     assert rows[0]["decision_reason"] == "saved_submission"
     assert rows[0]["selected_source"] == "count_unreadable"
     assert rows[0]["physical_key_count"] == 7
+
+
+def test_submission_diagnostic_includes_candidate_failure_reason(tmp_path, monkeypatch):
+    db = Database(tmp_path / "test.db")
+    monkeypatch.setattr(
+        submission_processor.config,
+        "input_capture_mode",
+        "enter-text",
+        raising=False,
+    )
+
+    submission_processor.save_submission_event(
+        db,
+        make_event(
+            fallback_source="degraded_count_unreadable",
+            redacted_content=True,
+            char_count_override=5,
+            capture_diagnostics={
+                "doubao_candidate_failure": "candidate_outside_composer"
+            },
+        ),
+        "[unreadable input]",
+    )
+
+    row = db.get_recent_capture_diagnostics(limit=1)[0]
+    assert json.loads(row["diagnostics_json"])["doubao_candidate_failure"] == (
+        "candidate_outside_composer"
+    )
 
 
 def test_save_capture_diagnostic_event_persists_listener_skip(tmp_path):

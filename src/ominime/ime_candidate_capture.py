@@ -1,8 +1,11 @@
 """Capture and model trusted Doubao input-method candidate selections."""
 
 import time
+import ctypes
 from collections import deque
+from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Callable, Iterable
 
 
@@ -108,10 +111,81 @@ def collect_static_text_values(
                 if value and value not in seen_values:
                     values.append(value)
                     seen_values.add(value)
-        children = attribute_reader(node, "AXChildren")
-        if isinstance(children, (list, tuple)):
-            pending.extend(children)
+        pending.extend(object_sequence(attribute_reader(node, "AXChildren")))
     return tuple(values)
+
+
+def object_sequence(value) -> tuple[object, ...]:
+    """Normalize Python and Objective-C array proxies without accepting text."""
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        return ()
+    return tuple(value)
+
+
+@lru_cache(maxsize=1)
+def _native_input_source_api():
+    hitoolbox = ctypes.CDLL(
+        "/System/Library/Frameworks/Carbon.framework/Frameworks/"
+        "HIToolbox.framework/HIToolbox"
+    )
+    core_foundation = ctypes.CDLL(
+        "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
+    )
+    hitoolbox.TISCopyCurrentKeyboardInputSource.restype = ctypes.c_void_p
+    hitoolbox.TISGetInputSourceProperty.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    hitoolbox.TISGetInputSourceProperty.restype = ctypes.c_void_p
+    core_foundation.CFStringGetLength.argtypes = [ctypes.c_void_p]
+    core_foundation.CFStringGetLength.restype = ctypes.c_long
+    core_foundation.CFStringGetMaximumSizeForEncoding.argtypes = [
+        ctypes.c_long,
+        ctypes.c_uint32,
+    ]
+    core_foundation.CFStringGetMaximumSizeForEncoding.restype = ctypes.c_long
+    core_foundation.CFStringGetCString.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_char_p,
+        ctypes.c_long,
+        ctypes.c_uint32,
+    ]
+    core_foundation.CFStringGetCString.restype = ctypes.c_bool
+    core_foundation.CFRelease.argtypes = [ctypes.c_void_p]
+    bundle_key = ctypes.c_void_p.in_dll(
+        hitoolbox,
+        "kTISPropertyBundleID",
+    ).value
+    return hitoolbox, core_foundation, bundle_key
+
+
+def current_input_source_bundle_id() -> str:
+    """Return the exact bundle identifier of the active macOS input source."""
+    hitoolbox, core_foundation, bundle_key = _native_input_source_api()
+    source = hitoolbox.TISCopyCurrentKeyboardInputSource()
+    if not source:
+        return ""
+    try:
+        value = hitoolbox.TISGetInputSourceProperty(source, bundle_key)
+        if not value:
+            return ""
+        encoding_utf8 = 0x08000100
+        length = core_foundation.CFStringGetLength(value)
+        size = (
+            core_foundation.CFStringGetMaximumSizeForEncoding(
+                length,
+                encoding_utf8,
+            )
+            + 1
+        )
+        buffer = ctypes.create_string_buffer(size)
+        if not core_foundation.CFStringGetCString(
+            value,
+            buffer,
+            size,
+            encoding_utf8,
+        ):
+            return ""
+        return buffer.value.decode("utf-8")
+    finally:
+        core_foundation.CFRelease(source)
 
 
 class DoubaoCandidateReader:
@@ -121,16 +195,25 @@ class DoubaoCandidateReader:
         self,
         *,
         clock: Callable[[], float] = time.monotonic,
+        input_source_provider: Callable[[], str] | None = None,
         process_provider: Callable[[], Iterable[tuple[str, int]]] | None = None,
         ax_roots_provider: Callable[[int], Iterable[object]] | None = None,
         window_provider: Callable[[], Iterable[WindowRecord]] | None = None,
         attribute_reader: Callable[[object, str], object] | None = None,
     ):
         self._clock = clock
+        self._input_source_provider = (
+            input_source_provider or current_input_source_bundle_id
+        )
         self._process_provider = process_provider or self._native_processes
         self._ax_roots_provider = ax_roots_provider or self._native_ax_roots
         self._window_provider = window_provider or self._native_windows
         self._attribute_reader = attribute_reader or self._native_ax_attribute
+        self.last_failure_reason: str | None = None
+
+    def _fail(self, reason: str) -> None:
+        self.last_failure_reason = reason
+        return None
 
     def read(
         self,
@@ -138,9 +221,12 @@ class DoubaoCandidateReader:
         target_pid: int,
         target_bundle_id: str,
     ) -> CandidateSnapshot | None:
+        self.last_failure_reason = None
         if target_pid <= 0 or target_bundle_id not in SUPPORTED_TARGET_BUNDLE_IDS:
-            return None
+            return self._fail("unsupported_target")
         try:
+            if self._input_source_provider() != DOUBAO_BUNDLE_ID:
+                return self._fail("input_source_mismatch")
             doubao_pid = next(
                 (
                     int(pid)
@@ -150,29 +236,43 @@ class DoubaoCandidateReader:
                 0,
             )
             if doubao_pid <= 0:
-                return None
-            candidates = collect_static_text_values(
-                self._ax_roots_provider(doubao_pid),
-                self._attribute_reader,
-            )
-            if not candidates:
-                return None
+                return self._fail("doubao_process_unavailable")
+            candidate_roots = [
+                values
+                for root in self._ax_roots_provider(doubao_pid)
+                if (
+                    values := collect_static_text_values(
+                        (root,),
+                        self._attribute_reader,
+                    )
+                )
+            ]
+            if not candidate_roots:
+                return self._fail("candidate_ax_unavailable")
+            if len(candidate_roots) != 1:
+                return self._fail("ambiguous_ax_windows")
             windows = tuple(self._window_provider())
-            candidate_windows = (
+            candidate_windows = tuple(
                 window.bounds for window in windows if window.pid == doubao_pid
             )
             target_windows = tuple(
                 window.bounds for window in windows if window.pid == target_pid
             )
-            if not target_windows or not any(
-                candidate_is_in_composer(candidate, target)
+            matching_candidate_windows = tuple(
+                candidate
                 for candidate in candidate_windows
-                for target in target_windows
-            ):
-                return None
-            return CandidateSnapshot(candidates, target_pid, self._clock())
+                if any(
+                    candidate_is_in_composer(candidate, target)
+                    for target in target_windows
+                )
+            )
+            if not matching_candidate_windows:
+                return self._fail("candidate_outside_composer")
+            if len(matching_candidate_windows) != 1:
+                return self._fail("ambiguous_candidate_windows")
+            return CandidateSnapshot(candidate_roots[0], target_pid, self._clock())
         except Exception:
-            return None
+            return self._fail("native_capture_error")
 
     @staticmethod
     def _native_processes() -> Iterable[tuple[str, int]]:
@@ -199,12 +299,17 @@ class DoubaoCandidateReader:
         return result
 
     def _native_ax_roots(self, pid: int) -> Iterable[object]:
-        from ApplicationServices import AXUIElementCreateApplication
+        from ApplicationServices import (
+            AXUIElementCreateApplication,
+            AXUIElementSetMessagingTimeout,
+        )
 
         application = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(application, 0.1)
         windows = self._native_ax_attribute(application, "AXWindows")
-        if isinstance(windows, (list, tuple)) and windows:
-            return tuple(windows)
+        window_roots = object_sequence(windows)
+        if window_roots:
+            return window_roots
         return (application,)
 
     @staticmethod
@@ -306,13 +411,12 @@ class DoubaoCompositionState:
         if not self._prepare(target_pid):
             return
         if snapshot is None:
-            self._candidates = ()
-            self._selected_index = 0
-            if self._composer_trusted and self._pending_preedit:
-                self._append_confirmed(self._pending_preedit)
-                self._pending_preedit = ""
+            self.clear()
             return
         if snapshot.target_pid != target_pid:
+            self.clear()
+            return
+        if self._clock() - snapshot.captured_at > self.timeout_seconds:
             self.clear()
             return
         candidates = tuple(

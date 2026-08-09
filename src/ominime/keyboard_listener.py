@@ -37,6 +37,9 @@ from Quartz import (
     kCGEventKeyDown,
     kCGEventKeyUp,
     kCGEventFlagsChanged,
+    kCGEventLeftMouseDown,
+    kCGEventRightMouseDown,
+    kCGEventOtherMouseDown,
     kCGKeyboardEventKeycode,
     kCGEventFlagMaskShift,
     kCGEventFlagMaskControl,
@@ -151,6 +154,7 @@ MAX_KEY_EVENT_TEXT_CHARS = 64
 MAX_RECENT_TEXT_SNAPSHOT_AGE_SECONDS = 60
 TEXT_FALLBACK_EVENT_DEDUP_SECONDS = 0.2
 MAX_TRUSTED_SUBMISSION_CHARS = 4000
+DOUBAO_CANDIDATE_TIMEOUT_SECONDS = 5.0
 EVENT_QUEUE_MAX_SIZE = 4096
 EDITOR_NEWLINE_BUNDLE_PREFIXES = (
     "com.apple.TextEdit",
@@ -544,6 +548,8 @@ class KeyboardListener:
         self._pending_enter_keyups: set[tuple[str, str]] = set()
         self._candidate_reader = candidate_reader or DoubaoCandidateReader()
         self._doubao_states: dict[tuple[str, str], DoubaoCompositionState] = {}
+        self._doubao_failure_reasons: dict[tuple[str, str], str] = {}
+        self._last_doubao_target: tuple[str, str, int] | None = None
         self._event_queue: queue.Queue[RawKeyboardEvent | None] = queue.Queue(
             maxsize=EVENT_QUEUE_MAX_SIZE
         )
@@ -645,13 +651,34 @@ class KeyboardListener:
         key = self._fallback_buffer_key(app_name, bundle_id)
         state = self._doubao_states.get(key)
         if state is None:
-            state = DoubaoCompositionState(timeout_seconds=config.session_timeout)
+            state = DoubaoCompositionState(
+                timeout_seconds=DOUBAO_CANDIDATE_TIMEOUT_SECONDS
+            )
             self._doubao_states[key] = state
         return state
+
+    def _update_doubao_target(
+        self,
+        app_name: str,
+        bundle_id: str,
+        target_pid: int,
+    ):
+        target = (
+            (app_name, bundle_id, target_pid)
+            if bundle_id in SUPPORTED_TARGET_BUNDLE_IDS and target_pid > 0
+            else None
+        )
+        if self._last_doubao_target is not None and target != self._last_doubao_target:
+            for state in self._doubao_states.values():
+                state.clear()
+            self._doubao_states.clear()
+            self._doubao_failure_reasons.clear()
+        self._last_doubao_target = target
 
     def _clear_doubao_state(self, app_name: str, bundle_id: str):
         key = self._fallback_buffer_key(app_name, bundle_id)
         state = self._doubao_states.pop(key, None)
+        self._doubao_failure_reasons.pop(key, None)
         if state is not None:
             state.clear()
 
@@ -683,6 +710,31 @@ class KeyboardListener:
             return None
         if modifiers.get("cmd") or modifiers.get("ctrl") or modifiers.get("alt"):
             return None
+        candidate_commit_keycodes = {
+            ENTER_KEYCODE,
+            49,
+            *NUMBER_KEYCODE_TO_INDEX,
+        }
+        if state.has_active_candidate and keycode in candidate_commit_keycodes:
+            snapshot = self._candidate_reader.read(
+                target_pid=target_pid,
+                target_bundle_id=bundle_id,
+            )
+            if snapshot is None:
+                self._doubao_failure_reasons[
+                    self._fallback_buffer_key(app_name, bundle_id)
+                ] = getattr(
+                    self._candidate_reader,
+                    "last_failure_reason",
+                    None,
+                ) or "candidate_unavailable"
+                state.clear()
+                return None
+            self._doubao_failure_reasons.pop(
+                self._fallback_buffer_key(app_name, bundle_id),
+                None,
+            )
+            state.update_candidates(snapshot, target_pid=target_pid)
         result = state.handle_key(
             keycode=keycode,
             text=event_text,
@@ -724,6 +776,15 @@ class KeyboardListener:
             target_pid=target_pid,
             target_bundle_id=bundle_id,
         )
+        key = self._fallback_buffer_key(app_name, bundle_id)
+        if snapshot is None:
+            self._doubao_failure_reasons[key] = getattr(
+                self._candidate_reader,
+                "last_failure_reason",
+                None,
+            ) or "candidate_unavailable"
+        else:
+            self._doubao_failure_reasons.pop(key, None)
         state.update_candidates(snapshot, target_pid=target_pid)
 
     def _is_fallback_buffer_expired(self, updated_at: float | None) -> bool:
@@ -1039,6 +1100,7 @@ class KeyboardListener:
         char_count_override: int | None = None,
         redacted_content: bool = False,
         physical_key_count: int | None = None,
+        capture_diagnostics: dict | None = None,
     ):
         modifiers = {
             "shift": key_modifiers.get("shift", False),
@@ -1056,6 +1118,8 @@ class KeyboardListener:
             modifiers["char_count_override"] = char_count_override
         if physical_key_count is not None:
             modifiers["physical_key_count"] = physical_key_count
+        if capture_diagnostics:
+            modifiers["capture_diagnostics"] = dict(capture_diagnostics)
         key_event = KeyEvent(
             timestamp=storage_now(),
             keycode=ENTER_KEYCODE,
@@ -1111,6 +1175,15 @@ class KeyboardListener:
 
         if capture_status != "ok":
             if bundle_id in DEGRADED_CHAT_COMPATIBILITY_BUNDLE_IDS:
+                candidate_failure = self._doubao_failure_reasons.pop(
+                    self._fallback_buffer_key(app_name, bundle_id),
+                    None,
+                )
+                candidate_diagnostics = (
+                    {"doubao_candidate_failure": candidate_failure}
+                    if candidate_failure
+                    else None
+                )
                 physical_key_count = self._pop_fallback_count(
                     app_name, bundle_id, current_field_id=current_field_id
                 )
@@ -1156,6 +1229,7 @@ class KeyboardListener:
                         context_data=context_data,
                         fallback_source="degraded_key_event_text",
                         physical_key_count=physical_key_count,
+                        capture_diagnostics=candidate_diagnostics,
                     )
                     return
                 if (
@@ -1172,6 +1246,7 @@ class KeyboardListener:
                         char_count_override=physical_key_count,
                         redacted_content=True,
                         physical_key_count=physical_key_count,
+                        capture_diagnostics=candidate_diagnostics,
                     )
                     return
                 self._clear_submission_buffers(app_name, bundle_id)
@@ -1356,12 +1431,38 @@ class KeyboardListener:
         bundle_id = raw_event.bundle_id
         if raw_event.target_pid > 0:
             app_name, bundle_id = get_app_by_pid(raw_event.target_pid)
+        self._update_doubao_target(
+            app_name,
+            bundle_id,
+            raw_event.target_pid,
+        )
         if config.is_app_ignored(bundle_id):
             self._clear_submission_buffers(app_name, bundle_id)
             self._active_field_ids.pop(self._fallback_buffer_key(app_name, bundle_id), None)
             return
         set_last_input_app(app_name, bundle_id)
         modifiers = raw_event.modifiers
+
+        if event_type in (
+            kCGEventLeftMouseDown,
+            kCGEventRightMouseDown,
+            kCGEventOtherMouseDown,
+        ):
+            self._clear_submission_buffers(app_name, bundle_id)
+            return
+
+        if (
+            bundle_id in SUPPORTED_TARGET_BUNDLE_IDS
+            and event_type == kCGEventKeyDown
+            and (
+                modifiers.get("cmd")
+                or modifiers.get("ctrl")
+                or modifiers.get("alt")
+                or keycode in (48, 53, 117)
+            )
+        ):
+            self._clear_submission_buffers(app_name, bundle_id)
+            return
 
         if event_type == kCGEventKeyUp and keycode != ENTER_KEYCODE:
             self._record_recent_text_snapshot(
@@ -1486,19 +1587,35 @@ class KeyboardListener:
             if self._tap is not None:
                 CGEventTapEnable(self._tap, True)
             return event
-        if event_type in (kCGEventKeyDown, kCGEventKeyUp, kCGEventFlagsChanged):
+        if event_type in (
+            kCGEventKeyDown,
+            kCGEventKeyUp,
+            kCGEventFlagsChanged,
+            kCGEventLeftMouseDown,
+            kCGEventRightMouseDown,
+            kCGEventOtherMouseDown,
+        ):
             try:
                 target_pid = self._get_event_target_pid(event)
                 if self._has_started:
                     app_name, bundle_id = get_current_app()
                 else:
                     app_name, bundle_id = self._get_event_target_app(event)
-                keycode = CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode)
+                is_mouse_event = event_type in (
+                    kCGEventLeftMouseDown,
+                    kCGEventRightMouseDown,
+                    kCGEventOtherMouseDown,
+                )
+                keycode = (
+                    0
+                    if is_mouse_event
+                    else CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode)
+                )
                 modifiers = self._event_modifiers(event)
                 raw_event = RawKeyboardEvent(
                     event_type=event_type,
                     keycode=keycode,
-                    text=self._get_keyboard_event_text(event),
+                    text="" if is_mouse_event else self._get_keyboard_event_text(event),
                     app_name=app_name,
                     bundle_id=bundle_id,
                     modifiers=modifiers,
@@ -1539,6 +1656,9 @@ class KeyboardListener:
                 (1 << kCGEventKeyDown)
                 | (1 << kCGEventKeyUp)
                 | (1 << kCGEventFlagsChanged)
+                | (1 << kCGEventLeftMouseDown)
+                | (1 << kCGEventRightMouseDown)
+                | (1 << kCGEventOtherMouseDown)
             )
 
             self._tap = CGEventTapCreate(
