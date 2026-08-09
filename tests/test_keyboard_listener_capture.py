@@ -1847,3 +1847,128 @@ def test_doubao_pid_change_discards_old_composition(monkeypatch):
 
     state = listener._doubao_states[("Kim", "Kem")]
     assert state.pop_submission(target_pid=456) == ""
+
+
+def configure_listener_context(listener, *, status="degraded", secure=False):
+    listener._record_recent_text_snapshot = lambda *args, **kwargs: None
+    listener._capture_focused_context = lambda **kwargs: SimpleNamespace(
+        focused_role="AXTextField" if secure else None,
+        focused_subrole="AXSecureTextField" if secure else None,
+        focused_protected=secure,
+        capture_status=status,
+        capture_error=None if secure else "focused element unavailable",
+    )
+    listener._context_to_dict_safe = lambda context: {
+        "focused_role": context.focused_role,
+        "focused_subrole": context.focused_subrole,
+        "focused_protected": context.focused_protected,
+        "capture_status": context.capture_status,
+        "capture_error": context.capture_error,
+    }
+
+
+@pytest.mark.parametrize(
+    ("app_name", "bundle_id"),
+    (("Kim", "Kem"), ("微信", "com.tencent.xinWeChat")),
+)
+def test_doubao_persists_confirmed_candidate_on_real_chat_enter(
+    monkeypatch,
+    app_name,
+    bundle_id,
+):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    snapshot = keyboard_listener.CandidateSnapshot(("测试", "策士"), 123, time.monotonic())
+    reader = FakeDoubaoCandidateReader([snapshot])
+    events = []
+    listener = keyboard_listener.KeyboardListener(events.append, candidate_reader=reader)
+    configure_listener_context(listener)
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_app_by_pid",
+        lambda pid: (app_name, bundle_id),
+    )
+
+    for raw_event in (
+        doubao_raw_event(keyboard_listener, keyboard_listener.kCGEventKeyDown, 8, "c"),
+        doubao_raw_event(keyboard_listener, keyboard_listener.kCGEventKeyUp, 8, "c"),
+        doubao_raw_event(keyboard_listener, keyboard_listener.kCGEventKeyDown, 49, " "),
+        doubao_raw_event(
+            keyboard_listener,
+            keyboard_listener.kCGEventKeyDown,
+            keyboard_listener.ENTER_KEYCODE,
+        ),
+    ):
+        listener._process_raw_event(raw_event)
+
+    assert len(events) == 1
+    assert events[0].character == "测试"
+    assert events[0].modifiers["fallback_source"] == "doubao_candidate_text"
+    assert events[0].modifiers["redacted_content"] is False
+    assert events[0].modifiers["physical_key_count"] == 2
+
+    listener._process_raw_event(
+        doubao_raw_event(
+            keyboard_listener,
+            keyboard_listener.kCGEventKeyDown,
+            keyboard_listener.ENTER_KEYCODE,
+        )
+    )
+    assert len(events) == 1
+
+
+def test_doubao_secure_context_discards_confirmed_candidate(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    snapshot = keyboard_listener.CandidateSnapshot(("秘密",), 123, time.monotonic())
+    reader = FakeDoubaoCandidateReader([snapshot])
+    events = []
+    diagnostics = []
+    listener = keyboard_listener.KeyboardListener(
+        events.append,
+        diagnostics_callback=diagnostics.append,
+        candidate_reader=reader,
+    )
+    configure_listener_context(listener, status="ok", secure=True)
+    monkeypatch.setattr(keyboard_listener, "get_app_by_pid", lambda pid: ("Kim", "Kem"))
+
+    for raw_event in (
+        doubao_raw_event(keyboard_listener, keyboard_listener.kCGEventKeyDown, 8, "m"),
+        doubao_raw_event(keyboard_listener, keyboard_listener.kCGEventKeyUp, 8, "m"),
+        doubao_raw_event(keyboard_listener, keyboard_listener.kCGEventKeyDown, 49, " "),
+        doubao_raw_event(
+            keyboard_listener,
+            keyboard_listener.kCGEventKeyDown,
+            keyboard_listener.ENTER_KEYCODE,
+        ),
+    ):
+        listener._process_raw_event(raw_event)
+
+    assert events == []
+    assert diagnostics[-1]["decision_reason"] == "secure_text_input"
+    assert ("Kim", "Kem") not in listener._doubao_states
+
+
+def test_doubao_missing_candidate_keeps_count_only_fallback(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    events = []
+    listener = keyboard_listener.KeyboardListener(
+        events.append,
+        candidate_reader=FakeDoubaoCandidateReader([None]),
+    )
+    configure_listener_context(listener)
+    monkeypatch.setattr(keyboard_listener, "get_app_by_pid", lambda pid: ("Kim", "Kem"))
+
+    for raw_event in (
+        doubao_raw_event(keyboard_listener, keyboard_listener.kCGEventKeyDown, 0, "a"),
+        doubao_raw_event(keyboard_listener, keyboard_listener.kCGEventKeyUp, 0, "a"),
+        doubao_raw_event(
+            keyboard_listener,
+            keyboard_listener.kCGEventKeyDown,
+            keyboard_listener.ENTER_KEYCODE,
+        ),
+    ):
+        listener._process_raw_event(raw_event)
+
+    assert len(events) == 1
+    assert events[0].character == keyboard_listener.UNREADABLE_SUBMISSION_PLACEHOLDER
+    assert events[0].modifiers["fallback_source"] == "degraded_count_unreadable"
+    assert events[0].modifiers["redacted_content"] is True

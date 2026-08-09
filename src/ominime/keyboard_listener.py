@@ -655,6 +655,20 @@ class KeyboardListener:
         if state is not None:
             state.clear()
 
+    def _pop_doubao_submission(
+        self,
+        app_name: str,
+        bundle_id: str,
+        target_pid: int | None,
+    ) -> str:
+        key = self._fallback_buffer_key(app_name, bundle_id)
+        state = self._doubao_states.pop(key, None)
+        if state is None or target_pid is None or target_pid <= 0:
+            return ""
+        content = state.pop_submission(target_pid=target_pid)
+        state.clear()
+        return content
+
     def _handle_doubao_keydown(
         self,
         app_name: str,
@@ -1100,6 +1114,28 @@ class KeyboardListener:
                 physical_key_count = self._pop_fallback_count(
                     app_name, bundle_id, current_field_id=current_field_id
                 )
+                candidate_content = normalize_submission_text(
+                    self._pop_doubao_submission(
+                        app_name,
+                        bundle_id,
+                        target_pid,
+                    ),
+                    app_name=app_name,
+                    bundle_id=bundle_id,
+                )
+                if candidate_content:
+                    self._clear_recent_text_snapshot(app_name, bundle_id)
+                    self._clear_text_fallback_buffer(app_name, bundle_id)
+                    self._emit_submission_event(
+                        app_name=app_name,
+                        bundle_id=bundle_id,
+                        content=candidate_content,
+                        key_modifiers=key_modifiers,
+                        context_data=context_data,
+                        fallback_source="doubao_candidate_text",
+                        physical_key_count=physical_key_count,
+                    )
+                    return
                 content = normalize_submission_text(
                     self._pop_text_fallback_content(
                         app_name,
