@@ -58,6 +58,13 @@ from .context_capture import (
     is_text_entry_context,
 )
 from .input_snapshot import format_submission_terminal_notice, normalize_submission_text
+from .ime_candidate_capture import (
+    CandidateSnapshot,
+    DoubaoCandidateReader,
+    DoubaoCompositionState,
+    NUMBER_KEYCODE_TO_INDEX,
+    SUPPORTED_TARGET_BUNDLE_IDS,
+)
 from .runtime_state import refresh_runtime_heartbeat, set_recording_status
 from .time_utils import storage_now
 
@@ -509,6 +516,7 @@ class KeyboardListener:
         self,
         callback: Callable[[KeyEvent], None],
         diagnostics_callback: Optional[Callable[[dict], None]] = None,
+        candidate_reader: DoubaoCandidateReader | None = None,
     ):
         self.callback = callback
         self.diagnostics_callback = diagnostics_callback
@@ -534,6 +542,8 @@ class KeyboardListener:
         self._fallback_field_ids: dict[tuple[str, str], str | None] = {}
         self._last_text_fallback_events: dict[tuple[str, str], tuple[int, str, float]] = {}
         self._pending_enter_keyups: set[tuple[str, str]] = set()
+        self._candidate_reader = candidate_reader or DoubaoCandidateReader()
+        self._doubao_states: dict[tuple[str, str], DoubaoCompositionState] = {}
         self._event_queue: queue.Queue[RawKeyboardEvent | None] = queue.Queue(
             maxsize=EVENT_QUEUE_MAX_SIZE
         )
@@ -624,6 +634,83 @@ class KeyboardListener:
 
     def _fallback_buffer_key(self, app_name: str, bundle_id: str) -> tuple[str, str]:
         return (app_name or "Unknown", bundle_id or "unknown")
+
+    def _doubao_state(
+        self,
+        app_name: str,
+        bundle_id: str,
+    ) -> DoubaoCompositionState | None:
+        if bundle_id not in SUPPORTED_TARGET_BUNDLE_IDS:
+            return None
+        key = self._fallback_buffer_key(app_name, bundle_id)
+        state = self._doubao_states.get(key)
+        if state is None:
+            state = DoubaoCompositionState(timeout_seconds=config.session_timeout)
+            self._doubao_states[key] = state
+        return state
+
+    def _clear_doubao_state(self, app_name: str, bundle_id: str):
+        key = self._fallback_buffer_key(app_name, bundle_id)
+        state = self._doubao_states.pop(key, None)
+        if state is not None:
+            state.clear()
+
+    def _handle_doubao_keydown(
+        self,
+        app_name: str,
+        bundle_id: str,
+        target_pid: int,
+        keycode: int,
+        event_text: str,
+        modifiers: dict,
+    ):
+        state = self._doubao_state(app_name, bundle_id)
+        if state is None or target_pid <= 0:
+            return None
+        if modifiers.get("cmd") or modifiers.get("ctrl") or modifiers.get("alt"):
+            return None
+        result = state.handle_key(
+            keycode=keycode,
+            text=event_text,
+            target_pid=target_pid,
+        )
+        handled_keycodes = {
+            ENTER_KEYCODE,
+            49,  # Space
+            51,  # Backspace
+            123,
+            124,
+            125,
+            126,
+            *NUMBER_KEYCODE_TO_INDEX,
+        }
+        if keycode not in handled_keycodes and keycode in KEYCODE_TO_CHAR:
+            state.record_printable(
+                event_text or KEYCODE_TO_CHAR[keycode],
+                target_pid=target_pid,
+            )
+        return result
+
+    def _refresh_doubao_candidates(
+        self,
+        app_name: str,
+        bundle_id: str,
+        target_pid: int,
+        keycode: int,
+        modifiers: dict,
+    ):
+        state = self._doubao_state(app_name, bundle_id)
+        if state is None or target_pid <= 0:
+            return
+        if modifiers.get("cmd") or modifiers.get("ctrl") or modifiers.get("alt"):
+            return
+        if keycode in {49, 123, 124, 125, 126, *NUMBER_KEYCODE_TO_INDEX}:
+            return
+        snapshot = self._candidate_reader.read(
+            target_pid=target_pid,
+            target_bundle_id=bundle_id,
+        )
+        state.update_candidates(snapshot, target_pid=target_pid)
 
     def _is_fallback_buffer_expired(self, updated_at: float | None) -> bool:
         if updated_at is None:
@@ -855,6 +942,7 @@ class KeyboardListener:
         self._clear_recent_text_snapshot(app_name, bundle_id)
         self._clear_text_fallback_buffer(app_name, bundle_id)
         self._clear_fallback_buffer(app_name, bundle_id)
+        self._clear_doubao_state(app_name, bundle_id)
 
     def _ignore_enter_keyup_once(self, app_name: str, bundle_id: str):
         key = self._fallback_buffer_key(app_name, bundle_id)
@@ -1253,6 +1341,13 @@ class KeyboardListener:
                 raw_event.text,
                 track_editing_keys=False,
             )
+            self._refresh_doubao_candidates(
+                app_name,
+                bundle_id,
+                raw_event.target_pid,
+                keycode,
+                modifiers,
+            )
         if event_type == kCGEventKeyDown and keycode != ENTER_KEYCODE:
             self._record_text_fallback_key(
                 app_name,
@@ -1262,6 +1357,14 @@ class KeyboardListener:
                 raw_event.text,
             )
             self._record_fallback_key(app_name, bundle_id, keycode, modifiers)
+            self._handle_doubao_keydown(
+                app_name,
+                bundle_id,
+                raw_event.target_pid,
+                keycode,
+                raw_event.text,
+                modifiers,
+            )
 
         if keycode != ENTER_KEYCODE or event_type not in (kCGEventKeyDown, kCGEventKeyUp):
             return
@@ -1291,6 +1394,25 @@ class KeyboardListener:
                 decision_reason="shortcut_modifier",
             )
         else:
+            candidate_result = self._handle_doubao_keydown(
+                app_name,
+                bundle_id,
+                raw_event.target_pid,
+                keycode,
+                raw_event.text,
+                modifiers,
+            )
+            if candidate_result is not None and candidate_result.candidate_committed:
+                self._emit_capture_diagnostic(
+                    app_name,
+                    bundle_id,
+                    event_type=event_type,
+                    decision_action="skip",
+                    decision_reason="ime_candidate_commit",
+                    selected_source="doubao_candidate_ax",
+                    selected_confidence=0.9,
+                )
+                return
             self._emit_submission_snapshot(
                 None,
                 app_name=app_name,
