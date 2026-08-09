@@ -397,6 +397,39 @@ def test_wechat_presubmit_frame_is_frozen_before_enter_is_enqueued(monkeypatch):
     assert queued.pre_submit_frame == "wechat-frame"
 
 
+def test_wechat_first_enter_after_restart_freezes_without_cached_identity(
+    monkeypatch,
+):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    capture = FakeKimComposerCapture(frame="wechat-frame")
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None,
+        wechat_composer_capture=capture,
+    )
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_current_app",
+        lambda: ("微信", "com.tencent.xinWeChat"),
+    )
+    listener._has_started = True
+    listener._event_worker_running = True
+
+    listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyDown,
+        SimpleNamespace(
+            keycode=keyboard_listener.ENTER_KEYCODE,
+            text="",
+            target_pid=4318,
+        ),
+        None,
+    )
+
+    queued = listener._event_queue.get_nowait()
+    assert capture.freeze_calls == [4318]
+    assert queued.pre_submit_frame == "wechat-frame"
+
+
 def test_wechat_window_is_prepared_on_worker_before_enter(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     capture = FakeKimComposerCapture(frame="wechat-frame")

@@ -1791,7 +1791,7 @@ class KeyboardListener:
                     and composer_capture is not None
                     and target_pid > 0
                     and self._target_app_identities.get(target_pid)
-                    == (app_name, bundle_id)
+                    in (None, (app_name, bundle_id))
                     and not is_autorepeat
                     and not any(modifiers.values())
                 ):
