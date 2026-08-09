@@ -169,6 +169,7 @@ TEXT_FALLBACK_EVENT_DEDUP_SECONDS = 0.2
 MAX_TRUSTED_SUBMISSION_CHARS = 4000
 DOUBAO_CANDIDATE_TIMEOUT_SECONDS = 5.0
 EVENT_QUEUE_MAX_SIZE = 4096
+APP_WATCHER_START_TIMEOUT_SECONDS = 5.0
 EDITOR_NEWLINE_BUNDLE_PREFIXES = (
     "com.apple.TextEdit",
     "com.apple.Notes",
@@ -365,6 +366,9 @@ def _start_app_watcher(
     if _app_watcher_started:
         return
     _app_watcher_started = True
+    initialized = threading.Event()
+    abort_watcher = threading.Event()
+    initialization_errors: list[Exception] = []
     
     from Foundation import NSDate
     
@@ -386,29 +390,35 @@ def _start_app_watcher(
                     print(f"[DEBUG] App watcher error: {e}")
     
     def run_watcher():
-        watcher = AppWatcher.alloc().init()
-        
-        # 获取 workspace notification center
-        ws = NSWorkspace.sharedWorkspace()
-        nc = ws.notificationCenter()
-        
-        # 监听应用激活事件
-        nc.addObserver_selector_name_object_(
-            watcher,
-            objc.selector(watcher.applicationActivated_, signature=b'v@:@'),
-            "NSWorkspaceDidActivateApplicationNotification",
-            None
-        )
-        
-        # 初始化当前应用
-        front_app = ws.frontmostApplication()
-        if front_app:
-            _on_app_activated(
-                front_app.localizedName() or "Unknown",
-                front_app.bundleIdentifier() or "unknown",
-                int(front_app.processIdentifier()),
+        try:
+            watcher = AppWatcher.alloc().init()
+
+            # 获取 workspace notification center
+            ws = NSWorkspace.sharedWorkspace()
+            nc = ws.notificationCenter()
+
+            # 先注册切换通知，再初始化当前应用，避免启动窗口期漏事件。
+            nc.addObserver_selector_name_object_(
+                watcher,
+                objc.selector(watcher.applicationActivated_, signature=b'v@:@'),
+                "NSWorkspaceDidActivateApplicationNotification",
+                None
             )
-        
+            front_app = ws.frontmostApplication()
+            if front_app:
+                _on_app_activated(
+                    front_app.localizedName() or "Unknown",
+                    front_app.bundleIdentifier() or "unknown",
+                    int(front_app.processIdentifier()),
+                )
+        except Exception as exc:
+            initialization_errors.append(exc)
+        finally:
+            initialized.set()
+
+        if initialization_errors or abort_watcher.is_set():
+            return
+
         # 运行 RunLoop（应用切换由系统通知驱动）
         # 注意: runMode_beforeDate_ 可能在有 ready source 时立即返回，
         # 必须加 sleep 防止在 Rosetta 翻译下忙循环
@@ -420,9 +430,16 @@ def _start_app_watcher(
     
     thread = threading.Thread(target=run_watcher, daemon=True)
     thread.start()
-    
-    # 等待初始化完成
-    time.sleep(0.2)
+
+    if not initialized.wait(timeout=APP_WATCHER_START_TIMEOUT_SECONDS):
+        abort_watcher.set()
+        _app_watcher_started = False
+        _set_app_activation_callback(None)
+        raise RuntimeError("app watcher initialization timed out")
+    if initialization_errors:
+        _app_watcher_started = False
+        _set_app_activation_callback(None)
+        raise RuntimeError("app watcher initialization failed") from initialization_errors[0]
 
 
 def get_frontmost_app() -> tuple[str, str]:

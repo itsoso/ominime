@@ -1,5 +1,6 @@
 import importlib
 import sys
+import threading
 import time
 import types
 from types import SimpleNamespace
@@ -610,6 +611,82 @@ def test_start_refuses_to_spawn_second_live_event_worker(monkeypatch):
         assert "still stopping" in str(exc)
     else:
         raise AssertionError("start must not create a second event worker")
+
+
+def test_app_watcher_start_waits_for_initial_composer_prepare(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    prepare_started = threading.Event()
+    allow_prepare = threading.Event()
+    start_returned = threading.Event()
+    keep_watcher_alive = threading.Event()
+
+    class FakeApplication:
+        def localizedName(self):
+            return "微信"
+
+        def bundleIdentifier(self):
+            return "com.tencent.xinWeChat"
+
+        def processIdentifier(self):
+            return 4318
+
+    class FakeNotificationCenter:
+        def addObserver_selector_name_object_(self, *args):
+            return None
+
+    class FakeWorkspace:
+        def notificationCenter(self):
+            return FakeNotificationCenter()
+
+        def frontmostApplication(self):
+            return FakeApplication()
+
+    class FakeRunLoop:
+        def runMode_beforeDate_(self, mode, deadline):
+            keep_watcher_alive.wait()
+
+    class FakeNSObject:
+        @classmethod
+        def alloc(cls):
+            return cls()
+
+        def init(self):
+            return self
+
+    foundation = sys.modules["Foundation"]
+    foundation.NSDate = SimpleNamespace(
+        dateWithTimeIntervalSinceNow_=lambda seconds: seconds
+    )
+    monkeypatch.setattr(
+        keyboard_listener.NSWorkspace,
+        "sharedWorkspace",
+        lambda: FakeWorkspace(),
+    )
+    monkeypatch.setattr(
+        keyboard_listener,
+        "NSRunLoop",
+        SimpleNamespace(currentRunLoop=lambda: FakeRunLoop()),
+    )
+    monkeypatch.setattr(keyboard_listener, "NSObject", FakeNSObject)
+    monkeypatch.setattr(keyboard_listener.objc, "super", super, raising=False)
+
+    def prepare(app_name, bundle_id, target_pid):
+        prepare_started.set()
+        allow_prepare.wait(timeout=2)
+
+    def start_watcher():
+        keyboard_listener._start_app_watcher(prepare)
+        start_returned.set()
+
+    starter = threading.Thread(target=start_watcher, daemon=True)
+    starter.start()
+
+    assert prepare_started.wait(timeout=1)
+    time.sleep(0.25)
+    assert not start_returned.is_set()
+
+    allow_prepare.set()
+    assert start_returned.wait(timeout=1)
 
 
 def test_enter_keydown_and_keyup_produce_one_submission_attempt(monkeypatch):
