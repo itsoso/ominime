@@ -29,8 +29,30 @@ def test_wechat_capture_uses_bottom_composer_roi():
 
     assert capture.recognize(_frame()) == ("微信验收", None)
     assert calls == [("image", WECHAT_COMPOSER_ROI)]
-    assert WECHAT_COMPOSER_ROI.x == 0.35
-    assert WECHAT_COMPOSER_ROI.y == 0.01
+    assert round(WECHAT_COMPOSER_ROI.x * 880, 3) == 305
+    assert round(WECHAT_COMPOSER_ROI.y * 640, 3) == 6
+
+
+def test_wechat_roi_keeps_fixed_point_margins_when_window_resizes():
+    capture = WeChatPreSubmitCapture()
+    current = capture.composer_roi_for_frame(_frame())
+    larger = capture.composer_roi_for_frame(
+        CapturedFrame(
+            "image",
+            4318,
+            1200,
+            900,
+            12.5,
+            DOUBAO_BUNDLE_ID,
+        )
+    )
+
+    assert round(current.x * 880, 3) == round(larger.x * 1200, 3)
+    assert round(current.y * 640, 3) == round(larger.y * 900, 3)
+    assert round((current.x + current.width) * 880, 3) == 872
+    assert round((larger.x + larger.width) * 1200, 3) == 1192
+    assert round((current.y + current.height) * 640, 3) == 141
+    assert round((larger.y + larger.height) * 900, 3) == 141
 
 
 def test_wechat_capture_uses_wechat_failure_codes():
@@ -45,6 +67,11 @@ def test_wechat_capture_uses_wechat_failure_codes():
             RecognizedLine("顶部截断", 0.38, 0.205, 0.2, 0.015),
         )
     )
+    left_clipped = WeChatPreSubmitCapture(
+        ocr_provider=lambda image, roi: (
+            RecognizedLine("左侧截断", roi.x, 0.08, 0.2, 0.02),
+        )
+    )
 
     assert empty.recognize(_frame()) == ("", "wechat_ocr_empty")
     assert bottom_clipped.recognize(_frame()) == (
@@ -52,6 +79,10 @@ def test_wechat_capture_uses_wechat_failure_codes():
         "wechat_ocr_edge_clipped",
     )
     assert top_clipped.recognize(_frame()) == (
+        "",
+        "wechat_ocr_edge_clipped",
+    )
+    assert left_clipped.recognize(_frame()) == (
         "",
         "wechat_ocr_edge_clipped",
     )

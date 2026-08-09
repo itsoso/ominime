@@ -129,6 +129,22 @@ def test_freeze_selects_largest_normal_window_for_target_pid():
     assert window_calls == [True]
 
 
+def test_prepare_selects_frontmost_eligible_window_for_target_pid():
+    selected = []
+    capture = KimPreSubmitCapture(
+        window_provider=lambda: (
+            WindowInfo(7, 123, 0, 800, 600),
+            WindowInfo(8, 123, 0, 1400, 1000),
+        ),
+        image_provider=lambda window_id: selected.append(window_id) or "image",
+        input_source_provider=lambda: DOUBAO_BUNDLE_ID,
+    )
+
+    assert capture.prepare(123)
+    assert capture.freeze(123) is not None
+    assert selected == [7]
+
+
 def test_freeze_does_not_enumerate_windows_on_callback_path():
     calls = []
     capture = KimPreSubmitCapture(

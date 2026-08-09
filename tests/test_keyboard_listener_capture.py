@@ -2275,6 +2275,15 @@ def test_wechat_presubmit_ocr_persists_degraded_content(monkeypatch):
         ),
         keyboard_listener.RawKeyboardEvent(
             event_type=keyboard_listener.kCGEventKeyDown,
+            keycode=13,
+            text="w",
+            app_name="微信",
+            bundle_id="com.tencent.xinWeChat",
+            modifiers={"shift": False, "ctrl": False, "alt": False, "cmd": False},
+            target_pid=4318,
+        ),
+        keyboard_listener.RawKeyboardEvent(
+            event_type=keyboard_listener.kCGEventKeyDown,
             keycode=keyboard_listener.ENTER_KEYCODE,
             text="",
             app_name="微信",
@@ -2291,6 +2300,121 @@ def test_wechat_presubmit_ocr_persists_degraded_content(monkeypatch):
     assert events[0].character == "微信验收"
     assert events[0].modifiers["fallback_source"] == "wechat_presubmit_ocr"
     assert events[0].modifiers["redacted_content"] is False
+
+
+def test_wechat_presubmit_ocr_runs_when_ax_context_is_ok_but_empty(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    events = []
+    capture = FakeKimComposerCapture(
+        frame="wechat-frame",
+        recognize_result=("微信空值回退", None),
+    )
+    listener = keyboard_listener.KeyboardListener(
+        events.append,
+        candidate_reader=FakeDoubaoCandidateReader([None]),
+        wechat_composer_capture=capture,
+    )
+    listener._record_recent_text_snapshot = lambda *args, **kwargs: None
+    listener._capture_focused_context = lambda **kwargs: SimpleNamespace(
+        focused_role="AXTextArea",
+        focused_subrole=None,
+        focused_protected=False,
+        focused_value="",
+        capture_status="ok",
+    )
+    listener._context_to_dict_safe = lambda context: {
+        "focused_role": "AXTextArea",
+        "capture_status": "ok",
+    }
+    listener._get_focused_text_snapshot = lambda: ""
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_app_by_pid",
+        lambda pid: ("微信", "com.tencent.xinWeChat"),
+    )
+
+    for event in (
+        keyboard_listener.RawKeyboardEvent(
+            event_type=keyboard_listener.kCGEventKeyDown,
+            keycode=8,
+            text="c",
+            app_name="微信",
+            bundle_id="com.tencent.xinWeChat",
+            modifiers={"shift": False, "ctrl": False, "alt": False, "cmd": False},
+            target_pid=4318,
+        ),
+        keyboard_listener.RawKeyboardEvent(
+            event_type=keyboard_listener.kCGEventKeyDown,
+            keycode=13,
+            text="w",
+            app_name="微信",
+            bundle_id="com.tencent.xinWeChat",
+            modifiers={"shift": False, "ctrl": False, "alt": False, "cmd": False},
+            target_pid=4318,
+        ),
+        keyboard_listener.RawKeyboardEvent(
+            event_type=keyboard_listener.kCGEventKeyDown,
+            keycode=keyboard_listener.ENTER_KEYCODE,
+            text="",
+            app_name="微信",
+            bundle_id="com.tencent.xinWeChat",
+            modifiers={"shift": False, "ctrl": False, "alt": False, "cmd": False},
+            target_pid=4318,
+            pre_submit_frame="wechat-frame",
+        ),
+    ):
+        listener._process_raw_event(event)
+
+    assert events[0].character == "微信空值回退"
+    assert events[0].modifiers["fallback_source"] == "wechat_presubmit_ocr"
+    assert capture.recognize_calls == ["wechat-frame"]
+
+
+def test_wechat_ax_content_wins_without_running_ocr(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    events = []
+    capture = FakeKimComposerCapture(
+        frame="wechat-frame",
+        recognize_result=("不应读取", None),
+    )
+    listener = keyboard_listener.KeyboardListener(
+        events.append,
+        wechat_composer_capture=capture,
+    )
+    listener._record_recent_text_snapshot = lambda *args, **kwargs: None
+    listener._capture_focused_context = lambda **kwargs: SimpleNamespace(
+        focused_role="AXTextArea",
+        focused_subrole=None,
+        focused_protected=False,
+        focused_value="辅助功能正文",
+        capture_status="ok",
+    )
+    listener._context_to_dict_safe = lambda context: {
+        "focused_role": "AXTextArea",
+        "capture_status": "ok",
+    }
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_app_by_pid",
+        lambda pid: ("微信", "com.tencent.xinWeChat"),
+    )
+
+    listener._process_raw_event(
+        keyboard_listener.RawKeyboardEvent(
+            event_type=keyboard_listener.kCGEventKeyDown,
+            keycode=keyboard_listener.ENTER_KEYCODE,
+            text="",
+            app_name="微信",
+            bundle_id="com.tencent.xinWeChat",
+            modifiers={"shift": False, "ctrl": False, "alt": False, "cmd": False},
+            target_pid=4318,
+            pre_submit_frame="wechat-frame",
+        )
+    )
+
+    assert events[0].character == "辅助功能正文"
+    assert "fallback_source" not in events[0].modifiers
+    assert capture.recognize_calls == []
 
 
 def test_wechat_presubmit_ocr_failure_keeps_count_only(monkeypatch):

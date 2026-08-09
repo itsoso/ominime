@@ -1407,6 +1407,30 @@ class KeyboardListener:
         char_count_override = None
         redacted_content = False
         fallback_source = None
+        physical_key_count = None
+        capture_diagnostics = None
+        if (
+            text_entry_context
+            and not content
+            and bundle_id in self._presubmit_composer_captures
+        ):
+            candidate_content = normalize_submission_text(
+                self._pop_doubao_submission(
+                    app_name,
+                    bundle_id,
+                    target_pid,
+                ),
+                app_name=app_name,
+                bundle_id=bundle_id,
+            )
+            if candidate_content:
+                content = candidate_content
+                fallback_source = "doubao_candidate_text"
+                physical_key_count = self._pop_fallback_count(
+                    app_name,
+                    bundle_id,
+                    current_field_id=current_field_id,
+                )
         if text_entry_context and (not content or not _contains_cjk(content)):
             key_event_content = normalize_submission_text(
                 self._pop_text_fallback_content(
@@ -1429,9 +1453,10 @@ class KeyboardListener:
             if content:
                 fallback_source = "recent_ax_snapshot"
         if not content:
-            physical_key_count = self._pop_fallback_count(
-                app_name, bundle_id, current_field_id=current_field_id
-            )
+            if physical_key_count is None:
+                physical_key_count = self._pop_fallback_count(
+                    app_name, bundle_id, current_field_id=current_field_id
+                )
             if not text_entry_context:
                 self._clear_submission_buffers(app_name, bundle_id)
                 self._emit_capture_diagnostic(
@@ -1452,8 +1477,40 @@ class KeyboardListener:
                     print(f"⚠️  Enter 提交未保存：焦点不是文本输入控件 ({role}) -> {app_name} ({bundle_id})")
                     self._last_empty_submission_log = now
                 return
+            composer_capture = self._presubmit_composer_captures.get(bundle_id)
+            if composer_capture is not None and pre_submit_frame is not None:
+                failure_prefix, ocr_fallback_source = PRESUBMIT_OCR_METADATA[
+                    bundle_id
+                ]
+                try:
+                    recognized_text, ocr_failure = composer_capture.recognize(
+                        pre_submit_frame
+                    )
+                except Exception:
+                    recognized_text = ""
+                    ocr_failure = f"{failure_prefix}_native_error"
+                recognized_content = normalize_submission_text(
+                    recognized_text,
+                    app_name=app_name,
+                    bundle_id=bundle_id,
+                )
+                if recognized_content and ocr_text_matches_physical_count(
+                    recognized_content,
+                    physical_key_count,
+                ):
+                    content = recognized_content
+                    fallback_source = ocr_fallback_source
+                else:
+                    if recognized_content and not ocr_failure:
+                        ocr_failure = f"{failure_prefix}_key_count_mismatch"
+                    if ocr_failure:
+                        capture_diagnostics = {
+                            f"{failure_prefix}_failure": ocr_failure
+                        }
             fallback_count = physical_key_count if getattr(config, "count_unreadable_submissions", True) else 0
-            if fallback_count > 0:
+            if content:
+                self._clear_submission_buffers(app_name, bundle_id)
+            elif fallback_count > 0:
                 content = UNREADABLE_SUBMISSION_PLACEHOLDER
                 char_count_override = fallback_count
                 redacted_content = True
@@ -1503,6 +1560,8 @@ class KeyboardListener:
             fallback_source=fallback_source,
             char_count_override=char_count_override,
             redacted_content=redacted_content,
+            physical_key_count=physical_key_count,
+            capture_diagnostics=capture_diagnostics,
         )
 
     def _process_raw_event(self, raw_event: RawKeyboardEvent):

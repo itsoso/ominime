@@ -226,7 +226,7 @@ class KimPreSubmitCapture:
                 with self._window_lock:
                     self._prepared_windows.pop(target_pid, None)
                 return False
-            window = max(windows, key=lambda item: item.width * item.height)
+            window = windows[0]
             with self._window_lock:
                 self._prepared_windows = {
                     target_pid: (window, self._clock())
@@ -284,7 +284,7 @@ class KimPreSubmitCapture:
         if frame is None:
             return "", self._failure_code("frame_unavailable")
         try:
-            roi = self.composer_roi
+            roi = self.composer_roi_for_frame(frame)
             lines = tuple(self._ocr_provider(frame.image, roi))
             bottom_edge = (
                 roi.y + roi.height * 0.02
@@ -295,6 +295,8 @@ class KimPreSubmitCapture:
             if any(
                 line.y <= bottom_edge
                 or line.y + line.height >= top_edge
+                or line.x <= roi.x + roi.width * 0.02
+                or line.x + line.width >= roi.x + roi.width * 0.98
                 for line in lines
                 if line.text.strip()
             ):
@@ -315,6 +317,9 @@ class KimPreSubmitCapture:
 
     def _failure_code(self, suffix: str) -> str:
         return f"{self.failure_prefix}_{suffix}"
+
+    def composer_roi_for_frame(self, frame: CapturedFrame) -> NormalizedRect:
+        return self.composer_roi
 
     @staticmethod
     def _current_input_source_bundle_id() -> str:
