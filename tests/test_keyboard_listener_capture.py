@@ -635,10 +635,15 @@ def test_app_watcher_start_waits_for_initial_composer_prepare(monkeypatch):
             return None
 
     class FakeWorkspace:
+        frontmost_calls = 0
+
         def notificationCenter(self):
             return FakeNotificationCenter()
 
         def frontmostApplication(self):
+            self.frontmost_calls += 1
+            if self.frontmost_calls == 1:
+                return None
             return FakeApplication()
 
     class FakeRunLoop:
@@ -687,6 +692,28 @@ def test_app_watcher_start_waits_for_initial_composer_prepare(monkeypatch):
 
     allow_prepare.set()
     assert start_returned.wait(timeout=1)
+
+
+def test_start_does_not_leave_worker_running_when_app_watcher_fails(
+    monkeypatch,
+):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    listener = keyboard_listener.KeyboardListener(lambda event: None)
+    monkeypatch.setattr(
+        keyboard_listener,
+        "_start_app_watcher",
+        lambda callback: (_ for _ in ()).throw(
+            RuntimeError("app watcher initialization failed")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="app watcher initialization failed"):
+        listener.start()
+
+    assert not listener._running
+    assert not listener._has_started
+    assert not listener._event_worker_running
+    assert listener._event_worker_thread is None
 
 
 def test_enter_keydown_and_keyup_produce_one_submission_attempt(monkeypatch):

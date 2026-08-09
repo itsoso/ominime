@@ -404,13 +404,22 @@ def _start_app_watcher(
                 "NSWorkspaceDidActivateApplicationNotification",
                 None
             )
+            initialization_deadline = (
+                time.monotonic() + APP_WATCHER_START_TIMEOUT_SECONDS
+            )
             front_app = ws.frontmostApplication()
-            if front_app:
-                _on_app_activated(
-                    front_app.localizedName() or "Unknown",
-                    front_app.bundleIdentifier() or "unknown",
-                    int(front_app.processIdentifier()),
-                )
+            while front_app is None and not abort_watcher.is_set():
+                if time.monotonic() >= initialization_deadline:
+                    raise RuntimeError("frontmost application unavailable")
+                time.sleep(0.05)
+                front_app = ws.frontmostApplication()
+            if front_app is None:
+                return
+            _on_app_activated(
+                front_app.localizedName() or "Unknown",
+                front_app.bundleIdentifier() or "unknown",
+                int(front_app.processIdentifier()),
+            )
         except Exception as exc:
             initialization_errors.append(exc)
         finally:
@@ -2086,16 +2095,17 @@ class KeyboardListener:
             return
         if self._event_worker_thread and self._event_worker_thread.is_alive():
             raise RuntimeError("previous keyboard event worker is still stopping")
+        self._retry_count = 0
+
+        # 首次前台应用快照与窗口预备完成后，才开放键盘事件入口。
+        _start_app_watcher(self._prepare_activated_composer)
+
         self._event_queue = queue.Queue(maxsize=EVENT_QUEUE_MAX_SIZE)
         self._has_started = True
         self._running = True
-        self._retry_count = 0
         self._event_worker_running = True
         self._event_worker_thread = threading.Thread(target=self._event_worker_loop, daemon=True)
         self._event_worker_thread.start()
-
-        # 启动应用切换监听器（基于系统通知，比轮询更准确）
-        _start_app_watcher(self._prepare_activated_composer)
 
         # 启动系统唤醒监听
         self._start_wake_observer()

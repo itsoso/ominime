@@ -186,7 +186,7 @@ Expected: FAIL because activation notifications do not yet carry the PID or prep
 
 **Step 3: Implement the minimal cold-start allowance**
 
-Extend the existing application watcher to cache `(app_name, bundle_id, pid)` atomically and notify the listener outside the EventTap callback. Use an initialization event so EventTap startup waits for the first frontmost snapshot and composer preparation instead of sleeping for a fixed duration. On activation and periodic refresh, prepare only the matching composer window metadata. Keep the callback strict: the cached frontmost PID, event target PID, and prepared identity must all match. Do not enumerate windows or run OCR in the callback.
+Extend the existing application watcher to cache `(app_name, bundle_id, pid)` atomically and notify the listener outside the EventTap callback. Use an initialization event so worker and EventTap startup wait for the first valid frontmost snapshot and composer preparation instead of sleeping for a fixed duration; retry a temporarily missing frontmost application until the bounded startup deadline, and leave listener state untouched on failure. On activation and periodic refresh, prepare only the matching composer window metadata. Keep the callback strict: the cached frontmost PID, event target PID, and prepared identity must all match. Do not enumerate windows or run OCR in the callback.
 
 **Step 4: Run focused, related, and full tests**
 
