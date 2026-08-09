@@ -1,8 +1,9 @@
 """Capture and model trusted Doubao input-method candidate selections."""
 
 import time
+from collections import deque
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Iterable
 
 
 DOUBAO_BUNDLE_ID = "com.bytedance.inputmethod.doubaoime"
@@ -38,6 +39,12 @@ class CandidateSnapshot:
 
 
 @dataclass(frozen=True)
+class WindowRecord:
+    pid: int
+    bounds: Rect
+
+
+@dataclass(frozen=True)
 class CompositionResult:
     candidate_committed: bool = False
     committed_text: str = ""
@@ -47,6 +54,8 @@ def candidate_is_in_composer(candidate: Rect, target: Rect) -> bool:
     """Return whether a candidate window is anchored in the target composer."""
     if min(candidate.width, candidate.height, target.width, target.height) <= 0:
         return False
+    if candidate.width > target.width or candidate.height > target.height * 0.25:
+        return False
     center_x = candidate.x + candidate.width / 2
     center_y = candidate.y + candidate.height / 2
     return (
@@ -55,6 +64,168 @@ def candidate_is_in_composer(candidate: Rect, target: Rect) -> bool:
         <= center_y
         <= target.y + target.height
     )
+
+
+def rect_from_window_bounds(bounds) -> Rect | None:
+    """Convert Python or Objective-C window-bound mappings to a Rect."""
+    getter = getattr(bounds, "get", None)
+    if getter is None:
+        return None
+    try:
+        return Rect(
+            x=float(getter("X", getter("x"))),
+            y=float(getter("Y", getter("y"))),
+            width=float(getter("Width", getter("width"))),
+            height=float(getter("Height", getter("height"))),
+        )
+    except (TypeError, ValueError):
+        return None
+
+
+def collect_static_text_values(
+    roots: Iterable[object],
+    attribute_reader: Callable[[object, str], object],
+    *,
+    max_nodes: int = 200,
+) -> tuple[str, ...]:
+    """Collect bounded candidate strings from an Accessibility subtree."""
+    pending = deque(roots)
+    visited: set[int] = set()
+    values: list[str] = []
+    seen_values: set[str] = set()
+    processed = 0
+    while pending and processed < max_nodes:
+        node = pending.popleft()
+        identity = id(node)
+        if identity in visited:
+            continue
+        visited.add(identity)
+        processed += 1
+        if attribute_reader(node, "AXRole") == "AXStaticText":
+            value = attribute_reader(node, "AXValue")
+            if isinstance(value, str):
+                value = value.strip()
+                if value and value not in seen_values:
+                    values.append(value)
+                    seen_values.add(value)
+        children = attribute_reader(node, "AXChildren")
+        if isinstance(children, (list, tuple)):
+            pending.extend(children)
+    return tuple(values)
+
+
+class DoubaoCandidateReader:
+    """Read candidates only when Doubao is anchored to a supported composer."""
+
+    def __init__(
+        self,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        process_provider: Callable[[], Iterable[tuple[str, int]]] | None = None,
+        ax_roots_provider: Callable[[int], Iterable[object]] | None = None,
+        window_provider: Callable[[], Iterable[WindowRecord]] | None = None,
+        attribute_reader: Callable[[object, str], object] | None = None,
+    ):
+        self._clock = clock
+        self._process_provider = process_provider or self._native_processes
+        self._ax_roots_provider = ax_roots_provider or self._native_ax_roots
+        self._window_provider = window_provider or self._native_windows
+        self._attribute_reader = attribute_reader or self._native_ax_attribute
+
+    def read(
+        self,
+        *,
+        target_pid: int,
+        target_bundle_id: str,
+    ) -> CandidateSnapshot | None:
+        if target_pid <= 0 or target_bundle_id not in SUPPORTED_TARGET_BUNDLE_IDS:
+            return None
+        try:
+            doubao_pid = next(
+                (
+                    int(pid)
+                    for bundle_id, pid in self._process_provider()
+                    if bundle_id == DOUBAO_BUNDLE_ID and int(pid) > 0
+                ),
+                0,
+            )
+            if doubao_pid <= 0:
+                return None
+            candidates = collect_static_text_values(
+                self._ax_roots_provider(doubao_pid),
+                self._attribute_reader,
+            )
+            if not candidates:
+                return None
+            windows = tuple(self._window_provider())
+            candidate_windows = (
+                window.bounds for window in windows if window.pid == doubao_pid
+            )
+            target_windows = tuple(
+                window.bounds for window in windows if window.pid == target_pid
+            )
+            if not target_windows or not any(
+                candidate_is_in_composer(candidate, target)
+                for candidate in candidate_windows
+                for target in target_windows
+            ):
+                return None
+            return CandidateSnapshot(candidates, target_pid, self._clock())
+        except Exception:
+            return None
+
+    @staticmethod
+    def _native_processes() -> Iterable[tuple[str, int]]:
+        from AppKit import NSWorkspace
+
+        workspace = NSWorkspace.sharedWorkspace()
+        return tuple(
+            (application.bundleIdentifier() or "", int(application.processIdentifier()))
+            for application in workspace.runningApplications()
+        )
+
+    @staticmethod
+    def _native_ax_attribute(element, attribute: str):
+        from ApplicationServices import AXUIElementCopyAttributeValue
+
+        try:
+            result = AXUIElementCopyAttributeValue(element, attribute, None)
+        except TypeError:
+            result = AXUIElementCopyAttributeValue(element, attribute)
+        if isinstance(result, tuple):
+            if len(result) >= 2 and result[0] == 0:
+                return result[1]
+            return None
+        return result
+
+    def _native_ax_roots(self, pid: int) -> Iterable[object]:
+        from ApplicationServices import AXUIElementCreateApplication
+
+        application = AXUIElementCreateApplication(pid)
+        windows = self._native_ax_attribute(application, "AXWindows")
+        if isinstance(windows, (list, tuple)) and windows:
+            return tuple(windows)
+        return (application,)
+
+    @staticmethod
+    def _native_windows() -> Iterable[WindowRecord]:
+        import Quartz
+
+        options = (
+            Quartz.kCGWindowListOptionOnScreenOnly
+            | Quartz.kCGWindowListExcludeDesktopElements
+        )
+        window_info = Quartz.CGWindowListCopyWindowInfo(options, Quartz.kCGNullWindowID)
+        records: list[WindowRecord] = []
+        for item in window_info or ():
+            pid = int(item.get(Quartz.kCGWindowOwnerPID, 0) or 0)
+            bounds = item.get(Quartz.kCGWindowBounds) or {}
+            rect = rect_from_window_bounds(bounds)
+            if rect is None:
+                continue
+            if pid > 0 and rect.width > 0 and rect.height > 0:
+                records.append(WindowRecord(pid=pid, bounds=rect))
+        return tuple(records)
 
 
 class DoubaoCompositionState:

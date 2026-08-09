@@ -1,8 +1,15 @@
+from collections import UserDict
+
 from ominime.ime_candidate_capture import (
     CandidateSnapshot,
+    DOUBAO_BUNDLE_ID,
+    DoubaoCandidateReader,
     DoubaoCompositionState,
     Rect,
+    WindowRecord,
     candidate_is_in_composer,
+    collect_static_text_values,
+    rect_from_window_bounds,
 )
 
 
@@ -156,3 +163,126 @@ def test_composition_timeout_discards_sensitive_content():
     clock.now += 31
 
     assert state.pop_submission(target_pid=123) == ""
+
+
+def test_reader_collects_static_text_in_order_and_deduplicates():
+    attributes = {
+        ("window", "AXRole"): "AXWindow",
+        ("window", "AXChildren"): ["first", "duplicate", "button", "second"],
+        ("first", "AXRole"): "AXStaticText",
+        ("first", "AXValue"): "测试",
+        ("duplicate", "AXRole"): "AXStaticText",
+        ("duplicate", "AXValue"): "测试",
+        ("button", "AXRole"): "AXButton",
+        ("button", "AXValue"): "不应采集",
+        ("second", "AXRole"): "AXStaticText",
+        ("second", "AXValue"): "策士",
+    }
+
+    values = collect_static_text_values(
+        ["window"],
+        lambda node, attribute: attributes.get((node, attribute)),
+    )
+
+    assert values == ("测试", "策士")
+
+
+def test_reader_static_text_traversal_is_bounded():
+    children = [f"child-{index}" for index in range(10)]
+    attributes = {
+        ("window", "AXChildren"): children,
+        ("child-9", "AXRole"): "AXStaticText",
+        ("child-9", "AXValue"): "太深",
+    }
+
+    values = collect_static_text_values(
+        ["window"],
+        lambda node, attribute: attributes.get((node, attribute)),
+        max_nodes=5,
+    )
+
+    assert values == ()
+
+
+def make_reader(
+    clock,
+    *,
+    processes=((DOUBAO_BUNDLE_ID, 88),),
+    candidate_bounds=Rect(2500, 760, 400, 64),
+):
+    attributes = {
+        ("window", "AXChildren"): ["first", "second"],
+        ("first", "AXRole"): "AXStaticText",
+        ("first", "AXValue"): "测试",
+        ("second", "AXRole"): "AXStaticText",
+        ("second", "AXValue"): "策士",
+    }
+    windows = [
+        WindowRecord(pid=88, bounds=candidate_bounds),
+        WindowRecord(pid=123, bounds=Rect(2000, 100, 1200, 800)),
+    ]
+    return DoubaoCandidateReader(
+        clock=clock,
+        process_provider=lambda: processes,
+        ax_roots_provider=lambda pid: ["window"],
+        window_provider=lambda: windows,
+        attribute_reader=lambda node, attribute: attributes.get((node, attribute)),
+    )
+
+
+def test_reader_rejects_unsupported_target_without_native_queries():
+    calls = []
+    reader = DoubaoCandidateReader(process_provider=lambda: calls.append(True))
+
+    snapshot = reader.read(target_pid=123, target_bundle_id="com.example.Other")
+
+    assert snapshot is None
+    assert calls == []
+
+
+def test_reader_requires_exact_doubao_process_bundle():
+    clock = FakeClock()
+    reader = make_reader(
+        clock,
+        processes=(("com.bytedance.inputmethod.lookalike", 88),),
+    )
+
+    assert reader.read(target_pid=123, target_bundle_id="Kem") is None
+
+
+def test_reader_rejects_candidate_outside_lower_composer_region():
+    clock = FakeClock()
+    reader = make_reader(clock, candidate_bounds=Rect(2500, 180, 400, 64))
+
+    assert reader.read(target_pid=123, target_bundle_id="Kem") is None
+
+
+def test_reader_returns_trusted_snapshot_for_kim_composer():
+    clock = FakeClock()
+    reader = make_reader(clock)
+
+    snapshot = reader.read(target_pid=123, target_bundle_id="Kem")
+
+    assert snapshot == CandidateSnapshot(("测试", "策士"), 123, clock())
+
+
+def test_reader_returns_none_when_candidate_ax_values_are_unavailable():
+    clock = FakeClock()
+    reader = DoubaoCandidateReader(
+        clock=clock,
+        process_provider=lambda: ((DOUBAO_BUNDLE_ID, 88),),
+        ax_roots_provider=lambda pid: ["window"],
+        window_provider=lambda: [
+            WindowRecord(pid=88, bounds=Rect(2500, 760, 400, 64)),
+            WindowRecord(pid=123, bounds=Rect(2000, 100, 1200, 800)),
+        ],
+        attribute_reader=lambda node, attribute: None,
+    )
+
+    assert reader.read(target_pid=123, target_bundle_id="Kem") is None
+
+
+def test_reader_parses_macos_mapping_without_requiring_python_dict():
+    bounds = UserDict({"X": 2500, "Y": 760, "Width": 400, "Height": 64})
+
+    assert rect_from_window_bounds(bounds) == Rect(2500, 760, 400, 64)
