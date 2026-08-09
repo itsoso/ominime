@@ -103,6 +103,7 @@ class RawKeyboardEvent:
     target_pid: int = 0
     is_autorepeat: bool = False
     pre_submit_frame: object | None = None
+    pre_submit_capture_failure: str | None = None
 
 
 # 键码映射
@@ -1148,6 +1149,7 @@ class KeyboardListener:
         event_type=None,
         target_pid: int | None = None,
         pre_submit_frame: object | None = None,
+        pre_submit_capture_failure: str | None = None,
     ):
         """Emit the full focused input value when Enter is pressed."""
         if app_name is None or bundle_id is None:
@@ -1190,8 +1192,17 @@ class KeyboardListener:
                 candidate_diagnostics = (
                     {"doubao_candidate_failure": candidate_failure}
                     if candidate_failure
-                    else None
+                    else {}
                 )
+                if (
+                    bundle_id == LEGACY_KIM_BUNDLE_ID
+                    and pre_submit_capture_failure
+                ):
+                    candidate_diagnostics["kim_ocr_failure"] = (
+                        pre_submit_capture_failure
+                    )
+                if not candidate_diagnostics:
+                    candidate_diagnostics = None
                 physical_key_count = self._pop_fallback_count(
                     app_name, bundle_id, current_field_id=current_field_id
                 )
@@ -1601,6 +1612,9 @@ class KeyboardListener:
                 event_type=event_type,
                 target_pid=raw_event.target_pid,
                 pre_submit_frame=raw_event.pre_submit_frame,
+                pre_submit_capture_failure=(
+                    raw_event.pre_submit_capture_failure
+                ),
             )
 
     def _event_worker_loop(self):
@@ -1663,6 +1677,7 @@ class KeyboardListener:
                     )
                 )
                 pre_submit_frame = None
+                pre_submit_capture_failure = None
                 if (
                     event_type == kCGEventKeyDown
                     and keycode == ENTER_KEYCODE
@@ -1675,8 +1690,13 @@ class KeyboardListener:
                         pre_submit_frame = self._kim_composer_capture.freeze(
                             target_pid
                         )
+                        if pre_submit_frame is None:
+                            pre_submit_capture_failure = (
+                                "kim_ocr_frame_unavailable"
+                            )
                     except Exception:
                         pre_submit_frame = None
+                        pre_submit_capture_failure = "kim_ocr_capture_error"
                 raw_event = RawKeyboardEvent(
                     event_type=event_type,
                     keycode=keycode,
@@ -1687,6 +1707,7 @@ class KeyboardListener:
                     target_pid=target_pid,
                     is_autorepeat=is_autorepeat,
                     pre_submit_frame=pre_submit_frame,
+                    pre_submit_capture_failure=pre_submit_capture_failure,
                 )
                 if self._event_worker_running:
                     try:

@@ -274,7 +274,35 @@ def test_kim_presubmit_capture_failure_does_not_block_enter(monkeypatch):
 
     queued = listener._event_queue.get_nowait()
     assert queued.pre_submit_frame is None
+    assert queued.pre_submit_capture_failure == "kim_ocr_capture_error"
     assert returned is native_event
+
+
+def test_kim_presubmit_missing_frame_is_diagnosable(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    capture = FakeKimComposerCapture(frame=None)
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None,
+        kim_composer_capture=capture,
+    )
+    monkeypatch.setattr(keyboard_listener, "get_current_app", lambda: ("Kim", "Kem"))
+    listener._has_started = True
+    listener._event_worker_running = True
+
+    listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyDown,
+        SimpleNamespace(
+            keycode=keyboard_listener.ENTER_KEYCODE,
+            text="",
+            target_pid=123,
+        ),
+        None,
+    )
+
+    queued = listener._event_queue.get_nowait()
+    assert queued.pre_submit_frame is None
+    assert queued.pre_submit_capture_failure == "kim_ocr_frame_unavailable"
 
 
 def test_event_tap_callback_never_processes_synchronously_after_start(monkeypatch):
@@ -1823,6 +1851,7 @@ def doubao_raw_event(
     text="",
     target_pid=123,
     pre_submit_frame=None,
+    pre_submit_capture_failure=None,
 ):
     return keyboard_listener.RawKeyboardEvent(
         event_type=event_type,
@@ -1833,6 +1862,7 @@ def doubao_raw_event(
         modifiers={"shift": False, "ctrl": False, "alt": False, "cmd": False},
         target_pid=target_pid,
         pre_submit_frame=pre_submit_frame,
+        pre_submit_capture_failure=pre_submit_capture_failure,
     )
 
 
@@ -2087,6 +2117,39 @@ def test_kim_presubmit_ocr_failure_keeps_count_only_without_text_in_diagnostics(
         "kim_ocr_failure": "kim_ocr_uncommitted_text",
     }
     assert "ocr_text" not in events[0].modifiers["capture_diagnostics"]
+
+
+def test_kim_presubmit_missing_frame_failure_is_saved_without_content(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    events = []
+    listener = keyboard_listener.KeyboardListener(
+        events.append,
+        candidate_reader=FakeDoubaoCandidateReader([None]),
+        kim_composer_capture=FakeKimComposerCapture(),
+    )
+    configure_listener_context(listener)
+    monkeypatch.setattr(keyboard_listener, "get_app_by_pid", lambda pid: ("Kim", "Kem"))
+
+    listener._process_raw_event(
+        doubao_raw_event(
+            keyboard_listener,
+            keyboard_listener.kCGEventKeyDown,
+            8,
+            "c",
+        )
+    )
+    listener._process_raw_event(
+        doubao_raw_event(
+            keyboard_listener,
+            keyboard_listener.kCGEventKeyDown,
+            keyboard_listener.ENTER_KEYCODE,
+            pre_submit_capture_failure="kim_ocr_frame_unavailable",
+        )
+    )
+
+    assert events[0].modifiers["capture_diagnostics"]["kim_ocr_failure"] == (
+        "kim_ocr_frame_unavailable"
+    )
 
 
 @pytest.mark.parametrize(
