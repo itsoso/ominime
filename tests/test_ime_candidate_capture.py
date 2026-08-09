@@ -188,6 +188,20 @@ def test_composition_timeout_discards_sensitive_content():
     assert state.pop_submission(target_pid=123) == ""
 
 
+def test_confirmed_message_outlives_short_candidate_snapshot_ttl():
+    clock = FakeClock()
+    state = DoubaoCompositionState(
+        timeout_seconds=300,
+        candidate_timeout_seconds=5,
+        clock=clock,
+    )
+    state.update_candidates(candidate_snapshot(clock), target_pid=123)
+    state.handle_key(keycode=49, text=" ", target_pid=123)
+    clock.now += 6
+
+    assert state.pop_submission(target_pid=123) == "测试"
+
+
 def test_reader_collects_static_text_in_order_and_deduplicates():
     attributes = {
         ("window", "AXRole"): "AXWindow",
@@ -265,6 +279,7 @@ def make_reader(
         input_source_provider=lambda: input_source_bundle,
         process_provider=lambda: processes,
         ax_roots_provider=lambda pid: ["window"],
+        ax_rect_provider=lambda root: candidate_bounds,
         window_provider=lambda: windows,
         attribute_reader=lambda node, attribute: attributes.get((node, attribute)),
     )
@@ -344,6 +359,7 @@ def test_reader_rejects_text_from_multiple_candidate_ax_windows():
         input_source_provider=lambda: DOUBAO_BUNDLE_ID,
         process_provider=lambda: ((DOUBAO_BUNDLE_ID, 88),),
         ax_roots_provider=lambda pid: ["window-one", "window-two"],
+        ax_rect_provider=lambda root: Rect(2500, 760, 400, 64),
         window_provider=lambda: [
             WindowRecord(pid=88, bounds=Rect(2500, 760, 400, 64)),
             WindowRecord(pid=123, bounds=Rect(2000, 100, 1200, 800)),
@@ -355,7 +371,7 @@ def test_reader_rejects_text_from_multiple_candidate_ax_windows():
     assert reader.last_failure_reason == "ambiguous_ax_windows"
 
 
-def test_reader_rejects_multiple_doubao_windows_in_composer_region():
+def test_reader_ignores_unrelated_quartz_windows_after_ax_window_binding():
     clock = FakeClock()
     reader = make_reader(clock)
     reader._window_provider = lambda: [
@@ -364,8 +380,37 @@ def test_reader_rejects_multiple_doubao_windows_in_composer_region():
         WindowRecord(pid=123, bounds=Rect(2000, 100, 1200, 800)),
     ]
 
+    assert reader.read(target_pid=123, target_bundle_id="Kem") == CandidateSnapshot(
+        ("测试", "策士"),
+        123,
+        clock(),
+    )
+
+
+def test_reader_binds_ax_text_to_same_window_geometry():
+    clock = FakeClock()
+    attributes = {
+        ("text-window", "AXRole"): "AXStaticText",
+        ("text-window", "AXValue"): "不相关文字",
+    }
+    reader = DoubaoCandidateReader(
+        clock=clock,
+        input_source_provider=lambda: DOUBAO_BUNDLE_ID,
+        process_provider=lambda: ((DOUBAO_BUNDLE_ID, 88),),
+        ax_roots_provider=lambda pid: ["text-window", "composer-window"],
+        ax_rect_provider=lambda root: (
+            Rect(2500, 180, 400, 64)
+            if root == "text-window"
+            else Rect(2500, 760, 400, 64)
+        ),
+        window_provider=lambda: [
+            WindowRecord(pid=123, bounds=Rect(2000, 100, 1200, 800)),
+        ],
+        attribute_reader=lambda node, attribute: attributes.get((node, attribute)),
+    )
+
     assert reader.read(target_pid=123, target_bundle_id="Kem") is None
-    assert reader.last_failure_reason == "ambiguous_candidate_windows"
+    assert reader.last_failure_reason == "candidate_outside_composer"
 
 
 def test_reader_parses_macos_mapping_without_requiring_python_dict():

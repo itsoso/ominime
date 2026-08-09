@@ -17,11 +17,11 @@ review:
 
 - verify the active macOS input-source bundle, not merely a running Doubao
   process;
-- reject multiple candidate-bearing AX roots or multiple matching candidate
-  windows;
+- bind candidate text and geometry to the same AX window;
 - never promote raw Latin/pinyin pre-edit text to submitted content;
-- expire candidate snapshots after five seconds and revalidate before every
-  Space, number, or Enter candidate commit;
+- expire uncommitted candidate snapshots after five seconds while retaining
+  confirmed content for the normal session timeout, and revalidate before every
+  Space, number, or Enter candidate commit even after an early key-up miss;
 - clear in-memory candidate content on target-app/PID changes, mouse clicks,
   and editing commands that cannot be reconstructed safely;
 - attach a non-content failure code to count-only capture diagnostics.

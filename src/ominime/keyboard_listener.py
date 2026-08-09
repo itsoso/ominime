@@ -652,7 +652,8 @@ class KeyboardListener:
         state = self._doubao_states.get(key)
         if state is None:
             state = DoubaoCompositionState(
-                timeout_seconds=DOUBAO_CANDIDATE_TIMEOUT_SECONDS
+                timeout_seconds=config.session_timeout,
+                candidate_timeout_seconds=DOUBAO_CANDIDATE_TIMEOUT_SECONDS,
             )
             self._doubao_states[key] = state
         return state
@@ -715,7 +716,7 @@ class KeyboardListener:
             49,
             *NUMBER_KEYCODE_TO_INDEX,
         }
-        if state.has_active_candidate and keycode in candidate_commit_keycodes:
+        if keycode in candidate_commit_keycodes:
             snapshot = self._candidate_reader.read(
                 target_pid=target_pid,
                 target_bundle_id=bundle_id,
@@ -728,13 +729,15 @@ class KeyboardListener:
                     "last_failure_reason",
                     None,
                 ) or "candidate_unavailable"
-                state.clear()
-                return None
-            self._doubao_failure_reasons.pop(
-                self._fallback_buffer_key(app_name, bundle_id),
-                None,
-            )
-            state.update_candidates(snapshot, target_pid=target_pid)
+                if state.has_active_candidate:
+                    state.clear()
+                    return None
+            else:
+                self._doubao_failure_reasons.pop(
+                    self._fallback_buffer_key(app_name, bundle_id),
+                    None,
+                )
+                state.update_candidates(snapshot, target_pid=target_pid)
         result = state.handle_key(
             keycode=keycode,
             text=event_text,

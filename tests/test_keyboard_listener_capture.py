@@ -2022,6 +2022,37 @@ def test_doubao_enter_revalidates_candidate_before_commit(monkeypatch):
     assert not any(item["decision_reason"] == "ime_candidate_commit" for item in diagnostics)
 
 
+def test_doubao_commit_key_recovers_when_keyup_candidate_was_early(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    snapshot = keyboard_listener.CandidateSnapshot(("测试",), 123, time.monotonic())
+    reader = FakeDoubaoCandidateReader([None, snapshot])
+    diagnostics = []
+    submission_calls = []
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None,
+        diagnostics_callback=diagnostics.append,
+        candidate_reader=reader,
+    )
+    listener._record_recent_text_snapshot = lambda *args, **kwargs: None
+    listener._emit_submission_snapshot = lambda *args, **kwargs: submission_calls.append(kwargs)
+    monkeypatch.setattr(keyboard_listener, "get_app_by_pid", lambda pid: ("Kim", "Kem"))
+
+    for raw_event in (
+        doubao_raw_event(keyboard_listener, keyboard_listener.kCGEventKeyDown, 8, "c"),
+        doubao_raw_event(keyboard_listener, keyboard_listener.kCGEventKeyUp, 8, "c"),
+        doubao_raw_event(
+            keyboard_listener,
+            keyboard_listener.kCGEventKeyDown,
+            keyboard_listener.ENTER_KEYCODE,
+        ),
+    ):
+        listener._process_raw_event(raw_event)
+
+    assert reader.calls == [(123, "Kem"), (123, "Kem")]
+    assert submission_calls == []
+    assert diagnostics[-1]["decision_reason"] == "ime_candidate_commit"
+
+
 def test_doubao_app_switch_discards_confirmed_composition(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     snapshot = keyboard_listener.CandidateSnapshot(("测试",), 123, time.monotonic())

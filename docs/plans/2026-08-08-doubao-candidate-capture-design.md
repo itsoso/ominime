@@ -62,9 +62,9 @@ Add a small Doubao-specific candidate reader and an in-memory composition state
 machine. The accessibility reader first verifies that Doubao is the currently
 selected macOS input source, then discovers the exact Doubao process through
 `NSWorkspace`, traverses its candidate windows, and extracts non-empty,
-deduplicated `AXStaticText` values. Quartz window bounds are used to associate
-a single unambiguous candidate window with the lower portion of the current
-Kim or WeChat window.
+deduplicated `AXStaticText` values. The same AX window supplies both candidate
+text and its position/size; Quartz supplies only the target Kim or WeChat
+window bounds. This binds text and geometry to one candidate window.
 
 The keyboard listener keeps a separate, expiring state for each exact target
 application. It combines confirmed candidate selections with supported editing
@@ -101,7 +101,8 @@ state transitions can be tested separately.
 - Identify the Doubao process by exact bundle identifier.
 - Enumerate accessibility windows and collect visible non-empty candidate text.
 - Deduplicate repeated accessibility nodes while retaining visual order.
-- Resolve the candidate and target window bounds through Quartz.
+- Resolve candidate bounds from the same AX window that contains its text, and
+  resolve target-window bounds through Quartz.
 - Require exactly one candidate-bearing AX window and exactly one matching
   visible Doubao candidate window; reject cross-window ambiguity.
 - Accept a snapshot only when its horizontal center lies inside the target
@@ -109,7 +110,8 @@ state transitions can be tested separately.
   that window.
 - Bind each snapshot to the target PID, expire it after five seconds, and
   revalidate the candidate window immediately before Space, number, or Enter
-  commits it.
+  commits it. A commit key performs this read even if the preceding key-up ran
+  before the candidate window became visible.
 
 ## Input State
 
@@ -127,6 +129,8 @@ active candidate is committed, pending pinyin is discarded and only the chosen
 candidate is appended. State is cleared on expiry, target PID/application
 change, mouse click, or an editing operation the adapter cannot replay safely
 (including paste, cut, undo, select-all, Delete, Tab, and Escape).
+The five-second lifetime applies only to an uncommitted candidate snapshot;
+confirmed message content retains the normal application session timeout.
 
 ## Privacy and Failure Behavior
 

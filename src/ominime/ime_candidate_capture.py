@@ -198,6 +198,7 @@ class DoubaoCandidateReader:
         input_source_provider: Callable[[], str] | None = None,
         process_provider: Callable[[], Iterable[tuple[str, int]]] | None = None,
         ax_roots_provider: Callable[[int], Iterable[object]] | None = None,
+        ax_rect_provider: Callable[[object], Rect | None] | None = None,
         window_provider: Callable[[], Iterable[WindowRecord]] | None = None,
         attribute_reader: Callable[[object, str], object] | None = None,
     ):
@@ -207,6 +208,7 @@ class DoubaoCandidateReader:
         )
         self._process_provider = process_provider or self._native_processes
         self._ax_roots_provider = ax_roots_provider or self._native_ax_roots
+        self._ax_rect_provider = ax_rect_provider or self._native_ax_rect
         self._window_provider = window_provider or self._native_windows
         self._attribute_reader = attribute_reader or self._native_ax_attribute
         self.last_failure_reason: str | None = None
@@ -237,40 +239,39 @@ class DoubaoCandidateReader:
             )
             if doubao_pid <= 0:
                 return self._fail("doubao_process_unavailable")
-            candidate_roots = [
-                values
-                for root in self._ax_roots_provider(doubao_pid)
-                if (
-                    values := collect_static_text_values(
-                        (root,),
-                        self._attribute_reader,
-                    )
+            candidate_roots = []
+            missing_candidate_bounds = False
+            for root in self._ax_roots_provider(doubao_pid):
+                values = collect_static_text_values(
+                    (root,),
+                    self._attribute_reader,
                 )
-            ]
+                if not values:
+                    continue
+                bounds = self._ax_rect_provider(root)
+                if bounds is None:
+                    missing_candidate_bounds = True
+                    continue
+                candidate_roots.append((values, bounds))
             if not candidate_roots:
-                return self._fail("candidate_ax_unavailable")
+                return self._fail(
+                    "candidate_ax_bounds_unavailable"
+                    if missing_candidate_bounds
+                    else "candidate_ax_unavailable"
+                )
             if len(candidate_roots) != 1:
                 return self._fail("ambiguous_ax_windows")
             windows = tuple(self._window_provider())
-            candidate_windows = tuple(
-                window.bounds for window in windows if window.pid == doubao_pid
-            )
             target_windows = tuple(
                 window.bounds for window in windows if window.pid == target_pid
             )
-            matching_candidate_windows = tuple(
-                candidate
-                for candidate in candidate_windows
-                if any(
-                    candidate_is_in_composer(candidate, target)
-                    for target in target_windows
-                )
-            )
-            if not matching_candidate_windows:
+            candidates, candidate_bounds = candidate_roots[0]
+            if not any(
+                candidate_is_in_composer(candidate_bounds, target)
+                for target in target_windows
+            ):
                 return self._fail("candidate_outside_composer")
-            if len(matching_candidate_windows) != 1:
-                return self._fail("ambiguous_candidate_windows")
-            return CandidateSnapshot(candidate_roots[0], target_pid, self._clock())
+            return CandidateSnapshot(candidates, target_pid, self._clock())
         except Exception:
             return self._fail("native_capture_error")
 
@@ -312,6 +313,51 @@ class DoubaoCandidateReader:
             return window_roots
         return (application,)
 
+    def _native_ax_rect(self, window) -> Rect | None:
+        from ApplicationServices import (
+            AXValueGetValue,
+            kAXValueCGPointType,
+            kAXValueCGSizeType,
+        )
+
+        position_value = self._native_ax_attribute(window, "AXPosition")
+        size_value = self._native_ax_attribute(window, "AXSize")
+        if position_value is None or size_value is None:
+            return None
+        position_result = AXValueGetValue(
+            position_value,
+            kAXValueCGPointType,
+            None,
+        )
+        size_result = AXValueGetValue(
+            size_value,
+            kAXValueCGSizeType,
+            None,
+        )
+        position = (
+            position_result[1]
+            if isinstance(position_result, tuple)
+            and len(position_result) >= 2
+            and position_result[0]
+            else position_result
+        )
+        size = (
+            size_result[1]
+            if isinstance(size_result, tuple)
+            and len(size_result) >= 2
+            and size_result[0]
+            else size_result
+        )
+        try:
+            return Rect(
+                x=float(position.x),
+                y=float(position.y),
+                width=float(size.width),
+                height=float(size.height),
+            )
+        except (AttributeError, TypeError, ValueError):
+            return None
+
     @staticmethod
     def _native_windows() -> Iterable[WindowRecord]:
         import Quartz
@@ -340,9 +386,15 @@ class DoubaoCompositionState:
         self,
         *,
         timeout_seconds: float,
+        candidate_timeout_seconds: float | None = None,
         clock: Callable[[], float] = time.monotonic,
     ):
         self.timeout_seconds = timeout_seconds
+        self.candidate_timeout_seconds = (
+            timeout_seconds
+            if candidate_timeout_seconds is None
+            else candidate_timeout_seconds
+        )
         self._clock = clock
         self.clear()
 
@@ -416,7 +468,7 @@ class DoubaoCompositionState:
         if snapshot.target_pid != target_pid:
             self.clear()
             return
-        if self._clock() - snapshot.captured_at > self.timeout_seconds:
+        if self._clock() - snapshot.captured_at > self.candidate_timeout_seconds:
             self.clear()
             return
         candidates = tuple(
