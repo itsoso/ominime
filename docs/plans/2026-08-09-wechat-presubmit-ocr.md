@@ -163,3 +163,43 @@ git commit -m "docs: explain WeChat local text recovery"
 **Step 6: Perform real WeChat acceptance**
 
 Ask the user to send a unique short, single-line message with Enter. Verify the newest WeChat diagnostic is `persist_text`, source is `wechat_presubmit_ocr`, and the stored database content exactly matches the sent message.
+
+### Task 4: Handle first-Enter capture after a listener restart
+
+**Files:**
+- Modify: `src/ominime/keyboard_listener.py`
+- Modify: `tests/test_keyboard_listener_capture.py`
+
+**Step 1: Write the failing listener test**
+
+Add a callback-level test where WeChat is the current application, the Enter event has a valid WeChat PID, and `_target_app_identities` has no entry because no ordinary keydown occurred after restart. Assert that the prepared capture is frozen and attached to the queued event. Keep the existing mismatched-identity test passing.
+
+**Step 2: Run the focused test and verify it fails**
+
+Run:
+
+```bash
+PYTHONPATH="$PWD/src" /Users/liqiuhua/work/ominime/venv/bin/pytest tests/test_keyboard_listener_capture.py -k "wechat and first_enter" -q
+```
+
+Expected: FAIL because the callback currently requires an exact cached identity before freezing.
+
+**Step 3: Implement the minimal cold-start allowance**
+
+Read the cached identity once. Allow freezing only when it is absent or exactly matches `(app_name, bundle_id)`; continue rejecting a cache entry that explicitly identifies another application. Do not enumerate windows or run OCR in the callback.
+
+**Step 4: Run focused, related, and full tests**
+
+Run:
+
+```bash
+PYTHONPATH="$PWD/src" /Users/liqiuhua/work/ominime/venv/bin/pytest tests/test_keyboard_listener_capture.py -q
+PYTHONPATH="$PWD/src" /Users/liqiuhua/work/ominime/venv/bin/pytest -q
+git diff --check
+```
+
+Expected: all tests pass with only the two existing warnings.
+
+**Step 5: Commit, deploy, and repeat live acceptance**
+
+Stage only the two implementation files, commit the cold-start fix, fast-forward `main`, restart `com.ominime.app`, and verify health. For acceptance, preserve an existing WeChat draft across the restart, press Enter without typing another key, and verify exact stored text with source `wechat_presubmit_ocr`.
