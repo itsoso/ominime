@@ -176,6 +176,9 @@ def ocr_text_matches_physical_count(text: str, physical_key_count: int) -> bool:
 class KimPreSubmitCapture:
     """Freeze and locally recognize the visible legacy Kim composer."""
 
+    composer_roi = KIM_COMPOSER_ROI
+    failure_prefix = "kim_ocr"
+
     def __init__(
         self,
         *,
@@ -279,14 +282,15 @@ class KimPreSubmitCapture:
     def recognize(self, frame: CapturedFrame | None) -> tuple[str, str | None]:
         """Return trusted local OCR text or a non-content failure code."""
         if frame is None:
-            return "", "kim_ocr_frame_unavailable"
+            return "", self._failure_code("frame_unavailable")
         try:
-            lines = tuple(self._ocr_provider(frame.image, KIM_COMPOSER_ROI))
+            roi = self.composer_roi
+            lines = tuple(self._ocr_provider(frame.image, roi))
             bottom_edge = (
-                KIM_COMPOSER_ROI.y + KIM_COMPOSER_ROI.height * 0.02
+                roi.y + roi.height * 0.02
             )
             top_edge = (
-                KIM_COMPOSER_ROI.y + KIM_COMPOSER_ROI.height * 0.98
+                roi.y + roi.height * 0.98
             )
             if any(
                 line.y <= bottom_edge
@@ -294,20 +298,23 @@ class KimPreSubmitCapture:
                 for line in lines
                 if line.text.strip()
             ):
-                return "", "kim_ocr_edge_clipped"
+                return "", self._failure_code("edge_clipped")
             text = assemble_recognized_text(lines)
             if not text:
-                return "", "kim_ocr_empty"
+                return "", self._failure_code("empty")
             if "\n" in text:
-                return "", "kim_ocr_multiline_untrusted"
+                return "", self._failure_code("multiline_untrusted")
             if not ocr_text_is_trusted(
                 text,
                 frame.input_source_bundle_id,
             ):
-                return "", "kim_ocr_uncommitted_text"
+                return "", self._failure_code("uncommitted_text")
             return text, None
         except Exception:
-            return "", "kim_ocr_native_error"
+            return "", self._failure_code("native_error")
+
+    def _failure_code(self, suffix: str) -> str:
+        return f"{self.failure_prefix}_{suffix}"
 
     @staticmethod
     def _current_input_source_bundle_id() -> str:
