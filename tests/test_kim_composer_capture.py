@@ -221,6 +221,45 @@ def test_recognize_uses_kim_roi_and_returns_trusted_text():
     assert calls == [("image", KIM_COMPOSER_ROI)]
 
 
+def test_recognize_ignores_tiled_watermarks_at_roi_edges():
+    capture = KimPreSubmitCapture(
+        ocr_provider=lambda image, roi: (
+            RecognizedLine(
+                "Kim缓存验收0810",
+                0.31003,
+                0.155,
+                0.1085,
+                0.01821,
+            ),
+            RecognizedLine(
+                "panbaokun", 0.29652, 0.09781, 0.04825, 0.02757, 1.5
+            ),
+            RecognizedLine(
+                "panbaokun", 0.40718, 0.09532, 0.04924, 0.03107, 1.5
+            ),
+            RecognizedLine(
+                "panbaokun", 0.46276, 0.14555, 0.04927, 0.03168, 1.5
+            ),
+            RecognizedLine(
+                "panbaokun", 0.68502, 0.14568, 0.05008, 0.03171, 1.5
+            ),
+            RecognizedLine(
+                "panbaoku", 0.7971, 0.14643, 0.0439, 0.0285, 1.5
+            ),
+        ),
+    )
+    frame = CapturedFrame(
+        "image",
+        29805,
+        1197,
+        925,
+        12.5,
+        DOUBAO_BUNDLE_ID,
+    )
+
+    assert capture.recognize(frame) == ("Kim缓存验收0810", None)
+
+
 def test_recognize_rejects_empty_and_uncommitted_doubao_text():
     frame = CapturedFrame("image", 123, 1197, 925, 12.5, DOUBAO_BUNDLE_ID)
     empty = KimPreSubmitCapture(

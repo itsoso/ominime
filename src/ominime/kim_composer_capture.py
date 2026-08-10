@@ -71,8 +71,8 @@ class RecognizedLine:
     slant_ratio: float = 0.0
 
 
-def assemble_recognized_text(lines) -> str:
-    """Order Vision observations into bounded plain text."""
+def recognized_content_lines(lines) -> tuple[RecognizedLine, ...]:
+    """Remove composer chrome and tiled watermarks from OCR observations."""
     usable = [
         line
         for line in lines
@@ -116,11 +116,16 @@ def assemble_recognized_text(lines) -> str:
             for watermark in tiled_watermarks
         )
 
-    usable = [
+    return tuple(
         line
         for line in usable
         if not is_tiled_watermark_variant(line)
-    ]
+    )
+
+
+def assemble_recognized_text(lines) -> str:
+    """Order Vision observations into bounded plain text."""
+    usable = list(recognized_content_lines(lines))
     usable.sort(key=lambda line: (-(line.y + line.height / 2), line.x))
 
     rows: list[list[RecognizedLine]] = []
@@ -286,6 +291,7 @@ class KimPreSubmitCapture:
         try:
             roi = self.composer_roi_for_frame(frame)
             lines = tuple(self._ocr_provider(frame.image, roi))
+            content_lines = recognized_content_lines(lines)
             bottom_edge = (
                 roi.y + roi.height * 0.02
             )
@@ -297,11 +303,10 @@ class KimPreSubmitCapture:
                 or line.y + line.height >= top_edge
                 or line.x <= roi.x + roi.width * 0.02
                 or line.x + line.width >= roi.x + roi.width * 0.98
-                for line in lines
-                if line.text.strip()
+                for line in content_lines
             ):
                 return "", self._failure_code("edge_clipped")
-            text = assemble_recognized_text(lines)
+            text = assemble_recognized_text(content_lines)
             if not text:
                 return "", self._failure_code("empty")
             if "\n" in text:

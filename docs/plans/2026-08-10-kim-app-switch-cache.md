@@ -49,3 +49,15 @@ Expected: all tests pass with only the two pre-existing warnings.
 **Step 5: Commit, review, deploy, and accept**
 
 Stage only the two implementation files, commit, request independent Critical/Important review, fast-forward `main`, rerun the full suite, and restart `com.ominime.app`. Ask the user to send `Kim短句验收0810` from `/Applications/Kim.app` and verify exact stored text with source `kim_presubmit_ocr`; then resume the pending WeChat acceptance.
+
+### Task 2: Exclude known tiled watermarks before edge checks
+
+**Files:**
+- Modify: `src/ominime/kim_composer_capture.py`
+- Modify: `tests/test_kim_composer_capture.py`
+
+**Step 1:** Add a failing regression with the observed `Kim缓存验收0810` coordinates and tiled `panbaokun` variants touching the ROI edges.
+
+**Step 2:** Extract the existing chrome/watermark observation filter and reuse it before both edge validation and text assembly. Do not alter the ROI or edge thresholds.
+
+**Step 3:** Run Kim component, listener, and full test suites; verify the retained live draft locally in memory before deployment.
