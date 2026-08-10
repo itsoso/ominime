@@ -657,14 +657,15 @@ class KeyboardListener:
     ) -> None:
         """Resolve composer window metadata outside the EventTap callback."""
         composer_capture = self._presubmit_composer_captures.get(bundle_id)
-        prepared = bool(
-            composer_capture is not None
-            and target_pid > 0
-            and composer_capture.prepare(target_pid)
-        )
-        self._target_app_identities = (
-            {target_pid: (app_name, bundle_id)} if prepared else {}
-        )
+        if composer_capture is None or target_pid <= 0:
+            return
+        if composer_capture.prepare(target_pid):
+            self._target_app_identities[target_pid] = (
+                app_name,
+                bundle_id,
+            )
+        else:
+            self._target_app_identities.pop(target_pid, None)
     
     def _on_rime_input(self, text: str, timestamp: datetime, app_name: str, bundle_id: str):
         """Rime log events are ignored in submission-snapshot mode."""

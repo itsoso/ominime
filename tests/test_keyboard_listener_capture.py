@@ -503,6 +503,64 @@ def test_wechat_first_enter_after_restart_freezes_without_cached_identity(
     assert queued.pre_submit_frame == "wechat-frame"
 
 
+def test_app_switch_preserves_verified_kem_identity_for_immediate_enter(
+    monkeypatch,
+):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    capture = FakeKimComposerCapture(
+        frame="kim-frame",
+        requires_prepare=True,
+    )
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None,
+        kim_composer_capture=capture,
+    )
+    listener._has_started = True
+    listener._event_worker_running = True
+
+    listener._prepare_activated_composer("Kim", "Kem", 29805)
+    listener._prepare_activated_composer(
+        "ChatGPT",
+        "com.openai.codex",
+        9135,
+    )
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_current_app_target",
+        lambda: ("Kim", "Kem", 29805),
+    )
+
+    listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyDown,
+        SimpleNamespace(
+            keycode=keyboard_listener.ENTER_KEYCODE,
+            text="",
+            target_pid=29805,
+        ),
+        None,
+    )
+
+    queued = listener._event_queue.get_nowait()
+    assert capture.prepare_calls == [29805]
+    assert capture.freeze_calls == [29805]
+    assert queued.pre_submit_frame == "kim-frame"
+
+
+def test_app_activation_ignores_kima_bundle_id(monkeypatch):
+    capture = FakeKimComposerCapture(frame="kim-frame")
+    listener_module, _ = import_keyboard_listener(monkeypatch)
+    listener = listener_module.KeyboardListener(
+        lambda event: None,
+        kim_composer_capture=capture,
+    )
+
+    listener._prepare_activated_composer("Kima", "Kim", 45678)
+
+    assert capture.prepare_calls == []
+    assert 45678 not in listener._target_app_identities
+
+
 def test_wechat_window_is_prepared_on_worker_before_enter(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     capture = FakeKimComposerCapture(frame="wechat-frame")
