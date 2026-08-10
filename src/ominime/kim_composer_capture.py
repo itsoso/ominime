@@ -174,6 +174,8 @@ def ocr_text_matches_physical_count(text: str, physical_key_count: int) -> bool:
     visible_chars = sum(1 for character in text if not character.isspace())
     if visible_chars <= 0 or physical_key_count <= 0:
         return False
+    if physical_key_count == 1:
+        return True
     return (
         visible_chars <= physical_key_count * 4
         and physical_key_count <= visible_chars * 8 + 8

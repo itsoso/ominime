@@ -90,6 +90,7 @@ def test_non_doubao_ocr_accepts_nonempty_latin_text():
 def test_ocr_text_must_be_plausible_for_physical_key_count():
     assert ocr_text_matches_physical_count("测试", 6)
     assert ocr_text_matches_physical_count("测试成功", 1)
+    assert ocr_text_matches_physical_count("Kim稀疏水印0810", 1)
     assert not ocr_text_matches_physical_count("测试", 0)
     assert not ocr_text_matches_physical_count("测试", 100)
 
