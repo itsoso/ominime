@@ -103,6 +103,8 @@ def recognized_content_lines(lines) -> tuple[RecognizedLine, ...]:
         if line.slant_ratio < MIN_WATERMARK_SLANT_RATIO:
             return False
         candidate = line.text.strip().casefold()
+        if re.fullmatch(r"[a-z]{4,}", candidate):
+            return True
         return any(
             candidate == watermark
             or (

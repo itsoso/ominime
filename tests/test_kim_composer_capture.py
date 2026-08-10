@@ -358,3 +358,17 @@ def test_recognize_keeps_horizontal_prefix_of_slanted_watermark():
     )
 
     assert capture.recognize(frame) == ("", "kim_ocr_multiline_untrusted")
+
+
+def test_recognize_filters_sparse_slanted_latin_watermarks_near_edges():
+    frame = CapturedFrame("image", 123, 1197, 925, 12.5, DOUBAO_BUNDLE_ID)
+    capture = KimPreSubmitCapture(
+        ocr_provider=lambda image, roi: (
+            RecognizedLine("Kim动态诊断0810", 0.31, 0.155, 0.14, 0.018, 0.02),
+            RecognizedLine("panbaokun", 0.296, 0.097, 0.049, 0.029, 1.54),
+            RecognizedLine("panbaokun", 0.463, 0.145, 0.049, 0.032, 1.82),
+            RecognizedLine("panbaoku", 0.797, 0.146, 0.044, 0.029, 1.74),
+        )
+    )
+
+    assert capture.recognize(frame) == ("Kim动态诊断0810", None)
