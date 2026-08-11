@@ -109,6 +109,7 @@ class RawKeyboardEvent:
     bundle_id: str
     modifiers: dict
     target_pid: int = 0
+    frontmost_pid: int = 0
     is_autorepeat: bool = False
     pre_submit_frame: object | None = None
     pre_submit_capture_failure: str | None = None
@@ -1422,6 +1423,7 @@ class KeyboardListener:
                     decision_reason="no_trusted_content",
                     physical_key_count=physical_key_count,
                     context_data=captured_context_data,
+                    diagnostics=candidate_diagnostics,
                 )
                 return
 
@@ -1650,17 +1652,34 @@ class KeyboardListener:
             capture_diagnostics=capture_diagnostics,
         )
 
+    def _resolve_raw_event_target(
+        self,
+        raw_event: RawKeyboardEvent,
+    ) -> tuple[str, str, int]:
+        sampled_identity = (raw_event.app_name, raw_event.bundle_id)
+        if (
+            raw_event.bundle_id in SUPPORTED_TARGET_BUNDLE_IDS
+            and raw_event.frontmost_pid > 0
+            and self._target_app_identities.get(raw_event.frontmost_pid)
+            == sampled_identity
+        ):
+            return (*sampled_identity, raw_event.frontmost_pid)
+        if raw_event.target_pid > 0:
+            app_name, bundle_id = get_app_by_pid(raw_event.target_pid)
+            return app_name, bundle_id, raw_event.target_pid
+        return raw_event.app_name, raw_event.bundle_id, 0
+
     def _process_raw_event(self, raw_event: RawKeyboardEvent):
         """Process a sampled key event outside the EventTap callback thread."""
         event_type = raw_event.event_type
         keycode = raw_event.keycode
-        app_name = raw_event.app_name
-        bundle_id = raw_event.bundle_id
-        if raw_event.target_pid > 0:
-            app_name, bundle_id = get_app_by_pid(raw_event.target_pid)
+        app_name, bundle_id, application_pid = self._resolve_raw_event_target(
+            raw_event
+        )
+        if application_pid > 0:
             if len(self._target_app_identities) >= 32:
                 self._target_app_identities.clear()
-            self._target_app_identities[raw_event.target_pid] = (
+            self._target_app_identities[application_pid] = (
                 app_name,
                 bundle_id,
             )
@@ -1670,11 +1689,11 @@ class KeyboardListener:
                 and raw_event.event_type == kCGEventKeyDown
                 and raw_event.keycode != ENTER_KEYCODE
             ):
-                composer_capture.prepare(raw_event.target_pid)
+                composer_capture.prepare(application_pid)
         self._update_doubao_target(
             app_name,
             bundle_id,
-            raw_event.target_pid,
+            application_pid,
         )
         if config.is_app_ignored(bundle_id):
             self._clear_submission_buffers(app_name, bundle_id)
@@ -1721,7 +1740,7 @@ class KeyboardListener:
             self._refresh_doubao_candidates(
                 app_name,
                 bundle_id,
-                raw_event.target_pid,
+                application_pid,
                 keycode,
                 modifiers,
             )
@@ -1737,7 +1756,7 @@ class KeyboardListener:
             self._handle_doubao_keydown(
                 app_name,
                 bundle_id,
-                raw_event.target_pid,
+                application_pid,
                 keycode,
                 raw_event.text,
                 modifiers,
@@ -1774,7 +1793,7 @@ class KeyboardListener:
             candidate_result = self._handle_doubao_keydown(
                 app_name,
                 bundle_id,
-                raw_event.target_pid,
+                application_pid,
                 keycode,
                 raw_event.text,
                 modifiers,
@@ -1796,7 +1815,7 @@ class KeyboardListener:
                 bundle_id=bundle_id,
                 key_modifiers=modifiers,
                 event_type=event_type,
-                target_pid=raw_event.target_pid,
+                target_pid=application_pid,
                 pre_submit_frame=raw_event.pre_submit_frame,
                 pre_submit_capture_failure=(
                     raw_event.pre_submit_capture_failure
@@ -1901,6 +1920,7 @@ class KeyboardListener:
                     bundle_id=bundle_id,
                     modifiers=modifiers,
                     target_pid=target_pid,
+                    frontmost_pid=frontmost_pid,
                     is_autorepeat=is_autorepeat,
                     pre_submit_frame=pre_submit_frame,
                     pre_submit_capture_failure=pre_submit_capture_failure,

@@ -271,6 +271,31 @@ def test_kim_presubmit_frame_is_not_frozen_outside_exact_plain_enter(
     assert queued.pre_submit_frame is None
 
 
+def test_queued_event_keeps_native_and_frontmost_pids(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    listener = keyboard_listener.KeyboardListener(lambda event: None)
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_current_app_target",
+        lambda: ("Kim", "Kem", 5937),
+    )
+    listener._has_started = True
+    listener._event_worker_running = True
+
+    listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyDown,
+        SimpleNamespace(keycode=8, text="c", target_pid=1020),
+        None,
+    )
+
+    queued = listener._event_queue.get_nowait()
+    assert queued.target_pid == 1020
+    assert queued.frontmost_pid == 5937
+    assert queued.app_name == "Kim"
+    assert queued.bundle_id == "Kem"
+
+
 def test_kim_presubmit_capture_failure_does_not_block_enter(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     capture = FakeKimComposerCapture(raises=True)
@@ -428,6 +453,101 @@ def test_kim_window_is_prepared_on_worker_before_enter(monkeypatch):
 
     assert capture.prepare_calls == [123]
     assert listener._target_app_identities[123] == ("Kim", "Kem")
+
+
+def test_kim_input_method_target_uses_verified_frontmost_app(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    capture = FakeKimComposerCapture()
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None,
+        kim_composer_capture=capture,
+    )
+    listener._record_recent_text_snapshot = lambda *args, **kwargs: None
+    listener._target_app_identities[5937] = ("Kim", "Kem")
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_app_by_pid",
+        lambda pid: (
+            ("豆包输入法", "com.bytedance.inputmethod.doubaoime")
+            if pid == 1020
+            else ("Kim", "Kem")
+        ),
+    )
+
+    listener._process_raw_event(
+        keyboard_listener.RawKeyboardEvent(
+            event_type=keyboard_listener.kCGEventKeyDown,
+            keycode=8,
+            text="c",
+            app_name="Kim",
+            bundle_id="Kem",
+            modifiers={"shift": False, "ctrl": False, "alt": False, "cmd": False},
+            target_pid=1020,
+            frontmost_pid=5937,
+        )
+    )
+
+    assert listener._fallback_buffers[("Kim", "Kem")] == ["c"]
+    assert listener._last_doubao_target == ("Kim", "Kem", 5937)
+    assert capture.prepare_calls == [5937]
+
+
+def test_kim_input_method_target_rejects_unverified_frontmost_app(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    capture = FakeKimComposerCapture()
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None,
+        kim_composer_capture=capture,
+    )
+    listener._record_recent_text_snapshot = lambda *args, **kwargs: None
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_app_by_pid",
+        lambda pid: ("豆包输入法", "com.bytedance.inputmethod.doubaoime"),
+    )
+
+    listener._process_raw_event(
+        keyboard_listener.RawKeyboardEvent(
+            event_type=keyboard_listener.kCGEventKeyDown,
+            keycode=8,
+            text="c",
+            app_name="Kim",
+            bundle_id="Kem",
+            modifiers={"shift": False, "ctrl": False, "alt": False, "cmd": False},
+            target_pid=1020,
+            frontmost_pid=5937,
+        )
+    )
+
+    assert ("Kim", "Kem") not in listener._fallback_buffers
+    assert capture.prepare_calls == []
+
+
+def test_unsupported_app_uses_native_target(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    listener = keyboard_listener.KeyboardListener(lambda event: None)
+    listener._record_recent_text_snapshot = lambda *args, **kwargs: None
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_app_by_pid",
+        lambda pid: ("Notes", "com.apple.Notes"),
+    )
+
+    listener._process_raw_event(
+        keyboard_listener.RawKeyboardEvent(
+            event_type=keyboard_listener.kCGEventKeyDown,
+            keycode=8,
+            text="c",
+            app_name="Chrome",
+            bundle_id="com.google.Chrome",
+            modifiers={"shift": False, "ctrl": False, "alt": False, "cmd": False},
+            target_pid=4321,
+            frontmost_pid=9876,
+        )
+    )
+
+    assert listener._fallback_buffers[("Notes", "com.apple.Notes")] == ["c"]
+    assert ("Chrome", "com.google.Chrome") not in listener._fallback_buffers
 
 
 def test_wechat_presubmit_frame_is_frozen_before_enter_is_enqueued(monkeypatch):
@@ -2242,6 +2362,7 @@ def doubao_raw_event(
     keycode,
     text="",
     target_pid=123,
+    frontmost_pid=0,
     pre_submit_frame=None,
     pre_submit_capture_failure=None,
 ):
@@ -2253,6 +2374,7 @@ def doubao_raw_event(
         bundle_id="Kem",
         modifiers={"shift": False, "ctrl": False, "alt": False, "cmd": False},
         target_pid=target_pid,
+        frontmost_pid=frontmost_pid,
         pre_submit_frame=pre_submit_frame,
         pre_submit_capture_failure=pre_submit_capture_failure,
     )
@@ -2466,6 +2588,62 @@ def test_kim_presubmit_ocr_persists_degraded_legacy_kim_content(monkeypatch):
     assert events[0].character == "测试成功"
     assert events[0].modifiers["fallback_source"] == "kim_presubmit_ocr"
     assert events[0].modifiers["redacted_content"] is False
+
+
+def test_direct_kim_typing_through_input_method_persists_ocr(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    events = []
+    capture = FakeKimComposerCapture(recognize_result=("测试成功", None))
+    listener = keyboard_listener.KeyboardListener(
+        events.append,
+        candidate_reader=FakeDoubaoCandidateReader([None]),
+        kim_composer_capture=capture,
+    )
+    configure_listener_context(listener)
+    listener._target_app_identities[5937] = ("Kim", "Kem")
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_app_by_pid",
+        lambda pid: (
+            ("豆包输入法", "com.bytedance.inputmethod.doubaoime")
+            if pid == 1020
+            else ("Kim", "Kem")
+        ),
+    )
+
+    for keycode, text in (
+        (45, "n"),
+        (34, "i"),
+        (1, "s"),
+        (0, "a"),
+        (8, "c"),
+        (5, "g"),
+    ):
+        listener._process_raw_event(
+            doubao_raw_event(
+                keyboard_listener,
+                keyboard_listener.kCGEventKeyDown,
+                keycode,
+                text,
+                target_pid=1020,
+                frontmost_pid=5937,
+            )
+        )
+
+    listener._process_raw_event(
+        doubao_raw_event(
+            keyboard_listener,
+            keyboard_listener.kCGEventKeyDown,
+            keyboard_listener.ENTER_KEYCODE,
+            target_pid=5937,
+            frontmost_pid=5937,
+            pre_submit_frame="kim-frame",
+        )
+    )
+
+    assert events[0].character == "测试成功"
+    assert events[0].modifiers["fallback_source"] == "kim_presubmit_ocr"
+    assert events[0].modifiers["physical_key_count"] == 6
 
 
 def test_kim_presubmit_ocr_failure_keeps_count_only_without_text_in_diagnostics(
@@ -2831,6 +3009,37 @@ def test_kim_presubmit_missing_frame_failure_is_saved_without_content(monkeypatc
     )
 
     assert events[0].modifiers["capture_diagnostics"]["kim_ocr_failure"] == (
+        "kim_ocr_frame_unavailable"
+    )
+
+
+def test_skipped_kim_submission_keeps_frame_failure(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    diagnostics = []
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None,
+        diagnostics_callback=diagnostics.append,
+        candidate_reader=FakeDoubaoCandidateReader([None]),
+        kim_composer_capture=FakeKimComposerCapture(),
+    )
+    configure_listener_context(listener)
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_app_by_pid",
+        lambda pid: ("Kim", "Kem"),
+    )
+
+    listener._process_raw_event(
+        doubao_raw_event(
+            keyboard_listener,
+            keyboard_listener.kCGEventKeyDown,
+            keyboard_listener.ENTER_KEYCODE,
+            pre_submit_capture_failure="kim_ocr_frame_unavailable",
+        )
+    )
+
+    assert diagnostics[-1]["decision_reason"] == "no_trusted_content"
+    assert diagnostics[-1]["diagnostics"]["kim_ocr_failure"] == (
         "kim_ocr_frame_unavailable"
     )
 
