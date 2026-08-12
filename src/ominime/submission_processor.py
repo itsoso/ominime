@@ -8,11 +8,11 @@ import uuid
 from typing import Any
 
 from .config import config
-from .database import CaptureDiagnosticRecord, Database, InputRecord, SubmissionContextRecord
+from .database import CaptureDiagnosticRecord, Database, InputRecord
 
 
 def save_submission_event(db: Database, event: Any, content: str) -> int:
-    """Save submitted text and linked context metadata."""
+    """Save submitted text without persisting captured UI context."""
     submission_id = event.modifiers.get("submission_id") or f"sub-{uuid.uuid4().hex}"
     session_id = f"submit-{submission_id}"
     redacted_content = bool(event.modifiers.get("redacted_content"))
@@ -32,31 +32,6 @@ def save_submission_event(db: Database, event: Any, content: str) -> int:
         )
     )
 
-    context_data = event.modifiers.get("context") or {}
-    db.save_submission_context(
-        SubmissionContextRecord(
-            id=None,
-            submission_id=submission_id,
-            input_record_id=input_id,
-            timestamp=event.timestamp,
-            app_name=event.app_name,
-            app_bundle_id=event.app_bundle_id,
-            window_title=context_data.get("window_title"),
-            focused_role=context_data.get("focused_role"),
-            focused_subrole=context_data.get("focused_subrole"),
-            focused_title=context_data.get("focused_title"),
-            focused_description=context_data.get("focused_description"),
-            focused_identifier=context_data.get("focused_identifier"),
-            focused_frame_json=_json_or_none(context_data.get("focused_frame")),
-            container_role=context_data.get("container_role"),
-            container_title=context_data.get("container_title"),
-            container_frame_json=_json_or_none(context_data.get("container_frame")),
-            ax_hierarchy_json=_json_or_none(context_data.get("hierarchy")),
-            analysis_status="disabled",
-            capture_status=context_data.get("capture_status", "ok"),
-            capture_error=context_data.get("capture_error"),
-        )
-    )
     _save_persisted_capture_diagnostic(
         db,
         event,
@@ -105,8 +80,8 @@ def _save_persisted_capture_diagnostic(
             selected_source=source,
             selected_confidence=1.0 if decision_action == "persist_text" else None,
             physical_key_count=physical_key_count,
-            focused_role=context_data.get("focused_role"),
-            focused_subrole=context_data.get("focused_subrole"),
+            focused_role=None,
+            focused_subrole=None,
             capture_status=context_data.get("capture_status", "ok"),
             diagnostics_json=_json_or_none(diagnostic_details),
         )

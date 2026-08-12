@@ -5,12 +5,18 @@ from ominime.database import Database
 from ominime import submission_processor
 
 
-def make_event():
+def make_event(modifiers=None):
+    event_modifiers = {
+        "submission_id": "privacy-mode-test",
+        "context": {},
+    }
+    if modifiers:
+        event_modifiers.update(modifiers)
     return SimpleNamespace(
         timestamp=datetime(2026, 6, 20, 9, 0, 0),
         app_name="Codex",
         app_bundle_id="com.openai.codex",
-        modifiers={"submission_id": "privacy-mode-test", "context": {}},
+        modifiers=event_modifiers,
     )
 
 
@@ -81,3 +87,33 @@ def test_submission_never_starts_multimodal_analysis(tmp_path, monkeypatch):
     submission_processor.save_submission_event(db, make_event(), "local only")
 
     assert analysis_calls == []
+
+
+def test_new_submission_does_not_persist_context_metadata(tmp_path, monkeypatch):
+    db = Database(tmp_path / "test.db")
+    event = make_event(
+        {
+            "submission_id": "no-new-context",
+            "context": {
+                "window_title": "Private chat",
+                "focused_role": "AXTextArea",
+                "focused_subrole": "AXStandardTextArea",
+                "container_role": "AXGroup",
+            },
+        }
+    )
+    monkeypatch.setattr(
+        submission_processor.config,
+        "input_capture_mode",
+        "enter-text",
+        raising=False,
+    )
+
+    input_id = submission_processor.save_submission_event(db, event, "local text")
+
+    assert db.get_latest_input_record().id == input_id
+    assert db.get_latest_input_record().content == "local text"
+    assert db.get_submission_context("no-new-context") is None
+    diagnostic = db.get_recent_capture_diagnostics(limit=1)[0]
+    assert diagnostic["focused_role"] is None
+    assert diagnostic["focused_subrole"] is None
