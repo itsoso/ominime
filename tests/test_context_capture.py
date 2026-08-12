@@ -114,7 +114,7 @@ def test_secure_ax_node_never_reads_value(monkeypatch):
     assert "AXValue" not in reads
 
 
-def test_capture_prefers_systemwide_focused_element(monkeypatch):
+def test_capture_uses_target_process_focused_element(monkeypatch):
     focused = object()
     calls = []
 
@@ -133,16 +133,16 @@ def test_capture_prefers_systemwide_focused_element(monkeypatch):
 
     assert result.capture_status == "ok"
     assert result.focused_role == "AXTextArea"
-    assert calls == [None]
+    assert calls == [123]
 
 
-def test_capture_retries_focused_element_for_target_process(monkeypatch):
-    process_focused = object()
+def test_capture_does_not_fall_back_to_another_process_focus(monkeypatch):
+    system_focused = object()
     calls = []
 
     def fake_get_focused_element(target_pid=None):
         calls.append(target_pid)
-        return process_focused if target_pid == 123 else None
+        return system_focused if target_pid is None else None
 
     monkeypatch.setattr(context_capture, "get_focused_element", fake_get_focused_element)
     monkeypatch.setattr(
@@ -153,9 +153,8 @@ def test_capture_retries_focused_element_for_target_process(monkeypatch):
 
     result = capture_accessibility_context(target_pid=123)
 
-    assert result.capture_status == "ok"
-    assert result.focused_role == "AXTextArea"
-    assert calls == [None, 123]
+    assert result.capture_status == "degraded"
+    assert calls == [123]
 
 
 def test_capture_reports_systemwide_and_process_focus_unavailable(monkeypatch):
@@ -164,4 +163,4 @@ def test_capture_reports_systemwide_and_process_focus_unavailable(monkeypatch):
     result = capture_accessibility_context(target_pid=123)
 
     assert result.capture_status == "degraded"
-    assert result.capture_error == "focused element unavailable (system-wide and pid 123)"
+    assert result.capture_error == "focused element unavailable (pid 123)"

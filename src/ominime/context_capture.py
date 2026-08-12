@@ -201,13 +201,12 @@ def capture_accessibility_context(
 ) -> CapturedContext:
     """Capture focused element metadata through macOS Accessibility APIs."""
     try:
-        focused = get_focused_element()
-        if focused is None and target_pid is not None and target_pid > 0:
-            focused = get_focused_element(target_pid)
+        has_target_pid = target_pid is not None and target_pid > 0
+        focused = get_focused_element(target_pid if has_target_pid else None)
         if focused is None:
             error = "focused element unavailable"
-            if target_pid is not None and target_pid > 0:
-                error = f"{error} (system-wide and pid {target_pid})"
+            if has_target_pid:
+                error = f"{error} (pid {target_pid})"
             return CapturedContext(capture_status="degraded", capture_error=error)
 
         hierarchy = walk_ax_hierarchy(focused, max_depth=max_depth)
