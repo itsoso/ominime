@@ -113,6 +113,7 @@ class Database:
     def __init__(self, db_path: Optional[Path] = None):
         self.db_path = db_path or config.db_path
         self._init_db()
+        self.db_path.chmod(0o600)
     
     @contextmanager
     def _get_connection(self):

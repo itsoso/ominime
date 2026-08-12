@@ -58,7 +58,7 @@ else
             echo -e "地址: ${CYAN}http://127.0.0.1:8001${NC}"
             
             # 测试连接
-            if curl -s --connect-timeout 2 "http://127.0.0.1:8001/api/stats/today" > /dev/null 2>&1; then
+            if curl -s --connect-timeout 2 "http://127.0.0.1:8001/api/health" > /dev/null 2>&1; then
                 echo -e "连接: ${GREEN}✅ 正常${NC}"
             else
                 echo -e "连接: ${YELLOW}⚠️  无法连接${NC}"

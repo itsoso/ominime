@@ -133,7 +133,8 @@ class AppConfig:
         """初始化后创建必要的目录"""
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.log_dir.mkdir(parents=True, exist_ok=True)
-        
+        self.data_dir.chmod(0o700)
+        self.log_dir.chmod(0o700)
     
     def get_app_display_name(self, bundle_id: str, default_name: str) -> str:
         """获取应用显示名称"""
@@ -162,6 +163,7 @@ class AppConfig:
         }
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump(config_data, f, ensure_ascii=False, indent=2)
+        config_path.chmod(0o600)
     
     @classmethod
     def load(cls, path: Optional[Path] = None) -> "AppConfig":

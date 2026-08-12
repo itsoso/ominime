@@ -169,9 +169,6 @@ echo "  2. 点击左下角的锁图标解锁"
 echo "  3. 找到并勾选 Terminal.app 或您使用的终端应用"
 echo ""
 
-# 启动应用
-"$OMINIME_PATH" app &
-
 echo ""
 echo -e "${GREEN}╔═══════════════════════════════════════╗${NC}"
 echo -e "${GREEN}║       安装完成！                       ║${NC}"

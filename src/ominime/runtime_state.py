@@ -89,6 +89,7 @@ def _read_shared_state() -> Optional[RuntimeState]:
 
 def _write_shared_state(state: RuntimeState) -> None:
     _state_file_path.parent.mkdir(parents=True, exist_ok=True)
+    _state_file_path.parent.chmod(0o700)
     temporary_path = _state_file_path.with_name(
         f".{_state_file_path.name}.{os.getpid()}.{get_ident()}.tmp"
     )
@@ -96,6 +97,7 @@ def _write_shared_state(state: RuntimeState) -> None:
         json.dumps(_state_to_dict(state), ensure_ascii=False, sort_keys=True),
         encoding="utf-8",
     )
+    temporary_path.chmod(0o600)
     temporary_path.replace(_state_file_path)
 
 

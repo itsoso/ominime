@@ -43,7 +43,7 @@ if launchctl list | grep -q "$SERVICE_NAME"; then
         echo -e "地址: ${CYAN}http://${HOST}:${PORT}${NC}"
         
         # 测试连接
-        if curl -s --connect-timeout 2 "http://${HOST}:${PORT}/api/stats/today" > /dev/null 2>&1; then
+        if curl -s --connect-timeout 2 "http://${HOST}:${PORT}/api/health" > /dev/null 2>&1; then
             echo -e "连接: ${GREEN}✅ 正常${NC}"
         else
             echo -e "连接: ${YELLOW}⚠️  无法连接（可能正在启动中）${NC}"

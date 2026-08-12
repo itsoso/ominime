@@ -50,3 +50,23 @@ def test_launchagent_scripts_validate_venv_python_architecture():
 def test_launchagent_path_prefers_apple_silicon_homebrew():
     assert "/opt/homebrew/bin:/usr/local/bin" in _read("src/ominime/scripts/install_app.sh")
     assert "/opt/homebrew/bin:/usr/local/bin" in _read("src/ominime/scripts/install_web.sh")
+
+
+def test_root_installer_does_not_start_a_second_app_instance():
+    script = _read("scripts/install_app.sh")
+
+    assert '"$OMINIME_PATH" app &' not in script
+
+
+def test_status_scripts_use_the_real_health_endpoint():
+    assert "/api/stats/today" not in _read("src/ominime/scripts/status_all.sh")
+    assert "/api/stats/today" not in _read("src/ominime/scripts/web_status.sh")
+    assert "/api/health" in _read("src/ominime/scripts/status_all.sh")
+    assert "/api/health" in _read("src/ominime/scripts/web_status.sh")
+
+
+def test_llm_check_is_not_a_pytest_module_and_never_prints_key_fragments():
+    assert not (ROOT / "scripts" / "test_llm.py").exists()
+    script = _read("scripts/check_llm.py")
+    assert "api_key[:" not in script
+    assert "api_key[-" not in script
