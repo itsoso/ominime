@@ -629,13 +629,10 @@ class KeyboardListener:
         self._last_text_fallback_events: dict[tuple[str, str], tuple[int, str, float]] = {}
         self._pending_enter_keyups: set[tuple[str, str]] = set()
         self._candidate_reader = candidate_reader or DoubaoCandidateReader()
-        # Screenshot/OCR capture is disabled by default. Explicit injection is
-        # retained as a temporary compatibility hook for downstream callers.
-        self._presubmit_composer_captures = {}
-        if kim_composer_capture is not None:
-            self._presubmit_composer_captures[LEGACY_KIM_BUNDLE_ID] = kim_composer_capture
-        if wechat_composer_capture is not None:
-            self._presubmit_composer_captures[WECHAT_BUNDLE_ID] = wechat_composer_capture
+        self._presubmit_composer_captures = {
+            LEGACY_KIM_BUNDLE_ID: kim_composer_capture or KimPreSubmitCapture(),
+            WECHAT_BUNDLE_ID: wechat_composer_capture or WeChatPreSubmitCapture(),
+        }
         self._target_app_identities: dict[int, tuple[str, str]] = {}
         self._doubao_states: dict[tuple[str, str], DoubaoCompositionState] = {}
         self._doubao_failure_reasons: dict[tuple[str, str], str] = {}
@@ -666,7 +663,7 @@ class KeyboardListener:
             )
         else:
             self._target_app_identities.pop(target_pid, None)
-    
+
     def _on_rime_input(self, text: str, timestamp: datetime, app_name: str, bundle_id: str):
         """Rime log events are ignored in submission-snapshot mode."""
         return
@@ -1396,6 +1393,12 @@ class KeyboardListener:
                         candidate_diagnostics[
                             f"{failure_prefix}_failure"
                         ] = ocr_failure
+                elif capture_metadata and pre_submit_capture_failure:
+                    failure_prefix, _ = capture_metadata
+                    candidate_diagnostics = dict(candidate_diagnostics or {})
+                    candidate_diagnostics[f"{failure_prefix}_failure"] = (
+                        pre_submit_capture_failure
+                    )
                 if (
                     physical_key_count > 0
                     and getattr(config, "count_unreadable_submissions", True)
@@ -1594,6 +1597,11 @@ class KeyboardListener:
                         capture_diagnostics = {
                             f"{failure_prefix}_failure": ocr_failure
                         }
+            elif bundle_id in PRESUBMIT_OCR_METADATA and pre_submit_capture_failure:
+                failure_prefix, _ = PRESUBMIT_OCR_METADATA[bundle_id]
+                capture_diagnostics = {
+                    f"{failure_prefix}_failure": pre_submit_capture_failure
+                }
             fallback_count = physical_key_count if getattr(config, "count_unreadable_submissions", True) else 0
             if content:
                 self._clear_submission_buffers(app_name, bundle_id)
@@ -1884,6 +1892,33 @@ class KeyboardListener:
                         KEYBOARD_EVENT_AUTOREPEAT_FIELD,
                     )
                 )
+                pre_submit_frame = None
+                pre_submit_capture_failure = None
+                composer_capture = self._presubmit_composer_captures.get(
+                    bundle_id
+                )
+                if (
+                    event_type == kCGEventKeyDown
+                    and keycode == ENTER_KEYCODE
+                    and composer_capture is not None
+                    and target_pid > 0
+                    and frontmost_pid == target_pid
+                    and self._target_app_identities.get(target_pid)
+                    == (app_name, bundle_id)
+                    and not is_autorepeat
+                    and not any(modifiers.values())
+                ):
+                    failure_prefix, _ = PRESUBMIT_OCR_METADATA[bundle_id]
+                    try:
+                        pre_submit_frame = composer_capture.freeze(target_pid)
+                        if pre_submit_frame is None:
+                            pre_submit_capture_failure = (
+                                f"{failure_prefix}_frame_unavailable"
+                            )
+                    except Exception:
+                        pre_submit_capture_failure = (
+                            f"{failure_prefix}_capture_error"
+                        )
                 raw_event = RawKeyboardEvent(
                     event_type=event_type,
                     keycode=keycode,
@@ -1894,6 +1929,8 @@ class KeyboardListener:
                     target_pid=target_pid,
                     frontmost_pid=frontmost_pid,
                     is_autorepeat=is_autorepeat,
+                    pre_submit_frame=pre_submit_frame,
+                    pre_submit_capture_failure=pre_submit_capture_failure,
                 )
                 if self._event_worker_running:
                     try:

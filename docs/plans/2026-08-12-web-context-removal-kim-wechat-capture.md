@@ -4,7 +4,7 @@
 
 **Goal:** Remove the Web context surface and future context persistence while restoring trusted, local-only Kim and WeChat composer text capture.
 
-**Architecture:** Keep target-PID Accessibility reads as the primary text and secure-field signal. Construct the existing local Vision capture adapters in production, prepare window metadata during worker processing, and freeze a single in-memory frame on Enter inside the worker—not the EventTap callback—only for Kim and WeChat fallback. Preserve the historical SQLite context table but stop writing to and exposing it.
+**Architecture:** Keep target-PID Accessibility reads as the primary text and secure-field signal. Construct the existing local Vision capture adapters in production, prepare window metadata during worker processing, and copy one in-memory frame for a verified Kim/WeChat plain Enter before returning the event; OCR still runs only in the worker as the final fallback. Preserve the historical SQLite context table but stop writing to and exposing it.
 
 **Tech Stack:** Python 3.10+, FastAPI, SQLite, PyObjC Quartz/Vision, vanilla HTML/CSS/JavaScript, pytest.
 
@@ -204,9 +204,9 @@ self._presubmit_composer_captures = {
 
 If tests need to express an intentionally disabled adapter, use a private sentinel so dependency injection can distinguish “not provided” from an explicit test override. Do not add a user-facing feature switch.
 
-**Step 5: Freeze lazily in the worker and only for eligible Enter fallback**
+**Step 5: Freeze the verified window before returning Enter**
 
-Add a small helper used by `_emit_submission_snapshot()` only after the secure-field check and only inside the two existing OCR fallback branches:
+In `_event_callback()`, freeze only when all of these hold: keydown, Enter, no modifier, no autorepeat, supported bundle, target PID equals frontmost PID, and the prepared identity matches. Attach only the in-memory frame or non-content failure code to `RawKeyboardEvent`.
 
 ```python
 def _freeze_presubmit_composer(self, bundle_id: str, target_pid: int):
@@ -221,7 +221,7 @@ def _freeze_presubmit_composer(self, bundle_id: str, target_pid: int):
     return frame, None if frame is not None else f"{failure_prefix}_frame_unavailable"
 ```
 
-When an injected `pre_submit_frame` is already present, preserve it for compatibility tests. Otherwise call this helper immediately before the existing `recognize()` call. Do not call this helper from `_event_callback()` or before checking secure input, AXValue, candidate text, and key-event text. Keep preparation on non-Enter worker events and the app-activation watcher.
+Do not enumerate windows, run OCR, or read input-source APIs in `_event_callback()`. The worker preserves source priority and calls `recognize()` only after AXValue, candidate text, and key-event text fail. Keep preparation on non-Enter worker events and the app-activation watcher.
 
 **Step 6: Run focused tests and verify GREEN**
 

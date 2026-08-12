@@ -36,17 +36,16 @@ Kim 和微信现有提交诊断持续显示 `degraded_count_unreadable`。仓库
 
 ## Kim/微信采集数据流
 
-1. EventTap 回调只采样按键、目标 PID 和应用身份，然后入队。
+1. EventTap 回调采样按键、目标 PID 和应用身份；仅对身份已验证的 Kim/微信无修饰 Enter，从已预备窗口复制一次内存图像后入队。
 2. worker 在 Kim/微信普通输入按键期间预备目标窗口 ID；不读取像素。
-3. worker 收到无修饰键的 Enter 时，对目标 PID 的已预备窗口生成一次内存图像。
-4. 提交流程先检查安全输入框，再依次尝试可信 AXValue、输入法候选/键盘文本和本机 ROI OCR。
+3. worker 收到 Enter 后，提交流程依次尝试可信 AXValue、输入法候选/键盘文本和本机 ROI OCR。
 5. OCR 文本必须通过输入法状态、边缘裁切、单行约束和物理按键数量校验后才能保存。
 6. 识别失败时只保存字符数和失败码，不保存图像或不可信文本。
 
 ## 安全与错误处理
 
-- secure text、忽略应用、Shift/Alt Enter、Command/Control Enter 不触发 OCR。
-- 截图与 Vision 识别只在事件 worker 中执行，不在 EventTap callback 中执行。
+- secure text 不执行 OCR；忽略应用、Shift/Alt Enter、Command/Control Enter 不复制图像也不执行 OCR。
+- EventTap callback 只复制已预备、PID 与身份完全匹配的窗口图像；不枚举窗口、不运行 Vision、不读取输入法 API。Vision 识别只在 worker 中执行。
 - OCR 类在生产监听器中显式构造，导入或原生调用失败必须通过既有诊断路径体现，不能伪造成功。
 - 图像不进入事件持久化字段、日志、数据库或 AI 分析。
 

@@ -18,8 +18,8 @@ def test_unused_input_diff_and_app_tracker_modules_are_removed():
     assert not (ROOT / "src/ominime/app_tracker.py").exists()
 
 
-def test_production_listener_does_not_construct_ocr_capture(monkeypatch):
+def test_production_listener_constructs_local_chat_captures():
     source = (ROOT / "src/ominime/keyboard_listener.py").read_text(encoding="utf-8")
 
-    assert "kim_composer_capture or KimPreSubmitCapture()" not in source
-    assert "wechat_composer_capture or WeChatPreSubmitCapture()" not in source
+    assert "kim_composer_capture or KimPreSubmitCapture()" in source
+    assert "wechat_composer_capture or WeChatPreSubmitCapture()" in source
