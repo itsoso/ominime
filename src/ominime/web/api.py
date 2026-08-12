@@ -225,7 +225,6 @@ def _build_health_payload() -> dict:
         "last_recorded_chars": latest.char_count if latest else None,
         "input_capture_mode": getattr(config, "input_capture_mode", "enter-text"),
         "capture_context_on_enter": config.capture_context_on_enter,
-        "multimodal_context_analysis": config.multimodal_context_analysis,
         "last_capture_diagnostic": _serialize_capture_diagnostic(
             diagnostics[0] if diagnostics else None
         ),
@@ -666,7 +665,7 @@ async def get_submissions(
     target_date: Optional[str] = None,
     limit: int = Query(default=100, ge=1, le=500),
 ):
-    """获取 Enter 提交上下文列表，包含文字与 Qwen 分析结果"""
+    """获取 Enter 提交上下文列表。"""
     db = get_database()
     if target_date:
         try:
@@ -695,11 +694,6 @@ async def get_submissions(
                 "container_title": row["container_title"],
                 "capture_status": row["capture_status"],
                 "capture_error": row["capture_error"],
-                "analysis_status": row["analysis_status"],
-                "analysis_error": row["analysis_error"],
-                "qwen_model": row["qwen_model"],
-                "qwen_analysis": _parse_json_field(row["qwen_analysis_json"]),
-                "qwen_raw_output": row["qwen_raw_output"],
                 "focused_frame": _parse_json_field(row["focused_frame_json"]),
                 "container_frame": _parse_json_field(row["container_frame_json"]),
             }

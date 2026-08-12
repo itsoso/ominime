@@ -40,3 +40,11 @@ def test_dashboard_does_not_contact_google_fonts():
 
     assert "fonts.googleapis.com" not in html
     assert "fonts.gstatic.com" not in html
+
+
+def test_dashboard_has_no_qwen_multimodal_panel():
+    html = TEMPLATE.read_text(encoding="utf-8")
+
+    assert "Qwen 多模态识别" not in html
+    assert "qwen_analysis" not in html
+    assert "qwen_model" not in html

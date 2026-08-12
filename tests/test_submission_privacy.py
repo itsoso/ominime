@@ -54,3 +54,30 @@ def test_redacted_submission_uses_count_override_without_raw_content(tmp_path, m
     assert len(records) == 1
     assert records[0].char_count == 7
     assert records[0].content == ""
+
+
+def test_submission_never_starts_multimodal_analysis(tmp_path, monkeypatch):
+    db = Database(tmp_path / "test.db")
+    analysis_calls = []
+    monkeypatch.setattr(
+        submission_processor.config,
+        "input_capture_mode",
+        "enter-text",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        submission_processor.config,
+        "multimodal_context_analysis",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        submission_processor,
+        "_start_analysis_thread",
+        lambda *args: analysis_calls.append(args),
+        raising=False,
+    )
+
+    submission_processor.save_submission_event(db, make_event(), "local only")
+
+    assert analysis_calls == []

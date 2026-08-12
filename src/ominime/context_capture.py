@@ -20,12 +20,6 @@ class AXFrame:
         }
 
 
-@dataclass(frozen=True)
-class ScreenshotScope:
-    scope: str
-    frame: AXFrame | None
-
-
 @dataclass
 class CapturedContext:
     focused_frame: AXFrame | None = None
@@ -115,15 +109,6 @@ def focused_field_identity(context: CapturedContext | dict | None) -> str | None
         values = tuple(round(float(frame[key]), 1) for key in ("x", "y", "width", "height"))
         return f"frame:{window_title or ''}:{values[0]}:{values[1]}:{values[2]}:{values[3]}"
     return None
-
-
-def choose_screenshot_scope(context: CapturedContext) -> ScreenshotScope:
-    """Choose the smallest useful region available for screenshot capture."""
-    if context.container_frame is not None:
-        return ScreenshotScope("container", context.container_frame)
-    if context.window_frame is not None:
-        return ScreenshotScope("window", context.window_frame)
-    return ScreenshotScope("screen", None)
 
 
 def context_to_dict(context: CapturedContext) -> dict[str, Any]:

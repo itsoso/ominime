@@ -92,6 +92,7 @@ def test_health_reports_current_capture_state_and_recent_records(tmp_path, monke
     assert payload["today_date"] == "2026-06-27"
     assert payload["today_chars"] == 15
     assert payload["last_recorded_at"].startswith("2026-06-26T12:00:00")
+    assert "multimodal_context_analysis" not in payload
 
 
 def test_health_includes_latest_capture_diagnostic(tmp_path, monkeypatch):

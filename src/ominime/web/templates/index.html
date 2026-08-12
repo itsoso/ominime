@@ -1034,9 +1034,6 @@
         }
 
         function renderSubmissionContext(item) {
-            const analysis = item.qwen_analysis || {};
-            const visibleText = Array.isArray(analysis.visible_relevant_text) ? analysis.visible_relevant_text : [];
-            const statusClass = item.analysis_status || 'pending';
             return `
                 <article class="context-card">
                     <div class="context-card-header">
@@ -1046,24 +1043,14 @@
                         </div>
                         <div class="context-badges">
                             <span class="context-badge ${escapeHtml(item.capture_status || '')}">捕获 ${escapeHtml(item.capture_status || 'unknown')}</span>
-                            <span class="context-badge ${escapeHtml(statusClass)}">Qwen ${escapeHtml(item.analysis_status || 'pending')}</span>
                         </div>
                     </div>
                     <div class="context-card-body">
                         <div>
                             <div class="context-text">${escapeHtml(item.content || '')}</div>
-                            <div class="context-analysis">
-                                <div class="context-analysis-title">Qwen 多模态识别</div>
-                                ${analysis.context_type ? `<div>类型：${escapeHtml(analysis.context_type)} · 置信度：${escapeHtml(String(analysis.confidence ?? 'n/a'))}</div>` : `<div>${escapeHtml(item.analysis_error || item.qwen_raw_output || '等待本地 Qwen-VL 分析')}</div>`}
-                                ${analysis.visible_topic ? `<div>主题：${escapeHtml(analysis.visible_topic)}</div>` : ''}
-                                ${analysis.user_intent ? `<div>意图：${escapeHtml(analysis.user_intent)}</div>` : ''}
-                                ${analysis.surrounding_messages_summary ? `<div>上下文摘要：${escapeHtml(analysis.surrounding_messages_summary)}</div>` : ''}
-                                ${visibleText.length ? `<div>可见文本：${visibleText.map(escapeHtml).join(' / ')}</div>` : ''}
-                            </div>
                             <div class="context-kv">
                                 <div>输入控件：${escapeHtml(item.focused_role || 'unknown')}</div>
                                 <div>容器：${escapeHtml(item.container_role || 'unknown')}</div>
-                                <div>模型：${escapeHtml(item.qwen_model || 'not-loaded')}</div>
                             </div>
                         </div>
                     </div>

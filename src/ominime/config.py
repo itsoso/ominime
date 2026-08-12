@@ -128,12 +128,6 @@ class AppConfig:
 
     # Enter 提交上下文捕获（仅文字，不再截屏）
     capture_context_on_enter: bool = True
-    multimodal_context_analysis: bool = False
-    multimodal_backend: str = "qwen-vl-local"
-    qwen_vl_model: str = "Qwen/Qwen2.5-VL-7B-Instruct"
-    qwen_vl_device: str = "auto"
-    qwen_vl_max_new_tokens: int = 768
-    qwen_vl_analysis_timeout_seconds: int = 20
     
     def __post_init__(self):
         """初始化后创建必要的目录"""
@@ -168,12 +162,6 @@ class AppConfig:
             "count_unreadable_submissions": self.count_unreadable_submissions,
             "capture_key_event_text_fallback": self.capture_key_event_text_fallback,
             "capture_context_on_enter": self.capture_context_on_enter,
-            "multimodal_context_analysis": self.multimodal_context_analysis,
-            "multimodal_backend": self.multimodal_backend,
-            "qwen_vl_model": self.qwen_vl_model,
-            "qwen_vl_device": self.qwen_vl_device,
-            "qwen_vl_max_new_tokens": self.qwen_vl_max_new_tokens,
-            "qwen_vl_analysis_timeout_seconds": self.qwen_vl_analysis_timeout_seconds,
         }
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump(config_data, f, ensure_ascii=False, indent=2)
@@ -229,12 +217,6 @@ class AppConfig:
                     config.capture_key_event_text_fallback,
                 )
                 config.capture_context_on_enter = data.get("capture_context_on_enter", config.capture_context_on_enter)
-                config.multimodal_context_analysis = data.get("multimodal_context_analysis", config.multimodal_context_analysis)
-                config.multimodal_backend = data.get("multimodal_backend", config.multimodal_backend)
-                config.qwen_vl_model = data.get("qwen_vl_model", config.qwen_vl_model)
-                config.qwen_vl_device = data.get("qwen_vl_device", config.qwen_vl_device)
-                config.qwen_vl_max_new_tokens = data.get("qwen_vl_max_new_tokens", config.qwen_vl_max_new_tokens)
-                config.qwen_vl_analysis_timeout_seconds = data.get("qwen_vl_analysis_timeout_seconds", config.qwen_vl_analysis_timeout_seconds)
         
         # 如果提供了 API Key，自动启用 AI 功能
         if config.openai_api_key and not config.ai_enabled:
