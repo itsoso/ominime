@@ -1884,34 +1884,6 @@ class KeyboardListener:
                         KEYBOARD_EVENT_AUTOREPEAT_FIELD,
                     )
                 )
-                pre_submit_frame = None
-                pre_submit_capture_failure = None
-                composer_capture = self._presubmit_composer_captures.get(
-                    bundle_id
-                )
-                if (
-                    event_type == kCGEventKeyDown
-                    and keycode == ENTER_KEYCODE
-                    and composer_capture is not None
-                    and target_pid > 0
-                    and target_pid == frontmost_pid
-                    and self._target_app_identities.get(target_pid)
-                    == (app_name, bundle_id)
-                    and not is_autorepeat
-                    and not any(modifiers.values())
-                ):
-                    failure_prefix, _ = PRESUBMIT_OCR_METADATA[bundle_id]
-                    try:
-                        pre_submit_frame = composer_capture.freeze(target_pid)
-                        if pre_submit_frame is None:
-                            pre_submit_capture_failure = (
-                                f"{failure_prefix}_frame_unavailable"
-                            )
-                    except Exception:
-                        pre_submit_frame = None
-                        pre_submit_capture_failure = (
-                            f"{failure_prefix}_capture_error"
-                        )
                 raw_event = RawKeyboardEvent(
                     event_type=event_type,
                     keycode=keycode,
@@ -1922,8 +1894,6 @@ class KeyboardListener:
                     target_pid=target_pid,
                     frontmost_pid=frontmost_pid,
                     is_autorepeat=is_autorepeat,
-                    pre_submit_frame=pre_submit_frame,
-                    pre_submit_capture_failure=pre_submit_capture_failure,
                 )
                 if self._event_worker_running:
                     try:

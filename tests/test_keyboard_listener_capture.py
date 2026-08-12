@@ -193,7 +193,7 @@ class FakeKimComposerCapture:
         return self.recognize_result
 
 
-def test_kim_presubmit_frame_is_frozen_before_enter_is_enqueued(monkeypatch):
+def test_event_tap_never_freezes_kim_window_before_enter_is_enqueued(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     capture = FakeKimComposerCapture()
     listener = keyboard_listener.KeyboardListener(
@@ -222,8 +222,8 @@ def test_kim_presubmit_frame_is_frozen_before_enter_is_enqueued(monkeypatch):
     )
 
     queued = listener._event_queue.get_nowait()
-    assert capture.freeze_calls == [123]
-    assert queued.pre_submit_frame == "kim-frame"
+    assert capture.freeze_calls == []
+    assert queued.pre_submit_frame is None
     assert returned is native_event
 
 
@@ -296,7 +296,7 @@ def test_queued_event_keeps_native_and_frontmost_pids(monkeypatch):
     assert queued.bundle_id == "Kem"
 
 
-def test_kim_presubmit_capture_failure_does_not_block_enter(monkeypatch):
+def test_kim_enter_does_not_call_presubmit_capture(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     capture = FakeKimComposerCapture(raises=True)
     listener = keyboard_listener.KeyboardListener(
@@ -325,12 +325,13 @@ def test_kim_presubmit_capture_failure_does_not_block_enter(monkeypatch):
     )
 
     queued = listener._event_queue.get_nowait()
+    assert capture.freeze_calls == []
     assert queued.pre_submit_frame is None
-    assert queued.pre_submit_capture_failure == "kim_ocr_capture_error"
+    assert queued.pre_submit_capture_failure is None
     assert returned is native_event
 
 
-def test_kim_presubmit_missing_frame_is_diagnosable(monkeypatch):
+def test_kim_enter_does_not_probe_for_a_presubmit_frame(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     capture = FakeKimComposerCapture(frame=None)
     listener = keyboard_listener.KeyboardListener(
@@ -358,8 +359,9 @@ def test_kim_presubmit_missing_frame_is_diagnosable(monkeypatch):
     )
 
     queued = listener._event_queue.get_nowait()
+    assert capture.freeze_calls == []
     assert queued.pre_submit_frame is None
-    assert queued.pre_submit_capture_failure == "kim_ocr_frame_unavailable"
+    assert queued.pre_submit_capture_failure is None
 
 
 def test_kim_presubmit_does_not_trust_stale_app_identity(monkeypatch):
@@ -550,7 +552,7 @@ def test_unsupported_app_uses_native_target(monkeypatch):
     assert ("Chrome", "com.google.Chrome") not in listener._fallback_buffers
 
 
-def test_wechat_presubmit_frame_is_frozen_before_enter_is_enqueued(monkeypatch):
+def test_event_tap_never_freezes_wechat_window_before_enter_is_enqueued(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     capture = FakeKimComposerCapture(frame="wechat-frame")
     listener = keyboard_listener.KeyboardListener(
@@ -579,11 +581,11 @@ def test_wechat_presubmit_frame_is_frozen_before_enter_is_enqueued(monkeypatch):
     )
 
     queued = listener._event_queue.get_nowait()
-    assert capture.freeze_calls == [4318]
-    assert queued.pre_submit_frame == "wechat-frame"
+    assert capture.freeze_calls == []
+    assert queued.pre_submit_frame is None
 
 
-def test_wechat_first_enter_after_restart_freezes_without_cached_identity(
+def test_wechat_first_enter_after_restart_does_not_freeze_window(
     monkeypatch,
 ):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
@@ -619,8 +621,8 @@ def test_wechat_first_enter_after_restart_freezes_without_cached_identity(
     )
 
     queued = listener._event_queue.get_nowait()
-    assert capture.freeze_calls == [4318]
-    assert queued.pre_submit_frame == "wechat-frame"
+    assert capture.freeze_calls == []
+    assert queued.pre_submit_frame is None
 
 
 def test_app_switch_preserves_verified_kem_identity_for_immediate_enter(
@@ -663,8 +665,8 @@ def test_app_switch_preserves_verified_kem_identity_for_immediate_enter(
 
     queued = listener._event_queue.get_nowait()
     assert capture.prepare_calls == [29805]
-    assert capture.freeze_calls == [29805]
-    assert queued.pre_submit_frame == "kim-frame"
+    assert capture.freeze_calls == []
+    assert queued.pre_submit_frame is None
 
 
 def test_app_activation_ignores_kima_bundle_id(monkeypatch):
