@@ -22,6 +22,7 @@ from .app_tracker import AppTracker
 from .database import get_database, InputRecord
 from .config import config
 from .input_snapshot import normalize_submission_text, should_save_submission_snapshot
+from .ime_candidate_capture import refresh_input_source_cache
 from .runtime_state import set_recording_status
 from .submission_processor import save_capture_diagnostic_event, save_submission_event
 from .time_utils import business_today
@@ -94,6 +95,9 @@ class OmniMeMenuBarApp(rumps.App):
         self._build_menu()
         
         # 设置定时器
+        self._refresh_input_source(None)
+        self._input_source_timer = rumps.Timer(self._refresh_input_source, 0.25)
+        self._input_source_timer.start()
         self._stats_timer = rumps.Timer(self._update_stats, 60)
         self._stats_timer.start()
         
@@ -305,6 +309,10 @@ class OmniMeMenuBarApp(rumps.App):
         if self._is_recording:
             self._refresh_today_chars(force=True)
             self._update_title(force=True)
+
+    def _refresh_input_source(self, _):
+        """Refresh the native input source from the AppKit main thread."""
+        refresh_input_source_cache()
     
     def _toggle_recording(self, sender):
         """切换记录状态"""
@@ -670,6 +678,7 @@ class OmniMeMenuBarApp(rumps.App):
             self.listener.stop()
         
         # 停止定时器
+        self._input_source_timer.stop()
         self._stats_timer.stop()
         
         rumps.quit_application()

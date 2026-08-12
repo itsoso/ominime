@@ -2,6 +2,7 @@
 
 import time
 import ctypes
+import threading
 from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -13,6 +14,9 @@ DOUBAO_BUNDLE_ID = "com.bytedance.inputmethod.doubaoime"
 SUPPORTED_TARGET_BUNDLE_IDS = frozenset({"Kem", "com.tencent.xinWeChat"})
 COMPOSER_TOP_FRACTION = 0.55
 MAX_COMPOSED_CHARS = 4000
+INPUT_SOURCE_CACHE_TTL_SECONDS = 1.0
+_input_source_snapshot = ("", 0.0)
+_input_source_snapshot_lock = threading.Lock()
 NUMBER_KEYCODE_TO_INDEX = {
     18: 0,
     19: 1,
@@ -158,6 +162,8 @@ def _native_input_source_api():
 
 def current_input_source_bundle_id() -> str:
     """Return the exact bundle identifier of the active macOS input source."""
+    if threading.current_thread() is not threading.main_thread():
+        raise RuntimeError("macOS input source must be read on the main thread")
     hitoolbox, core_foundation, bundle_key = _native_input_source_api()
     source = hitoolbox.TISCopyCurrentKeyboardInputSource()
     if not source:
@@ -188,6 +194,41 @@ def current_input_source_bundle_id() -> str:
         core_foundation.CFRelease(source)
 
 
+def refresh_input_source_cache(
+    *,
+    native_provider: Callable[[], str] | None = None,
+    clock: Callable[[], float] = time.monotonic,
+) -> str:
+    """Refresh the active input source snapshot from the Python main thread."""
+    if threading.current_thread() is not threading.main_thread():
+        raise RuntimeError("input source cache must be refreshed on the main thread")
+    provider = native_provider or current_input_source_bundle_id
+    try:
+        bundle_id = provider()
+    except Exception:
+        bundle_id = ""
+    if not isinstance(bundle_id, str):
+        bundle_id = ""
+    snapshot = (bundle_id, clock())
+    global _input_source_snapshot
+    with _input_source_snapshot_lock:
+        _input_source_snapshot = snapshot
+    return bundle_id
+
+
+def cached_input_source_bundle_id(
+    *,
+    clock: Callable[[], float] = time.monotonic,
+) -> str:
+    """Return a fresh cached bundle identifier without calling native APIs."""
+    with _input_source_snapshot_lock:
+        bundle_id, refreshed_at = _input_source_snapshot
+    age = clock() - refreshed_at
+    if refreshed_at <= 0 or age < 0 or age > INPUT_SOURCE_CACHE_TTL_SECONDS:
+        return ""
+    return bundle_id
+
+
 class DoubaoCandidateReader:
     """Read candidates only when Doubao is anchored to a supported composer."""
 
@@ -204,7 +245,7 @@ class DoubaoCandidateReader:
     ):
         self._clock = clock
         self._input_source_provider = (
-            input_source_provider or current_input_source_bundle_id
+            input_source_provider or cached_input_source_bundle_id
         )
         self._process_provider = process_provider or self._native_processes
         self._ax_roots_provider = ax_roots_provider or self._native_ax_roots

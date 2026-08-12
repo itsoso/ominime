@@ -20,13 +20,15 @@ def install_menu_bar_import_stubs(monkeypatch):
     rumps = types.ModuleType("rumps")
 
     class App:
-        pass
+        def __init__(self, *args, **kwargs):
+            self.title = kwargs.get("title")
 
     rumps.App = App
     rumps.MenuItem = lambda *args, **kwargs: SimpleNamespace(set_callback=lambda callback: None)
     rumps.Timer = lambda *args, **kwargs: SimpleNamespace(start=lambda: None, stop=lambda: None)
     rumps.notification = lambda *args, **kwargs: None
     rumps.alert = lambda *args, **kwargs: None
+    rumps.quit_application = lambda: None
     monkeypatch.setitem(sys.modules, "rumps", rumps)
 
     quartz = types.ModuleType("Quartz")
@@ -51,6 +53,9 @@ def install_menu_bar_import_stubs(monkeypatch):
         "kCGEventKeyDown",
         "kCGEventKeyUp",
         "kCGEventFlagsChanged",
+        "kCGEventLeftMouseDown",
+        "kCGEventRightMouseDown",
+        "kCGEventOtherMouseDown",
         "kCGKeyboardEventKeycode",
         "kCGEventFlagMaskShift",
         "kCGEventFlagMaskControl",
@@ -91,6 +96,20 @@ class FakeDb:
         return self.today_total if self.storage_total is None else self.storage_total
 
 
+class FakeTimer:
+    def __init__(self, callback, interval):
+        self.callback = callback
+        self.interval = interval
+        self.started = False
+        self.stopped = False
+
+    def start(self):
+        self.started = True
+
+    def stop(self):
+        self.stopped = True
+
+
 def make_submit_event(
     content,
     app_name="Codex",
@@ -104,6 +123,67 @@ def make_submit_event(
         app_bundle_id=app_bundle_id,
         modifiers={"submit_snapshot": True},
     )
+
+
+def test_full_menu_bar_refreshes_input_source_on_main_timer(monkeypatch):
+    install_menu_bar_import_stubs(monkeypatch)
+    menu_bar_app = importlib.import_module("ominime.menu_bar_app")
+    refresh_calls = []
+    timers = []
+
+    def make_timer(callback, interval):
+        timer = FakeTimer(callback, interval)
+        timers.append(timer)
+        return timer
+
+    monkeypatch.setattr(menu_bar_app.rumps, "Timer", make_timer)
+    monkeypatch.setattr(
+        menu_bar_app,
+        "refresh_input_source_cache",
+        lambda: refresh_calls.append(True),
+        raising=False,
+    )
+    monkeypatch.setattr(menu_bar_app, "AppTracker", lambda: SimpleNamespace())
+    monkeypatch.setattr(menu_bar_app, "get_database", lambda: FakeDb(0))
+    monkeypatch.setattr(menu_bar_app, "set_recording_status", lambda status: None)
+    monkeypatch.setattr(menu_bar_app.OmniMeMenuBarApp, "_build_menu", lambda self: None)
+    monkeypatch.setattr(
+        menu_bar_app.threading,
+        "Thread",
+        lambda *args, **kwargs: SimpleNamespace(start=lambda: None),
+    )
+
+    app = menu_bar_app.OmniMeMenuBarApp()
+
+    assert refresh_calls == [True]
+    assert len(timers) == 2
+    assert app._input_source_timer.interval == 0.25
+    assert app._input_source_timer.started
+
+    app._input_source_timer.callback(None)
+
+    assert refresh_calls == [True, True]
+
+
+def test_full_menu_bar_quit_stops_all_timers(monkeypatch):
+    install_menu_bar_import_stubs(monkeypatch)
+    menu_bar_app = importlib.import_module("ominime.menu_bar_app")
+    quit_calls = []
+    app = object.__new__(menu_bar_app.OmniMeMenuBarApp)
+    app.listener = None
+    app._stats_timer = FakeTimer(lambda _: None, 60)
+    app._input_source_timer = FakeTimer(lambda _: None, 0.25)
+    monkeypatch.setattr(
+        menu_bar_app.rumps,
+        "quit_application",
+        lambda: quit_calls.append(True),
+    )
+
+    app._quit(None)
+
+    assert app._stats_timer.stopped
+    assert app._input_source_timer.stopped
+    assert quit_calls == [True]
 
 
 def test_full_menu_bar_increments_live_counter_after_submission(monkeypatch):

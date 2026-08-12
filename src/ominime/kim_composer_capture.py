@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Callable, Iterable
 
+from .ime_candidate_capture import cached_input_source_bundle_id
+
 
 DOUBAO_BUNDLE_ID = "com.bytedance.inputmethod.doubaoime"
 LEGACY_KIM_BUNDLE_ID = "Kem"
@@ -205,7 +207,7 @@ class KimPreSubmitCapture:
         self._image_provider = image_provider or self._native_window_image
         self._ocr_provider = ocr_provider or self._native_recognized_lines
         self._input_source_provider = (
-            input_source_provider or self._current_input_source_bundle_id
+            input_source_provider or cached_input_source_bundle_id
         )
         self._prepared_windows: dict[int, tuple[WindowInfo, float]] = {}
         self._window_lock = threading.Lock()
@@ -329,12 +331,6 @@ class KimPreSubmitCapture:
 
     def composer_roi_for_frame(self, frame: CapturedFrame) -> NormalizedRect:
         return self.composer_roi
-
-    @staticmethod
-    def _current_input_source_bundle_id() -> str:
-        from .ime_candidate_capture import current_input_source_bundle_id
-
-        return current_input_source_bundle_id()
 
     @staticmethod
     def _native_windows() -> Iterable[WindowInfo]:

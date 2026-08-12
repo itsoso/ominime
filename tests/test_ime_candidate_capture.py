@@ -1,4 +1,7 @@
 from collections import UserDict, UserList
+import threading
+
+from ominime import ime_candidate_capture
 
 from ominime.ime_candidate_capture import (
     CandidateSnapshot,
@@ -19,6 +22,100 @@ def test_candidate_inside_lower_target_region_is_trusted():
     candidate = Rect(x=2500, y=760, width=400, height=64)
 
     assert candidate_is_in_composer(candidate, target)
+
+
+def test_input_source_cache_is_empty_until_refreshed_or_when_expired(monkeypatch):
+    monkeypatch.setattr(
+        ime_candidate_capture,
+        "_input_source_snapshot",
+        ("", 0.0),
+        raising=False,
+    )
+
+    assert ime_candidate_capture.cached_input_source_bundle_id(
+        clock=lambda: 100.0,
+    ) == ""
+
+    ime_candidate_capture.refresh_input_source_cache(
+        native_provider=lambda: DOUBAO_BUNDLE_ID,
+        clock=lambda: 100.0,
+    )
+
+    assert ime_candidate_capture.cached_input_source_bundle_id(
+        clock=lambda: 100.5,
+    ) == DOUBAO_BUNDLE_ID
+    assert ime_candidate_capture.cached_input_source_bundle_id(
+        clock=lambda: 102.0,
+    ) == ""
+
+
+def test_failed_input_source_refresh_replaces_old_identity_with_empty(monkeypatch):
+    monkeypatch.setattr(
+        ime_candidate_capture,
+        "_input_source_snapshot",
+        ("", 0.0),
+        raising=False,
+    )
+    ime_candidate_capture.refresh_input_source_cache(
+        native_provider=lambda: DOUBAO_BUNDLE_ID,
+        clock=lambda: 100.0,
+    )
+
+    def fail_native_read():
+        raise RuntimeError("native read failed")
+
+    assert ime_candidate_capture.refresh_input_source_cache(
+        native_provider=fail_native_read,
+        clock=lambda: 100.25,
+    ) == ""
+    assert ime_candidate_capture.cached_input_source_bundle_id(
+        clock=lambda: 100.5,
+    ) == ""
+
+
+def test_worker_refresh_is_rejected_before_native_provider_runs():
+    native_calls = []
+    errors = []
+
+    def refresh_on_worker():
+        try:
+            ime_candidate_capture.refresh_input_source_cache(
+                native_provider=lambda: native_calls.append(True) or DOUBAO_BUNDLE_ID,
+            )
+        except Exception as error:
+            errors.append(error)
+
+    worker = threading.Thread(target=refresh_on_worker)
+    worker.start()
+    worker.join()
+
+    assert native_calls == []
+    assert len(errors) == 1
+    assert isinstance(errors[0], RuntimeError)
+
+
+def test_direct_native_input_source_read_is_rejected_on_worker(monkeypatch):
+    native_calls = []
+    errors = []
+    monkeypatch.setattr(
+        ime_candidate_capture,
+        "_native_input_source_api",
+        lambda: native_calls.append(True),
+    )
+
+    def read_on_worker():
+        try:
+            ime_candidate_capture.current_input_source_bundle_id()
+        except Exception as error:
+            errors.append(error)
+
+    worker = threading.Thread(target=read_on_worker)
+    worker.start()
+    worker.join()
+
+    assert native_calls == []
+    assert len(errors) == 1
+    assert isinstance(errors[0], RuntimeError)
 
 
 def test_candidate_near_top_search_field_is_rejected():
@@ -303,6 +400,25 @@ def test_reader_requires_exact_doubao_process_bundle():
     )
 
     assert reader.read(target_pid=123, target_bundle_id="Kem") is None
+
+
+def test_reader_default_uses_cached_input_source_without_native_read(monkeypatch):
+    ime_candidate_capture.refresh_input_source_cache(
+        native_provider=lambda: DOUBAO_BUNDLE_ID,
+    )
+
+    def fail_native_read():
+        raise AssertionError("worker path must not read TIS")
+
+    monkeypatch.setattr(
+        ime_candidate_capture,
+        "current_input_source_bundle_id",
+        fail_native_read,
+    )
+    reader = DoubaoCandidateReader(process_provider=lambda: ())
+
+    assert reader.read(target_pid=123, target_bundle_id="Kem") is None
+    assert reader.last_failure_reason == "doubao_process_unavailable"
 
 
 def test_reader_requires_doubao_to_be_current_input_source():

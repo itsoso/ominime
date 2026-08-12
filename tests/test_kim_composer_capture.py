@@ -1,3 +1,4 @@
+from ominime import ime_candidate_capture
 from ominime.kim_composer_capture import (
     CapturedFrame,
     DOUBAO_BUNDLE_ID,
@@ -128,6 +129,31 @@ def test_freeze_selects_largest_normal_window_for_target_pid():
     )
     assert selected == [4]
     assert window_calls == [True]
+
+
+def test_freeze_default_uses_cached_input_source_without_native_read(monkeypatch):
+    ime_candidate_capture.refresh_input_source_cache(
+        native_provider=lambda: DOUBAO_BUNDLE_ID,
+    )
+
+    def fail_native_read():
+        raise AssertionError("event callback must not read TIS")
+
+    monkeypatch.setattr(
+        ime_candidate_capture,
+        "current_input_source_bundle_id",
+        fail_native_read,
+    )
+    capture = KimPreSubmitCapture(
+        window_provider=lambda: (WindowInfo(4, 123, 0, 1197, 925),),
+        image_provider=lambda window_id: "image",
+    )
+
+    assert capture.prepare(123)
+    frame = capture.freeze(123)
+
+    assert frame is not None
+    assert frame.input_source_bundle_id == DOUBAO_BUNDLE_ID
 
 
 def test_prepare_selects_frontmost_eligible_window_for_target_pid():

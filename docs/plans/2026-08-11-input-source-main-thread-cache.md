@@ -28,7 +28,7 @@ Add tests proving:
 
 **Step 2: Run the focused test file and confirm failure**
 
-Run: `python -m pytest -q tests/test_ime_candidate_capture.py`
+Run: `PYTHONPATH=src python -m pytest -q tests/test_ime_candidate_capture.py`
 
 Expected: FAIL because cache APIs and main-thread guards do not exist.
 
@@ -45,7 +45,7 @@ In `ime_candidate_capture.py`:
 
 **Step 4: Run the focused tests and confirm pass**
 
-Run: `python -m pytest -q tests/test_ime_candidate_capture.py`
+Run: `PYTHONPATH=src python -m pytest -q tests/test_ime_candidate_capture.py`
 
 Expected: PASS.
 
@@ -65,7 +65,7 @@ For Kim, prepare a fake window and freeze it with the module cache populated; ma
 
 **Step 2: Run focused tests and confirm failure**
 
-Run: `python -m pytest -q tests/test_ime_candidate_capture.py tests/test_kim_composer_capture.py`
+Run: `PYTHONPATH=src python -m pytest -q tests/test_ime_candidate_capture.py tests/test_kim_composer_capture.py`
 
 Expected: FAIL because the defaults still call the native TIS function.
 
@@ -78,7 +78,7 @@ Expected: FAIL because the defaults still call the native TIS function.
 
 **Step 4: Run focused tests and confirm pass**
 
-Run: `python -m pytest -q tests/test_ime_candidate_capture.py tests/test_kim_composer_capture.py`
+Run: `PYTHONPATH=src python -m pytest -q tests/test_ime_candidate_capture.py tests/test_kim_composer_capture.py`
 
 Expected: PASS.
 
@@ -101,7 +101,7 @@ Stub delayed background startup so the lifecycle test cannot create real service
 
 **Step 2: Run focused tests and confirm failure**
 
-Run: `python -m pytest -q tests/test_menu_bar_daily_counter.py`
+Run: `PYTHONPATH=src python -m pytest -q tests/test_menu_bar_daily_counter.py`
 
 Expected: FAIL because the input-source timer is not implemented.
 
@@ -119,7 +119,7 @@ Keep the timer alive while recording is paused so the cache is fresh on resume.
 
 **Step 4: Run focused tests and confirm pass**
 
-Run: `python -m pytest -q tests/test_menu_bar_daily_counter.py`
+Run: `PYTHONPATH=src python -m pytest -q tests/test_menu_bar_daily_counter.py`
 
 Expected: PASS.
 
@@ -130,13 +130,13 @@ Expected: PASS.
 
 **Step 1: Run targeted regression tests**
 
-Run: `python -m pytest -q tests/test_ime_candidate_capture.py tests/test_kim_composer_capture.py tests/test_menu_bar_daily_counter.py tests/test_keyboard_listener.py`
+Run: `PYTHONPATH=src python -m pytest -q tests/test_ime_candidate_capture.py tests/test_kim_composer_capture.py tests/test_menu_bar_daily_counter.py tests/test_keyboard_listener_capture.py`
 
 Expected: PASS.
 
 **Step 2: Run the full suite**
 
-Run: `python -m pytest -q`
+Run: `PYTHONPATH=src python -m pytest -q`
 
 Expected: PASS with no failures.
 
