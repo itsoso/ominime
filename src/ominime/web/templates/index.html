@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OmniMe - 输入追踪仪表板</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
             --bg-primary: #0a0a0f;
@@ -274,7 +273,37 @@
         .context-kv div { background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 10px; padding: 8px; }
 
         /* 图表 */
-        .chart-container { position: relative; height: 300px; }
+        .chart-container { height: 300px; }
+        .hourly-chart {
+            height: 100%;
+            display: grid;
+            grid-template-columns: repeat(24, minmax(0, 1fr));
+            align-items: end;
+            gap: 4px;
+            padding-top: 20px;
+            border-bottom: 1px solid var(--border);
+        }
+        .hourly-column {
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-end;
+            align-items: center;
+            min-width: 0;
+        }
+        .hourly-bar {
+            width: 100%;
+            min-height: 2px;
+            max-width: 24px;
+            background: var(--gradient-1);
+            border-radius: 4px 4px 0 0;
+        }
+        .hourly-label {
+            height: 20px;
+            color: var(--text-muted);
+            font-size: 10px;
+            line-height: 20px;
+        }
 
         /* 应用列表 */
         .app-list { list-style: none; }
@@ -547,7 +576,7 @@
                         <h2 class="card-title">📊 每小时分布</h2>
                     </div>
                     <div class="chart-container">
-                        <canvas id="hourlyChart"></canvas>
+                        <div id="hourlyChart" class="hourly-chart" role="img" aria-label="每小时输入字符数"></div>
                     </div>
                 </div>
                 <div class="card">
@@ -624,7 +653,6 @@
     <script>
         let currentDate = new Date();
         let serverTodayDate = null;
-        let hourlyChart = null;
         let currentTab = 'overview';
 
         const appIcons = {
@@ -798,35 +826,19 @@
         }
 
         function updateHourlyChart(data) {
-            const ctx = document.getElementById('hourlyChart').getContext('2d');
-            const labels = data.map(d => `${d.hour}:00`);
-            const values = data.map(d => d.chars);
+            const container = document.getElementById('hourlyChart');
+            const byHour = new Map(data.map(item => [Number(item.hour), Number(item.chars) || 0]));
+            const values = Array.from({ length: 24 }, (_, hour) => byHour.get(hour) || 0);
+            const maxValue = Math.max(...values, 1);
 
-            if (hourlyChart) hourlyChart.destroy();
-
-            hourlyChart = new Chart(ctx, {
-                type: 'bar',
-                data: {
-                    labels: labels,
-                    datasets: [{
-                        label: '字符数',
-                        data: values,
-                        backgroundColor: 'rgba(99, 102, 241, 0.6)',
-                        borderColor: 'rgba(99, 102, 241, 1)',
-                        borderWidth: 1,
-                        borderRadius: 4,
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: { legend: { display: false } },
-                    scales: {
-                        x: { grid: { color: 'rgba(42, 42, 58, 0.5)' }, ticks: { color: '#555566', maxRotation: 0, callback: (v, i) => i % 3 === 0 ? labels[i] : '' } },
-                        y: { grid: { color: 'rgba(42, 42, 58, 0.5)' }, ticks: { color: '#555566', callback: v => v >= 1000 ? `${v/1000}k` : v } }
-                    }
-                }
-            });
+            container.innerHTML = values.map((value, hour) => {
+                const height = value === 0 ? 0 : Math.max(2, Math.round((value / maxValue) * 240));
+                const label = hour % 3 === 0 ? String(hour).padStart(2, '0') : '';
+                return `<div class="hourly-column" title="${hour}:00 · ${value.toLocaleString()} 字符">
+                    <div class="hourly-bar" style="height: ${height}px"></div>
+                    <span class="hourly-label">${label}</span>
+                </div>`;
+            }).join('');
         }
 
         async function loadAnalysis() {

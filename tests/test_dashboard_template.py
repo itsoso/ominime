@@ -42,6 +42,14 @@ def test_dashboard_does_not_contact_google_fonts():
     assert "fonts.gstatic.com" not in html
 
 
+def test_dashboard_loads_no_remote_runtime_resources():
+    html = TEMPLATE.read_text(encoding="utf-8")
+
+    assert '<script src="http' not in html
+    assert '<link href="http' not in html
+    assert "new Chart(" not in html
+
+
 def test_dashboard_has_no_qwen_multimodal_panel():
     html = TEMPLATE.read_text(encoding="utf-8")
 
