@@ -119,6 +119,8 @@ class Database:
         """获取数据库连接"""
         conn = sqlite3.connect(str(self.db_path))
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA busy_timeout = 5000")
         try:
             yield conn
             conn.commit()
@@ -132,6 +134,7 @@ class Database:
         """初始化数据库表"""
         with self._get_connection() as conn:
             cursor = conn.cursor()
+            cursor.execute("PRAGMA journal_mode = WAL")
             
             # 输入记录表
             cursor.execute("""
@@ -690,10 +693,12 @@ class Database:
             # 按应用汇总
             cursor.execute("""
                 SELECT 
-                    app_name,
-                    display_name,
+                    app_bundle_id,
+                    MAX(app_name) as app_name,
+                    MAX(display_name) as display_name,
                     SUM(char_count) as total_chars,
-                    COUNT(DISTINCT session_id) as session_count
+                    COUNT(DISTINCT session_id) as session_count,
+                    COALESCE(SUM(duration_seconds), 0) as total_duration_seconds
                 FROM input_records 
                 WHERE timestamp >= ? AND timestamp < ?
                 GROUP BY app_bundle_id
@@ -706,31 +711,14 @@ class Database:
                 cursor.execute("""
                     SELECT content FROM input_records 
                     WHERE timestamp >= ? AND timestamp < ? 
-                    AND app_name = ? AND content IS NOT NULL AND LENGTH(content) > 10
+                    AND app_bundle_id = ? AND content IS NOT NULL AND LENGTH(content) > 10
                     ORDER BY char_count DESC
                     LIMIT 5
-                """, (start.isoformat(), end.isoformat(), row['app_name']))
+                """, (start.isoformat(), end.isoformat(), row['app_bundle_id']))
                 
                 samples = [r['content'] for r in cursor.fetchall()]
                 
-                # 计算该应用的实际活跃时间（按会话）
-                cursor.execute("""
-                    SELECT 
-                        session_id,
-                        MIN(timestamp) as session_start,
-                        MAX(timestamp) as session_end
-                    FROM input_records
-                    WHERE timestamp >= ? AND timestamp < ? AND app_name = ?
-                    GROUP BY session_id
-                """, (start.isoformat(), end.isoformat(), row['app_name']))
-                
-                total_minutes = 0.0
-                for session in cursor.fetchall():
-                    start_time = datetime.fromisoformat(session['session_start'])
-                    end_time = datetime.fromisoformat(session['session_end'])
-                    # 会话时长 = 最后一条记录时间 - 第一条记录时间 + 1 分钟
-                    duration = (end_time - start_time).total_seconds() / 60.0 + 1.0
-                    total_minutes += duration
+                total_minutes = float(row['total_duration_seconds']) / 60.0
                 
                 stats.append(AppDailyStats(
                     app_name=row['app_name'],

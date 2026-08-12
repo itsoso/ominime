@@ -300,7 +300,6 @@ class ObsidianExporter:
             lines.append("## 🛤️ 工作路径分析")
             lines.append("")
             lines.append(f"- **工作模式**: {report.work_path.work_pattern}")
-            lines.append(f"- **效率分数**: {report.work_path.efficiency_score:.1f}/100")
             lines.append(f"- **应用切换**: {report.work_path.app_switches} 次")
             lines.append(f"- **工作片段**: {report.work_path.total_segments} 个")
             lines.append("")

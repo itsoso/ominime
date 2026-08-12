@@ -92,7 +92,6 @@ class WorkPathAnalysisResponse(BaseModel):
     peak_hours: List[dict]
     focus_periods: List[dict]
     work_pattern: str
-    efficiency_score: float
     segments: Optional[List[WorkPathSegmentResponse]] = None
 
 
@@ -363,7 +362,6 @@ async def get_daily_report(target_date: str):
                 for start, end, app in report.work_path.focus_periods
             ],
             work_pattern=report.work_path.work_pattern,
-            efficiency_score=round(report.work_path.efficiency_score, 1),
             segments=[
                 WorkPathSegmentResponse(
                     start_time=seg.start_time.isoformat(),
@@ -493,7 +491,6 @@ async def get_full_report(target_date: str):
                 for start, end, app in report.work_path.focus_periods
             ],
             work_pattern=report.work_path.work_pattern,
-            efficiency_score=round(report.work_path.efficiency_score, 1),
             segments=None
         )
     

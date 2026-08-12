@@ -55,3 +55,10 @@ def test_dashboard_explains_remote_ai_data_transfer():
 
     assert "显式启用远程 AI" in html
     assert "分析内容会发送" in html
+
+
+def test_dashboard_does_not_present_an_efficiency_score():
+    html = TEMPLATE.read_text(encoding="utf-8")
+
+    assert "效率分数" not in html
+    assert "workPath.efficiency_score" not in html

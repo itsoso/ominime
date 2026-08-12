@@ -35,7 +35,6 @@ class WorkPathAnalysis:
     peak_hours: List[Tuple[int, int]]  # [(hour, char_count), ...]
     focus_periods: List[Tuple[datetime, datetime, str]]  # [(start, end, app), ...]
     work_pattern: str  # "集中型" / "分散型" / "混合型"
-    efficiency_score: float  # 0-100
     ai_analysis: Optional[str] = None  # AI 生成的工作路径分析
 
 
@@ -344,9 +343,7 @@ class Analyzer:
             elif work_path.app_switches > 50:
                 suggestions.append("🔄 应用切换频繁，可能影响深度工作，建议批量处理任务")
             
-            if work_path.efficiency_score < 60:
-                suggestions.append("📈 效率分数较低，建议优化工作节奏，增加专注时段")
-            elif len(work_path.focus_periods) < 2:
+            if len(work_path.focus_periods) < 2:
                 suggestions.append("🎯 深度工作时间较少，建议安排2-3个专注时段")
         
         # 多应用切换建议
@@ -382,7 +379,6 @@ class Analyzer:
         if work_path:
             work_path_info = f"""
 工作模式: {work_path.work_pattern}
-效率分数: {work_path.efficiency_score:.1f}/100
 应用切换次数: {work_path.app_switches}
 专注时段数: {len(work_path.focus_periods)}
 峰值时段: {', '.join([f'{h}点' for h, _ in work_path.peak_hours[:3]])}
@@ -482,7 +478,6 @@ class Analyzer:
         if report.work_path:
             lines.append("🛤️  工作路径分析:")
             lines.append(f"  工作模式: {report.work_path.work_pattern}")
-            lines.append(f"  效率分数: {report.work_path.efficiency_score:.1f}/100")
             lines.append(f"  应用切换: {report.work_path.app_switches} 次")
             lines.append(f"  专注时段: {len(report.work_path.focus_periods)} 个")
             
@@ -640,11 +635,6 @@ class Analyzer:
         # 判断工作模式
         work_pattern = self._identify_work_pattern(segments, app_switches)
         
-        # 计算效率分数（基于专注时段、应用切换频率等）
-        efficiency_score = self._calculate_efficiency_score(
-            segments, app_switches, total_chars=sum(s.char_count for s in segments)
-        )
-        
         return WorkPathAnalysis(
             segments=segments,
             total_segments=len(segments),
@@ -652,7 +642,6 @@ class Analyzer:
             peak_hours=peak_hours,
             focus_periods=focus_periods,
             work_pattern=work_pattern,
-            efficiency_score=efficiency_score,
         )
     
     def _identify_work_pattern(self, segments: List[WorkPathSegment], app_switches: int) -> str:
@@ -673,28 +662,6 @@ class Analyzer:
             return "分散型"  # 短时间片段，频繁切换
         else:
             return "混合型"  # 介于两者之间
-    
-    def _calculate_efficiency_score(self, segments: List[WorkPathSegment], app_switches: int, total_chars: int) -> float:
-        """计算效率分数（0-100）"""
-        if not segments:
-            return 0.0
-        
-        score = 100.0
-        
-        # 专注时段加分
-        focus_count = sum(1 for s in segments if s.duration_minutes >= 30 and s.char_count >= 100)
-        score += min(focus_count * 5, 20)  # 最多加20分
-        
-        # 过度切换扣分
-        switch_rate = app_switches / max(len(segments), 1)
-        if switch_rate > 0.8:
-            score -= (switch_rate - 0.8) * 50  # 切换率超过0.8时扣分
-        
-        # 输入量加分
-        if total_chars > 5000:
-            score += min((total_chars - 5000) / 1000 * 2, 10)  # 每1000字符加2分，最多10分
-        
-        return max(0.0, min(100.0, score))
     
     def _ai_analyze_work_path(
         self, 
@@ -740,7 +707,6 @@ class Analyzer:
 
 峰值时段: {peak_info}
 工作模式: {work_path.work_pattern}
-效率分数: {work_path.efficiency_score:.1f}/100
 应用切换次数: {work_path.app_switches}
 专注时段数: {len(work_path.focus_periods)}
 

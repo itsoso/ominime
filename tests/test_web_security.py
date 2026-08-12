@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
-from ominime.analyzer import DailyReport
+from ominime.analyzer import DailyReport, WorkPathAnalysis
 from ominime.web import api as web_api
 
 
@@ -51,6 +51,14 @@ def test_today_full_report_is_not_captured_by_date_route(monkeypatch):
         main_activities=[],
         summary="",
         suggestions=[],
+        work_path=WorkPathAnalysis(
+            segments=[],
+            total_segments=1,
+            app_switches=0,
+            peak_hours=[],
+            focus_periods=[],
+            work_pattern="混合型",
+        ),
     )
     monkeypatch.setattr(
         web_api,
@@ -63,3 +71,4 @@ def test_today_full_report_is_not_captured_by_date_route(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["overview"]["date"] == "2026-08-11"
+    assert "efficiency_score" not in response.json()["work_path"]
