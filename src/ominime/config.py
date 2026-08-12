@@ -175,10 +175,6 @@ class AppConfig:
                 load_dotenv(override=True)
             
             # 从环境变量更新配置
-            env_ai_enabled = os.getenv("AI_ENABLED")
-            if env_ai_enabled:
-                config.ai_enabled = env_ai_enabled.lower() in ("true", "1", "yes", "on")
-        
         # 从 config.json 加载配置（会覆盖环境变量中的部分设置）
         if config_path.exists():
             config_path.chmod(0o600)
@@ -201,6 +197,12 @@ class AppConfig:
                     config.capture_key_event_text_fallback,
                 )
                 config.capture_context_on_enter = data.get("capture_context_on_enter", config.capture_context_on_enter)
+
+        # An explicit environment value is the final runtime override. This is
+        # also what the local-model setup wizard writes to .env.
+        env_ai_enabled = os.getenv("AI_ENABLED")
+        if env_ai_enabled:
+            config.ai_enabled = env_ai_enabled.lower() in ("true", "1", "yes", "on")
         
         return config
 

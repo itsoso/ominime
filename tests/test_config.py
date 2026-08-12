@@ -44,3 +44,13 @@ def test_loading_existing_config_tightens_file_permissions(tmp_path):
     AppConfig.load(path)
 
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_explicit_ai_environment_overrides_saved_local_preference(tmp_path, monkeypatch):
+    path = tmp_path / "config.json"
+    path.write_text('{"ai_enabled": false}', encoding="utf-8")
+    monkeypatch.setenv("AI_ENABLED", "true")
+
+    config = AppConfig.load(path)
+
+    assert config.ai_enabled is True
