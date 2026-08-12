@@ -58,6 +58,17 @@ def test_dashboard_has_no_qwen_multimodal_panel():
     assert "qwen_model" not in html
 
 
+def test_dashboard_has_no_submission_context_surface():
+    html = TEMPLATE.read_text(encoding="utf-8")
+
+    assert "🧠 上下文" not in html
+    assert 'id="tab-context"' not in html
+    assert "loadSubmissionContexts" not in html
+    assert "renderSubmissionContext" not in html
+    assert "/api/submissions" not in html
+    assert ".context-card" not in html
+
+
 def test_dashboard_describes_local_only_ai():
     html = TEMPLATE.read_text(encoding="utf-8")
 

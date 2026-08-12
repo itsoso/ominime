@@ -148,3 +148,12 @@ def test_health_defaults_to_unknown_when_no_embedded_runtime_state(tmp_path, mon
     payload = response.json()
     assert payload["is_recording"] is False
     assert payload["recording_status"] == "unknown"
+
+
+def test_context_api_and_health_flag_are_not_exposed(tmp_path, monkeypatch):
+    db = Database(tmp_path / "test.db")
+    install_test_api_state(monkeypatch, db, tmp_path)
+    client = TestClient(web_api.app)
+
+    assert client.get("/api/submissions").status_code == 404
+    assert "capture_context_on_enter" not in client.get("/api/health").json()

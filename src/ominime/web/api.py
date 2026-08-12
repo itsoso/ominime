@@ -230,7 +230,6 @@ def _build_health_payload() -> dict:
         "last_recorded_app": latest.display_name if latest else None,
         "last_recorded_chars": latest.char_count if latest else None,
         "input_capture_mode": getattr(config, "input_capture_mode", "enter-text"),
-        "capture_context_on_enter": config.capture_context_on_enter,
         "last_capture_diagnostic": _serialize_capture_diagnostic(
             diagnostics[0] if diagnostics else None
         ),
@@ -654,48 +653,6 @@ async def get_records(
             )
             for r in records
         ]
-    }
-
-
-@app.get("/api/submissions")
-async def get_submissions(
-    target_date: Optional[str] = None,
-    limit: int = Query(default=100, ge=1, le=500),
-):
-    """获取 Enter 提交上下文列表。"""
-    db = get_database()
-    if target_date:
-        try:
-            report_date = datetime.strptime(target_date, "%Y-%m-%d").date()
-        except ValueError:
-            raise HTTPException(status_code=400, detail="日期格式错误")
-        rows = db.get_submission_contexts_by_date(report_date, limit=limit)
-    else:
-        rows = db.get_recent_submission_contexts(limit=limit)
-
-    return {
-        "total": len(rows),
-        "submissions": [
-            {
-                "submission_id": row["submission_id"],
-                "input_record_id": row["input_record_id"],
-                "timestamp": row["timestamp"],
-                "app_name": row["app_name"],
-                "app_bundle_id": row["app_bundle_id"],
-                "display_name": row.get("display_name") or config.get_app_display_name(row["app_bundle_id"], row["app_name"]),
-                "content": row.get("content") or "",
-                "char_count": row.get("char_count") or 0,
-                "window_title": row["window_title"],
-                "focused_role": row["focused_role"],
-                "container_role": row["container_role"],
-                "container_title": row["container_title"],
-                "capture_status": row["capture_status"],
-                "capture_error": row["capture_error"],
-                "focused_frame": _parse_json_field(row["focused_frame_json"]),
-                "container_frame": _parse_json_field(row["container_frame_json"]),
-            }
-            for row in rows
-        ],
     }
 
 
