@@ -14,7 +14,7 @@ import time
 import re
 import uuid
 from typing import Callable, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 import queue
@@ -84,6 +84,10 @@ from .time_utils import storage_now
 EVENT_TAP_DISABLED_BY_TIMEOUT = getattr(Quartz, "kCGEventTapDisabledByTimeout", -1)
 EVENT_TAP_DISABLED_BY_USER_INPUT = getattr(Quartz, "kCGEventTapDisabledByUserInput", -2)
 KEYBOARD_EVENT_AUTOREPEAT_FIELD = getattr(Quartz, "kCGKeyboardEventAutorepeat", 8)
+EVENT_SOURCE_USER_DATA_FIELD = getattr(Quartz, "kCGEventSourceUserData", 42)
+REPLAY_EVENT_MARKER = 0x4F4D4E49
+ENTER_REPLAY_TIMEOUT_SECONDS = 0.2
+SUPPRESSED_ENTER_KEYUP_TTL_SECONDS = 5.0
 
 
 @dataclass
@@ -96,6 +100,27 @@ class KeyEvent:
     app_bundle_id: str
     modifiers: dict
     is_ime_input: bool = False
+
+
+@dataclass
+class PendingReplay:
+    """A suppressed native Enter event waiting to be posted once."""
+
+    event: object
+    target_pid: int
+    keyup_event: object | None = None
+    watchdog: threading.Timer | None = field(
+        default=None,
+        compare=False,
+    )
+    released: threading.Event = field(
+        default_factory=threading.Event,
+        compare=False,
+    )
+    lock: threading.Lock = field(
+        default_factory=threading.Lock,
+        compare=False,
+    )
 
 
 @dataclass(frozen=True)
@@ -113,6 +138,7 @@ class RawKeyboardEvent:
     is_autorepeat: bool = False
     pre_submit_frame: object | None = None
     pre_submit_capture_failure: str | None = None
+    pending_replay: PendingReplay | None = None
 
 
 # 键码映射
@@ -634,6 +660,8 @@ class KeyboardListener:
             WECHAT_BUNDLE_ID: wechat_composer_capture or WeChatPreSubmitCapture(),
         }
         self._target_app_identities: dict[int, tuple[str, str]] = {}
+        self._suppressed_enter_keyups: dict[int, list[float]] = {}
+        self._suppressed_enter_keyups_lock = threading.Lock()
         self._doubao_states: dict[tuple[str, str], DoubaoCompositionState] = {}
         self._doubao_failure_reasons: dict[tuple[str, str], str] = {}
         self._last_doubao_target: tuple[str, str, int] | None = None
@@ -663,6 +691,134 @@ class KeyboardListener:
             )
         else:
             self._target_app_identities.pop(target_pid, None)
+
+    def _create_pending_replay(
+        self,
+        event,
+        target_pid: int,
+    ) -> PendingReplay | None:
+        try:
+            copied_event = Quartz.CGEventCreateCopy(event)
+            copied_keyup = Quartz.CGEventCreateCopy(event)
+            if copied_event is None or copied_keyup is None:
+                return None
+            for copied, copied_type in (
+                (copied_event, kCGEventKeyDown),
+                (copied_keyup, kCGEventKeyUp),
+            ):
+                Quartz.CGEventSetType(copied, copied_type)
+                Quartz.CGEventSetIntegerValueField(
+                    copied,
+                    EVENT_SOURCE_USER_DATA_FIELD,
+                    REPLAY_EVENT_MARKER,
+                )
+            return PendingReplay(copied_event, target_pid, copied_keyup)
+        except Exception:
+            return None
+
+    def _arm_pending_replay_watchdog(self, pending: PendingReplay) -> None:
+        watchdog = threading.Timer(
+            ENTER_REPLAY_TIMEOUT_SECONDS,
+            self._release_pending_replay_value,
+            args=(pending,),
+        )
+        watchdog.daemon = True
+        pending.watchdog = watchdog
+        watchdog.start()
+
+    def _register_suppressed_enter_keyup(self, target_pid: int) -> None:
+        expires_at = time.monotonic() + SUPPRESSED_ENTER_KEYUP_TTL_SECONDS
+        with self._suppressed_enter_keyups_lock:
+            self._suppressed_enter_keyups.setdefault(target_pid, []).append(
+                expires_at
+            )
+
+    def _consume_suppressed_enter_keyup(self, target_pid: int) -> bool:
+        now = time.monotonic()
+        with self._suppressed_enter_keyups_lock:
+            deadlines = [
+                deadline
+                for deadline in self._suppressed_enter_keyups.get(target_pid, [])
+                if deadline >= now
+            ]
+            if not deadlines:
+                self._suppressed_enter_keyups.pop(target_pid, None)
+                return False
+            deadlines.pop(0)
+            if deadlines:
+                self._suppressed_enter_keyups[target_pid] = deadlines
+            else:
+                self._suppressed_enter_keyups.pop(target_pid, None)
+            return True
+
+    def _has_suppressed_enter_keyup(self, target_pid: int) -> bool:
+        now = time.monotonic()
+        with self._suppressed_enter_keyups_lock:
+            deadlines = [
+                deadline
+                for deadline in self._suppressed_enter_keyups.get(target_pid, [])
+                if deadline >= now
+            ]
+            if deadlines:
+                self._suppressed_enter_keyups[target_pid] = deadlines
+                return True
+            self._suppressed_enter_keyups.pop(target_pid, None)
+            return False
+
+    def _release_pending_replay_value(self, pending: PendingReplay) -> None:
+        with pending.lock:
+            if pending.released.is_set():
+                return
+            try:
+                if pending.keyup_event is None:
+                    pending.keyup_event = Quartz.CGEventCreateCopy(pending.event)
+                    if pending.keyup_event is None:
+                        raise RuntimeError("could not create Enter keyUp replay")
+                    for copied, copied_type in (
+                        (pending.event, kCGEventKeyDown),
+                        (pending.keyup_event, kCGEventKeyUp),
+                    ):
+                        Quartz.CGEventSetType(copied, copied_type)
+                        Quartz.CGEventSetIntegerValueField(
+                            copied,
+                            EVENT_SOURCE_USER_DATA_FIELD,
+                            REPLAY_EVENT_MARKER,
+                        )
+                Quartz.CGEventPostToPid(pending.target_pid, pending.event)
+                Quartz.CGEventPostToPid(
+                    pending.target_pid,
+                    pending.keyup_event,
+                )
+            except Exception as exc:
+                record_runtime_error(f"enter_replay_failed:{exc}")
+            finally:
+                pending.released.set()
+                if pending.watchdog is not None:
+                    pending.watchdog.cancel()
+
+    def _release_pending_replay(self, raw_event: RawKeyboardEvent) -> None:
+        pending = raw_event.pending_replay
+        if pending is None:
+            return
+        self._release_pending_replay_value(pending)
+
+    def _freeze_presubmit_composer(
+        self,
+        bundle_id: str,
+        target_pid: int,
+    ) -> tuple[object | None, str | None]:
+        composer_capture = self._presubmit_composer_captures.get(bundle_id)
+        capture_metadata = PRESUBMIT_OCR_METADATA.get(bundle_id)
+        if composer_capture is None or capture_metadata is None or target_pid <= 0:
+            return None, None
+        failure_prefix, _ = capture_metadata
+        try:
+            frame = composer_capture.freeze(target_pid)
+        except Exception:
+            return None, f"{failure_prefix}_capture_error"
+        if frame is None:
+            return None, f"{failure_prefix}_frame_unavailable"
+        return frame, None
 
     def _on_rime_input(self, text: str, timestamp: datetime, app_name: str, bundle_id: str):
         """Rime log events are ignored in submission-snapshot mode."""
@@ -1250,6 +1406,7 @@ class KeyboardListener:
         target_pid: int | None = None,
         pre_submit_frame: object | None = None,
         pre_submit_capture_failure: str | None = None,
+        captured_context=None,
     ):
         """Emit the full focused input value when Enter is pressed."""
         if app_name is None or bundle_id is None:
@@ -1260,7 +1417,11 @@ class KeyboardListener:
             "alt": False,
             "cmd": False,
         }
-        context = self._capture_focused_context(target_pid=target_pid)
+        context = (
+            captured_context
+            if captured_context is not None
+            else self._capture_focused_context(target_pid=target_pid)
+        )
         captured_context_data = self._context_to_dict_safe(context)
         context_data = captured_context_data if config.capture_context_on_enter else {}
         current_field_id = focused_field_identity(context)
@@ -1806,6 +1967,7 @@ class KeyboardListener:
                 modifiers,
             )
             if candidate_result is not None and candidate_result.candidate_committed:
+                self._release_pending_replay(raw_event)
                 self._emit_capture_diagnostic(
                     app_name,
                     bundle_id,
@@ -1816,6 +1978,22 @@ class KeyboardListener:
                     selected_confidence=0.9,
                 )
                 return
+            captured_context = None
+            pre_submit_frame = raw_event.pre_submit_frame
+            pre_submit_capture_failure = raw_event.pre_submit_capture_failure
+            if raw_event.pending_replay is not None:
+                captured_context = self._capture_focused_context(
+                    target_pid=application_pid
+                )
+                if not is_secure_text_entry_context(captured_context):
+                    (
+                        pre_submit_frame,
+                        pre_submit_capture_failure,
+                    ) = self._freeze_presubmit_composer(
+                        bundle_id,
+                        application_pid,
+                    )
+                self._release_pending_replay(raw_event)
             self._emit_submission_snapshot(
                 None,
                 app_name=app_name,
@@ -1823,10 +2001,9 @@ class KeyboardListener:
                 key_modifiers=modifiers,
                 event_type=event_type,
                 target_pid=application_pid,
-                pre_submit_frame=raw_event.pre_submit_frame,
-                pre_submit_capture_failure=(
-                    raw_event.pre_submit_capture_failure
-                ),
+                pre_submit_frame=pre_submit_frame,
+                pre_submit_capture_failure=pre_submit_capture_failure,
+                captured_context=captured_context,
             )
 
     def _event_worker_loop(self):
@@ -1847,10 +2024,23 @@ class KeyboardListener:
                 if _DEBUG:
                     print(f"[DEBUG] queued keyboard event failed: {e}")
             finally:
+                if raw_event is not None:
+                    self._release_pending_replay(raw_event)
                 self._event_queue.task_done()
 
     def _event_callback(self, proxy, event_type, event, refcon):
         """Sample the native event quickly and return control to macOS."""
+        try:
+            if (
+                CGEventGetIntegerValueField(
+                    event,
+                    EVENT_SOURCE_USER_DATA_FIELD,
+                )
+                == REPLAY_EVENT_MARKER
+            ):
+                return event
+        except Exception:
+            pass
         if event_type in (
             EVENT_TAP_DISABLED_BY_TIMEOUT,
             EVENT_TAP_DISABLED_BY_USER_INPUT,
@@ -1892,8 +2082,20 @@ class KeyboardListener:
                         KEYBOARD_EVENT_AUTOREPEAT_FIELD,
                     )
                 )
-                pre_submit_frame = None
-                pre_submit_capture_failure = None
+                if (
+                    event_type == kCGEventKeyUp
+                    and keycode == ENTER_KEYCODE
+                    and self._consume_suppressed_enter_keyup(target_pid)
+                ):
+                    return None
+                if (
+                    event_type == kCGEventKeyDown
+                    and keycode == ENTER_KEYCODE
+                    and is_autorepeat
+                    and self._has_suppressed_enter_keyup(target_pid)
+                ):
+                    return None
+                pending_replay = None
                 composer_capture = self._presubmit_composer_captures.get(
                     bundle_id
                 )
@@ -1907,18 +2109,14 @@ class KeyboardListener:
                     == (app_name, bundle_id)
                     and not is_autorepeat
                     and not any(modifiers.values())
+                    and config.input_capture_mode == "enter-text"
+                    and not config.is_app_ignored(bundle_id)
+                    and self._event_worker_running
                 ):
-                    failure_prefix, _ = PRESUBMIT_OCR_METADATA[bundle_id]
-                    try:
-                        pre_submit_frame = composer_capture.freeze(target_pid)
-                        if pre_submit_frame is None:
-                            pre_submit_capture_failure = (
-                                f"{failure_prefix}_frame_unavailable"
-                            )
-                    except Exception:
-                        pre_submit_capture_failure = (
-                            f"{failure_prefix}_capture_error"
-                        )
+                    pending_replay = self._create_pending_replay(
+                        event,
+                        target_pid,
+                    )
                 raw_event = RawKeyboardEvent(
                     event_type=event_type,
                     keycode=keycode,
@@ -1929,18 +2127,22 @@ class KeyboardListener:
                     target_pid=target_pid,
                     frontmost_pid=frontmost_pid,
                     is_autorepeat=is_autorepeat,
-                    pre_submit_frame=pre_submit_frame,
-                    pre_submit_capture_failure=pre_submit_capture_failure,
+                    pending_replay=pending_replay,
                 )
                 if self._event_worker_running:
                     try:
                         self._event_queue.put_nowait(raw_event)
                     except queue.Full:
                         self._dropped_event_count += 1
+                        pending_replay = None
                 elif not self._has_started:
                     self._process_raw_event(raw_event)
                 else:
                     self._dropped_event_count += 1
+                if pending_replay is not None:
+                    self._register_suppressed_enter_keyup(target_pid)
+                    self._arm_pending_replay_watchdog(pending_replay)
+                    return None
             except Exception:
                 self._dropped_event_count += 1
         

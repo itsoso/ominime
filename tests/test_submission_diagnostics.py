@@ -107,8 +107,8 @@ def test_save_capture_diagnostic_event_persists_listener_skip(tmp_path):
             "selected_source": None,
             "selected_confidence": None,
             "physical_key_count": 0,
-            "focused_role": None,
-            "focused_subrole": None,
+            "focused_role": "AXTextArea",
+            "focused_subrole": "AXSecureTextField",
             "capture_status": "ok",
             "diagnostics": {"clipboard_copy_attempted": False},
         },
@@ -117,4 +117,6 @@ def test_save_capture_diagnostic_event_persists_listener_skip(tmp_path):
     rows = db.get_recent_capture_diagnostics(limit=1)
     assert rows[0]["decision_action"] == "skip"
     assert rows[0]["decision_reason"] == "no_trusted_content"
+    assert rows[0]["focused_role"] is None
+    assert rows[0]["focused_subrole"] is None
     assert rows[0]["diagnostics_json"] == '{"clipboard_copy_attempted": false}'

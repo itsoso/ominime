@@ -27,6 +27,8 @@ def import_keyboard_listener(monkeypatch):
     quartz.kCGEventFlagMaskAlternate = 1 << 19
     quartz.kCGEventFlagMaskCommand = 1 << 20
     quartz.kCFRunLoopDefaultMode = "default"
+    quartz.kCGEventSourceUserData = 42
+    quartz.posted_events = []
 
     for name in (
         "CGEventTapEnable",
@@ -52,6 +54,9 @@ def import_keyboard_listener(monkeypatch):
 
     quartz.CGEventTapCreate = fake_event_tap_create
     quartz.CGEventGetIntegerValueField = lambda event, field: (
+        getattr(event, "user_data", 0)
+        if field == quartz.kCGEventSourceUserData
+        else (
         getattr(event, "target_pid", 0)
         if field == 40
         else (
@@ -59,6 +64,17 @@ def import_keyboard_listener(monkeypatch):
             if field == quartz.kCGKeyboardEventAutorepeat
             else getattr(event, "keycode", 0)
         )
+        )
+    )
+    quartz.CGEventCreateCopy = lambda event: SimpleNamespace(**vars(event))
+    quartz.CGEventSetIntegerValueField = (
+        lambda event, field, value: setattr(event, "user_data", value)
+    )
+    quartz.CGEventSetType = (
+        lambda event, event_type: setattr(event, "event_type", event_type)
+    )
+    quartz.CGEventPostToPid = (
+        lambda pid, event: quartz.posted_events.append((pid, event))
     )
     quartz.CGEventKeyboardGetUnicodeString = (
         lambda event, max_length, actual_length, chars: (
@@ -193,7 +209,7 @@ class FakeKimComposerCapture:
         return self.recognize_result
 
 
-def test_event_tap_freezes_verified_kim_window_before_enter_is_enqueued(monkeypatch):
+def test_event_tap_defers_verified_kim_capture_to_worker(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     capture = FakeKimComposerCapture()
     listener = keyboard_listener.KeyboardListener(
@@ -222,9 +238,22 @@ def test_event_tap_freezes_verified_kim_window_before_enter_is_enqueued(monkeypa
     )
 
     queued = listener._event_queue.get_nowait()
+    assert capture.freeze_calls == []
+    assert queued.pre_submit_frame is None
+    assert queued.pending_replay is not None
+    assert returned is None
+
+    configure_listener_context(listener)
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_app_by_pid",
+        lambda pid: ("Kim", "Kem"),
+    )
+    listener._process_raw_event(queued)
+
     assert capture.freeze_calls == [123]
-    assert queued.pre_submit_frame == "kim-frame"
-    assert returned is native_event
+    assert len(keyboard_listener.Quartz.posted_events) == 2
+    assert keyboard_listener.Quartz.posted_events[0][0] == 123
 
 
 @pytest.mark.parametrize(
@@ -295,7 +324,7 @@ def test_queued_event_keeps_native_and_frontmost_pids(monkeypatch):
     assert queued.bundle_id == "Kem"
 
 
-def test_kim_enter_capture_failure_is_queued_without_blocking(monkeypatch):
+def test_kim_worker_capture_failure_replays_enter(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     capture = FakeKimComposerCapture(raises=True)
     listener = keyboard_listener.KeyboardListener(
@@ -324,13 +353,24 @@ def test_kim_enter_capture_failure_is_queued_without_blocking(monkeypatch):
     )
 
     queued = listener._event_queue.get_nowait()
-    assert capture.freeze_calls == [123]
+    assert capture.freeze_calls == []
     assert queued.pre_submit_frame is None
-    assert queued.pre_submit_capture_failure == "kim_ocr_capture_error"
-    assert returned is native_event
+    assert queued.pre_submit_capture_failure is None
+    assert returned is None
+
+    configure_listener_context(listener)
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_app_by_pid",
+        lambda pid: ("Kim", "Kem"),
+    )
+    listener._process_raw_event(queued)
+
+    assert capture.freeze_calls == [123]
+    assert len(keyboard_listener.Quartz.posted_events) == 2
 
 
-def test_kim_enter_missing_frame_is_queued_as_capture_failure(monkeypatch):
+def test_kim_worker_missing_frame_replays_enter(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     capture = FakeKimComposerCapture(frame=None)
     listener = keyboard_listener.KeyboardListener(
@@ -358,9 +398,20 @@ def test_kim_enter_missing_frame_is_queued_as_capture_failure(monkeypatch):
     )
 
     queued = listener._event_queue.get_nowait()
-    assert capture.freeze_calls == [123]
+    assert capture.freeze_calls == []
     assert queued.pre_submit_frame is None
-    assert queued.pre_submit_capture_failure == "kim_ocr_frame_unavailable"
+    assert queued.pre_submit_capture_failure is None
+
+    configure_listener_context(listener)
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_app_by_pid",
+        lambda pid: ("Kim", "Kem"),
+    )
+    listener._process_raw_event(queued)
+
+    assert capture.freeze_calls == [123]
+    assert len(keyboard_listener.Quartz.posted_events) == 2
 
 
 def test_kim_presubmit_does_not_trust_stale_app_identity(monkeypatch):
@@ -551,7 +602,7 @@ def test_unsupported_app_uses_native_target(monkeypatch):
     assert ("Chrome", "com.google.Chrome") not in listener._fallback_buffers
 
 
-def test_event_tap_freezes_verified_wechat_window_before_enter_is_enqueued(monkeypatch):
+def test_event_tap_defers_verified_wechat_capture_to_worker(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     capture = FakeKimComposerCapture(frame="wechat-frame")
     listener = keyboard_listener.KeyboardListener(
@@ -580,11 +631,12 @@ def test_event_tap_freezes_verified_wechat_window_before_enter_is_enqueued(monke
     )
 
     queued = listener._event_queue.get_nowait()
-    assert capture.freeze_calls == [4318]
-    assert queued.pre_submit_frame == "wechat-frame"
+    assert capture.freeze_calls == []
+    assert queued.pre_submit_frame is None
+    assert queued.pending_replay is not None
 
 
-def test_wechat_first_enter_after_restart_freezes_prepared_window(
+def test_wechat_first_enter_after_restart_queues_worker_capture(
     monkeypatch,
 ):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
@@ -620,8 +672,8 @@ def test_wechat_first_enter_after_restart_freezes_prepared_window(
     )
 
     queued = listener._event_queue.get_nowait()
-    assert capture.freeze_calls == [4318]
-    assert queued.pre_submit_frame == "wechat-frame"
+    assert capture.freeze_calls == []
+    assert queued.pending_replay is not None
 
 
 def test_app_switch_preserves_verified_kem_identity_for_immediate_enter(
@@ -664,8 +716,372 @@ def test_app_switch_preserves_verified_kem_identity_for_immediate_enter(
 
     queued = listener._event_queue.get_nowait()
     assert capture.prepare_calls == [29805]
-    assert capture.freeze_calls == [29805]
-    assert queued.pre_submit_frame == "kim-frame"
+    assert capture.freeze_calls == []
+    assert queued.pending_replay is not None
+
+
+def test_count_only_mode_never_intercepts_or_freezes_kim_enter(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    capture = FakeKimComposerCapture()
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None,
+        kim_composer_capture=capture,
+    )
+    monkeypatch.setattr(
+        keyboard_listener.config,
+        "input_capture_mode",
+        "count-only",
+    )
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_current_app_target",
+        lambda: ("Kim", "Kem", 123),
+    )
+    listener._target_app_identities[123] = ("Kim", "Kem")
+    listener._has_started = True
+    listener._event_worker_running = True
+    native_event = SimpleNamespace(
+        keycode=keyboard_listener.ENTER_KEYCODE,
+        text="",
+        target_pid=123,
+    )
+
+    returned = listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyDown,
+        native_event,
+        None,
+    )
+
+    queued = listener._event_queue.get_nowait()
+    assert returned is native_event
+    assert queued.pending_replay is None
+    assert capture.freeze_calls == []
+
+
+def test_full_worker_queue_never_suppresses_kim_enter(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    capture = FakeKimComposerCapture()
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None,
+        kim_composer_capture=capture,
+    )
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_current_app_target",
+        lambda: ("Kim", "Kem", 123),
+    )
+    listener._target_app_identities[123] = ("Kim", "Kem")
+    listener._has_started = True
+    listener._event_worker_running = True
+    listener._event_queue = keyboard_listener.queue.Queue(maxsize=1)
+    listener._event_queue.put_nowait(object())
+    native_event = SimpleNamespace(
+        keycode=keyboard_listener.ENTER_KEYCODE,
+        text="",
+        target_pid=123,
+    )
+
+    returned = listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyDown,
+        native_event,
+        None,
+    )
+
+    assert returned is native_event
+    assert capture.freeze_calls == []
+    assert keyboard_listener.Quartz.posted_events == []
+
+
+def test_ignored_kim_app_never_intercepts_enter(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    capture = FakeKimComposerCapture()
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None,
+        kim_composer_capture=capture,
+    )
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_current_app_target",
+        lambda: ("Kim", "Kem", 123),
+    )
+    monkeypatch.setattr(
+        keyboard_listener.config,
+        "is_app_ignored",
+        lambda bundle_id: bundle_id == "Kem",
+    )
+    listener._target_app_identities[123] = ("Kim", "Kem")
+    listener._has_started = True
+    listener._event_worker_running = True
+    native_event = SimpleNamespace(
+        keycode=keyboard_listener.ENTER_KEYCODE,
+        text="",
+        target_pid=123,
+    )
+
+    returned = listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyDown,
+        native_event,
+        None,
+    )
+
+    queued = listener._event_queue.get_nowait()
+    assert returned is native_event
+    assert queued.pending_replay is None
+    assert capture.freeze_calls == []
+
+
+def test_secure_kim_enter_replays_without_freezing_in_worker(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    capture = FakeKimComposerCapture()
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None,
+        kim_composer_capture=capture,
+    )
+    configure_listener_context(listener, status="ok", secure=True)
+    pending = keyboard_listener.PendingReplay(
+        event=SimpleNamespace(keycode=keyboard_listener.ENTER_KEYCODE),
+        target_pid=123,
+    )
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_app_by_pid",
+        lambda pid: ("Kim", "Kem"),
+    )
+
+    listener._process_raw_event(
+        doubao_raw_event(
+            keyboard_listener,
+            keyboard_listener.kCGEventKeyDown,
+            keyboard_listener.ENTER_KEYCODE,
+        ).__class__(
+            **{
+                **doubao_raw_event(
+                    keyboard_listener,
+                    keyboard_listener.kCGEventKeyDown,
+                    keyboard_listener.ENTER_KEYCODE,
+                ).__dict__,
+                "pending_replay": pending,
+            }
+        )
+    )
+
+    assert capture.freeze_calls == []
+    assert len(keyboard_listener.Quartz.posted_events) == 2
+
+
+def test_worker_failure_replays_suppressed_enter_once(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    listener = keyboard_listener.KeyboardListener(lambda event: None)
+    pending = keyboard_listener.PendingReplay(
+        event=SimpleNamespace(keycode=keyboard_listener.ENTER_KEYCODE),
+        target_pid=123,
+    )
+    raw_event = keyboard_listener.RawKeyboardEvent(
+        event_type=keyboard_listener.kCGEventKeyDown,
+        keycode=keyboard_listener.ENTER_KEYCODE,
+        text="",
+        app_name="Kim",
+        bundle_id="Kem",
+        modifiers={"shift": False, "ctrl": False, "alt": False, "cmd": False},
+        target_pid=123,
+        frontmost_pid=123,
+        pending_replay=pending,
+    )
+    listener._event_queue.put_nowait(raw_event)
+    monkeypatch.setattr(
+        listener,
+        "_process_raw_event",
+        lambda event: (_ for _ in ()).throw(RuntimeError("worker failed")),
+    )
+
+    listener._event_worker_loop()
+    listener._release_pending_replay(raw_event)
+
+    assert len(keyboard_listener.Quartz.posted_events) == 2
+    assert keyboard_listener.Quartz.posted_events[0][0] == 123
+
+
+def test_suppressed_enter_replays_marked_keydown_then_keyup(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    listener = keyboard_listener.KeyboardListener(lambda event: None)
+    pending = listener._create_pending_replay(
+        SimpleNamespace(keycode=keyboard_listener.ENTER_KEYCODE),
+        123,
+    )
+    raw_event = keyboard_listener.RawKeyboardEvent(
+        event_type=keyboard_listener.kCGEventKeyDown,
+        keycode=keyboard_listener.ENTER_KEYCODE,
+        text="",
+        app_name="Kim",
+        bundle_id="Kem",
+        modifiers={"shift": False, "ctrl": False, "alt": False, "cmd": False},
+        target_pid=123,
+        pending_replay=pending,
+    )
+
+    listener._release_pending_replay(raw_event)
+    listener._release_pending_replay(raw_event)
+
+    assert [
+        event.event_type
+        for _, event in keyboard_listener.Quartz.posted_events
+    ] == [
+        keyboard_listener.kCGEventKeyDown,
+        keyboard_listener.kCGEventKeyUp,
+    ]
+    assert all(
+        event.user_data == keyboard_listener.REPLAY_EVENT_MARKER
+        for _, event in keyboard_listener.Quartz.posted_events
+    )
+
+
+def test_pending_enter_watchdog_replays_when_worker_is_blocked(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    listener = keyboard_listener.KeyboardListener(lambda event: None)
+    monkeypatch.setattr(
+        keyboard_listener,
+        "ENTER_REPLAY_TIMEOUT_SECONDS",
+        0.01,
+    )
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_current_app_target",
+        lambda: ("Kim", "Kem", 123),
+    )
+    listener._target_app_identities[123] = ("Kim", "Kem")
+    listener._has_started = True
+    listener._event_worker_running = True
+
+    returned = listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyDown,
+        SimpleNamespace(
+            keycode=keyboard_listener.ENTER_KEYCODE,
+            text="",
+            target_pid=123,
+        ),
+        None,
+    )
+
+    assert returned is None
+    deadline = time.monotonic() + 0.5
+    while len(keyboard_listener.Quartz.posted_events) < 2:
+        assert time.monotonic() < deadline
+        time.sleep(0.005)
+    assert len(keyboard_listener.Quartz.posted_events) == 2
+
+
+def test_physical_keyup_is_suppressed_after_enter_pair_is_replayed(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    listener = keyboard_listener.KeyboardListener(lambda event: None)
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_current_app_target",
+        lambda: ("Kim", "Kem", 123),
+    )
+    listener._target_app_identities[123] = ("Kim", "Kem")
+    listener._has_started = True
+    listener._event_worker_running = True
+
+    listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyDown,
+        SimpleNamespace(
+            keycode=keyboard_listener.ENTER_KEYCODE,
+            text="",
+            target_pid=123,
+        ),
+        None,
+    )
+    queued = listener._event_queue.get_nowait()
+    listener._release_pending_replay(queued)
+    physical_keyup = SimpleNamespace(
+        keycode=keyboard_listener.ENTER_KEYCODE,
+        text="",
+        target_pid=123,
+    )
+
+    returned = listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyUp,
+        physical_keyup,
+        None,
+    )
+
+    assert returned is None
+    assert listener._event_queue.empty()
+    assert len(keyboard_listener.Quartz.posted_events) == 2
+
+
+def test_autorepeat_keydown_is_suppressed_until_physical_enter_keyup(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    listener = keyboard_listener.KeyboardListener(lambda event: None)
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_current_app_target",
+        lambda: ("Kim", "Kem", 123),
+    )
+    listener._target_app_identities[123] = ("Kim", "Kem")
+    listener._has_started = True
+    listener._event_worker_running = True
+
+    listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyDown,
+        SimpleNamespace(
+            keycode=keyboard_listener.ENTER_KEYCODE,
+            text="",
+            target_pid=123,
+        ),
+        None,
+    )
+    repeated_event = SimpleNamespace(
+        keycode=keyboard_listener.ENTER_KEYCODE,
+        text="",
+        target_pid=123,
+        autorepeat=1,
+    )
+
+    returned = listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyDown,
+        repeated_event,
+        None,
+    )
+
+    assert returned is None
+    assert listener._event_queue.qsize() == 1
+
+
+def test_replayed_enter_bypasses_capture_and_queue(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    capture = FakeKimComposerCapture()
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None,
+        kim_composer_capture=capture,
+    )
+    listener._has_started = True
+    listener._event_worker_running = True
+    replayed_event = SimpleNamespace(
+        keycode=keyboard_listener.ENTER_KEYCODE,
+        text="",
+        target_pid=123,
+        user_data=keyboard_listener.REPLAY_EVENT_MARKER,
+    )
+
+    returned = listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyDown,
+        replayed_event,
+        None,
+    )
+
+    assert returned is replayed_event
+    assert listener._event_queue.empty()
+    assert capture.freeze_calls == []
 
 
 def test_app_activation_ignores_kima_bundle_id(monkeypatch):

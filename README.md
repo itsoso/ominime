@@ -203,13 +203,13 @@ ominime obsidian -p /path/to/your/vault --no-raw --no-ai
 
 位于 `ignored_apps` 中的应用会被直接排除，不保存提交记录。
 
-默认会保存提交时的文字上下文元数据，例如应用、窗口标题、焦点控件和容器信息，用于 Web 复盘和捕获诊断；上下文结构不会重复保存辅助功能节点中的文字值。旧版 Kim 与微信仅在普通文字接口全部失败时，短暂使用输入区的内存画面进行本地识别；画面不会写入文件或上传。
+新提交只保存输入记录和不含窗口、控件层级的捕获诊断，不再保存提交上下文元数据。历史版本创建的 `submission_contexts` 表和既有数据会原样保留，但 Web 不再提供读取入口。旧版 Kim 与微信仅在普通文字接口全部失败时，短暂使用输入区的内存画面进行本地识别；画面不会写入文件或上传。
 
 ## 数据与隐私
 
 数据目录为 `~/.ominime/`：
 
-- `ominime.db`：SQLite 输入记录、提交上下文、捕获诊断和统计数据。
+- `ominime.db`：SQLite 输入记录、捕获诊断和统计数据；可能包含历史版本保留的提交上下文记录。
 - `config.json`：可选的用户配置文件；不存在时使用代码默认值。
 - `runtime-state.json`：菜单栏与独立 Web 进程共享的录制状态和短期心跳，不包含输入内容。
 - `ominime.log`：应用标准输出日志。
@@ -220,14 +220,13 @@ ominime obsidian -p /path/to/your/vault --no-raw --no-ai
 
 - 默认数据只写入本机 SQLite。
 - `enter-text` 模式保存可信提交原文和字符数。
-- `count-only` 模式不保存提交原文，但默认仍保存字符数以及应用、窗口和焦点控件等上下文元数据；如需同时关闭上下文元数据，请设置 `capture_context_on_enter` 为 `false`。
+- `count-only` 模式不保存提交原文，只保存字符数和不含窗口、控件层级的捕获诊断。
 - 无法可信读取原文时，系统会在有足够输入证据时只记录字符数；证据不足或内容可能不安全时仍会跳过。
 - 捕获流程不会通过通用 `Cmd+A` / `Cmd+C` 读取输入框，因此不会改动当前选择或把整页复制到剪贴板。
-- 云端 AI 后端只有在用户配置并启用后才会发送用于分析的数据，其中可能包含已记录的原文或由其生成的摘要。
 - 本地 Ollama 或本地 Qwen 后端可以在本机完成分析。
 - 可以随时从菜单栏暂停记录，或通过 `ignored_apps` 排除应用。
 
-> 输入记录可能包含聊天、命令、笔记等敏感内容。启用云端 AI 前，请先检查后端配置及将要发送的数据。
+> 输入记录可能包含聊天、命令、笔记等敏感内容。OmniMe 的分析后端仅允许使用本机模型。
 
 ## 配置
 
@@ -240,7 +239,6 @@ ominime obsidian -p /path/to/your/vault --no-raw --no-ai
   "input_capture_mode": "enter-text",
   "count_unreadable_submissions": true,
   "capture_key_event_text_fallback": true,
-  "capture_context_on_enter": true,
   "ignored_apps": [
     "com.apple.loginwindow",
     "com.apple.SecurityAgent"
@@ -254,10 +252,9 @@ ominime obsidian -p /path/to/your/vault --no-raw --no-ai
 
 | 配置 | 默认值 | 作用 |
 | --- | --- | --- |
-| `input_capture_mode` | `enter-text` | 使用 `enter-text` 保存可信原文；使用 `count-only` 不保存原文，但仍可保存字符数和上下文元数据。 |
+| `input_capture_mode` | `enter-text` | 使用 `enter-text` 保存可信原文；使用 `count-only` 不保存原文，只保存字符数和非内容诊断。 |
 | `count_unreadable_submissions` | `true` | 输入框不可读时是否降级统计物理输入量。 |
 | `capture_key_event_text_fallback` | `true` | 输入框不可读时，是否接受可信的已提交输入事件文本。 |
-| `capture_context_on_enter` | `true` | 是否保存提交时的文字上下文元数据。 |
 | `day_timezone` | `Asia/Shanghai` | “今日”、日报和统计使用的业务日时区。 |
 | `storage_timezone` | 当前环境时区或 `America/New_York` | 解释数据库无时区时间戳时使用的时区。 |
 | `ignored_apps` | 系统登录与安全界面 | 不记录指定 bundle ID 的应用。 |

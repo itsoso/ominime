@@ -102,8 +102,8 @@ def save_capture_diagnostic_event(db: Database, diagnostic: dict) -> int:
             selected_source=diagnostic.get("selected_source"),
             selected_confidence=diagnostic.get("selected_confidence"),
             physical_key_count=diagnostic.get("physical_key_count"),
-            focused_role=diagnostic.get("focused_role"),
-            focused_subrole=diagnostic.get("focused_subrole"),
+            focused_role=None,
+            focused_subrole=None,
             capture_status=diagnostic.get("capture_status", "ok"),
             diagnostics_json=_json_or_none(diagnostic.get("diagnostics")),
         )

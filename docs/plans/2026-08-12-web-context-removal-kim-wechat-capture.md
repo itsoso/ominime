@@ -4,7 +4,7 @@
 
 **Goal:** Remove the Web context surface and future context persistence while restoring trusted, local-only Kim and WeChat composer text capture.
 
-**Architecture:** Keep target-PID Accessibility reads as the primary text and secure-field signal. Construct the existing local Vision capture adapters in production, prepare window metadata during worker processing, and copy one in-memory frame for a verified Kim/WeChat plain Enter before returning the event; OCR still runs only in the worker as the final fallback. Preserve the historical SQLite context table but stop writing to and exposing it.
+**Architecture:** Keep target-PID Accessibility reads as the primary text and secure-field signal. For a verified Kim/WeChat plain Enter, the EventTap callback copies and suppresses the physical event, starts a bounded fail-open watchdog, and the worker performs the security check, copies one in-memory window frame, immediately replays a marked keyDown/keyUp pair to the target PID, and runs OCR only as the final fallback. Preserve the historical SQLite context table but stop writing to and exposing it.
 
 **Tech Stack:** Python 3.10+, FastAPI, SQLite, PyObjC Quartz/Vision, vanilla HTML/CSS/JavaScript, pytest.
 
@@ -204,9 +204,9 @@ self._presubmit_composer_captures = {
 
 If tests need to express an intentionally disabled adapter, use a private sentinel so dependency injection can distinguish “not provided” from an explicit test override. Do not add a user-facing feature switch.
 
-**Step 5: Freeze the verified window before returning Enter**
+**Step 5: Defer capture by suppressing and replaying verified Enter**
 
-In `_event_callback()`, freeze only when all of these hold: keydown, Enter, no modifier, no autorepeat, supported bundle, target PID equals frontmost PID, and the prepared identity matches. Attach only the in-memory frame or non-content failure code to `RawKeyboardEvent`.
+In `_event_callback()`, suppress only when all of these hold: keydown, Enter, no modifier, no autorepeat, `enter-text` mode, non-ignored supported bundle, target PID equals frontmost PID, and the prepared identity matches. Copy and mark a keyDown/keyUp replay pair, attach it to `RawKeyboardEvent`, start a bounded watchdog, and return `None` only after the request is successfully queued. Consume the matching physical keyUp so the target receives exactly one ordered pair.
 
 ```python
 def _freeze_presubmit_composer(self, bundle_id: str, target_pid: int):
@@ -221,7 +221,7 @@ def _freeze_presubmit_composer(self, bundle_id: str, target_pid: int):
     return frame, None if frame is not None else f"{failure_prefix}_frame_unavailable"
 ```
 
-Do not enumerate windows, run OCR, or read input-source APIs in `_event_callback()`. The worker preserves source priority and calls `recognize()` only after AXValue, candidate text, and key-event text fail. Keep preparation on non-Enter worker events and the app-activation watcher.
+Do not enumerate windows, copy pixels, run OCR, or read AX/input-source APIs in `_event_callback()`. The worker checks secure input, copies the prepared window only when safe, immediately posts the marked Enter pair to its original target PID, then preserves source priority and calls `recognize()` only after AXValue, candidate text, and key-event text fail. A worker `finally` and a 200ms watchdog both call the same idempotent release path.
 
 **Step 6: Run focused tests and verify GREEN**
 
