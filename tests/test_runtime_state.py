@@ -64,3 +64,14 @@ def test_invalid_shared_state_degrades_to_visible_unknown(tmp_path, monkeypatch)
 
     assert loaded.recording_status == "unknown"
     assert loaded.last_error == "runtime_state_unreadable"
+
+
+def test_runtime_error_is_visible_without_stopping_a_live_listener(tmp_path, monkeypatch):
+    monkeypatch.setattr(runtime_state, "_state_file_path", tmp_path / "state.json")
+    runtime_state.set_recording_status("recording")
+
+    updated = runtime_state.record_runtime_error("event_worker_failed:boom")
+
+    assert updated.recording_status == "recording"
+    assert updated.is_recording is True
+    assert updated.last_error == "event_worker_failed:boom"

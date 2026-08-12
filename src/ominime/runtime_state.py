@@ -161,6 +161,22 @@ def refresh_runtime_heartbeat() -> RuntimeState:
         return _state
 
 
+def record_runtime_error(error: str) -> RuntimeState:
+    """Expose a recoverable listener error without claiming recording stopped."""
+    global _state
+    now = _utcnow()
+    with _lock:
+        current = _read_shared_state() or _state
+        _state = replace(
+            current,
+            status_updated_at=now,
+            process_id=os.getpid(),
+            last_error=error,
+        )
+        _write_shared_state(_state)
+        return _state
+
+
 def reset_runtime_state() -> RuntimeState:
     """Reset in-memory and shared state. Primarily used by tests."""
     global _state

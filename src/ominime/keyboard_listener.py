@@ -77,7 +77,7 @@ from .wechat_composer_capture import (
     WECHAT_BUNDLE_ID,
     WeChatPreSubmitCapture,
 )
-from .runtime_state import refresh_runtime_heartbeat, set_recording_status
+from .runtime_state import record_runtime_error, refresh_runtime_heartbeat, set_recording_status
 from .time_utils import storage_now
 
 
@@ -1836,6 +1836,7 @@ class KeyboardListener:
                         continue
                     self._process_raw_event(raw_event)
             except Exception as e:
+                record_runtime_error(f"event_worker_failed:{e}")
                 if _DEBUG:
                     print(f"[DEBUG] queued keyboard event failed: {e}")
             finally:
@@ -1982,6 +1983,7 @@ class KeyboardListener:
             dropped_event_count = self._dropped_event_count
             if dropped_event_count:
                 self._dropped_event_count = 0
+                record_runtime_error(f"event_queue_dropped:{dropped_event_count}")
                 print(f"⚠️  键盘事件队列已丢弃 {dropped_event_count} 个采样事件")
 
             if not self._is_tap_healthy():

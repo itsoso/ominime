@@ -896,6 +896,38 @@ def test_start_does_not_leave_worker_running_when_app_watcher_fails(
     assert listener._event_worker_thread is None
 
 
+def test_event_worker_failure_is_reported_to_runtime_state(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    errors = []
+    listener = keyboard_listener.KeyboardListener(lambda event: None)
+    listener._event_worker_running = False
+    listener._event_queue.put(
+        keyboard_listener.RawKeyboardEvent(
+            event_type=keyboard_listener.kCGEventKeyDown,
+            keycode=8,
+            text="c",
+            app_name="Codex",
+            bundle_id="com.openai.codex",
+            modifiers={},
+        )
+    )
+    monkeypatch.setattr(
+        listener,
+        "_process_raw_event",
+        lambda _event: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    monkeypatch.setattr(
+        keyboard_listener,
+        "record_runtime_error",
+        errors.append,
+        raising=False,
+    )
+
+    listener._event_worker_loop()
+
+    assert errors == ["event_worker_failed:boom"]
+
+
 def test_enter_keydown_and_keyup_produce_one_submission_attempt(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     events = []

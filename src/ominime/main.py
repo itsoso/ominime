@@ -36,15 +36,8 @@ def check_permissions():
 
 
 def cmd_start(args):
-    """启动 Menu Bar 应用（旧版）"""
-    console.print("[bold green]🚀 启动 OmniMe Menu Bar 应用...[/bold green]")
-    
-    if not check_permissions():
-        console.print("[red]请授予权限后重新运行[/red]")
-        return
-    
-    from .menu_bar import run_menu_bar_app
-    run_menu_bar_app()
+    """兼容旧命令，启动唯一的桌面应用实现。"""
+    return cmd_app(args)
 
 
 def cmd_app(args):

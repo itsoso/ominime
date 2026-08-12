@@ -18,8 +18,7 @@ from datetime import date
 from typing import Optional
 
 from .keyboard_listener import KeyboardListener, KeyEvent, check_accessibility_permission, request_accessibility_permission
-from .app_tracker import AppTracker
-from .database import get_database, InputRecord
+from .database import get_database
 from .config import config
 from .input_snapshot import normalize_submission_text, should_save_submission_snapshot
 from .ime_candidate_capture import refresh_input_source_cache
@@ -78,7 +77,6 @@ class OmniMeMenuBarApp(rumps.App):
         )
         
         self.listener: Optional[KeyboardListener] = None
-        self.tracker = AppTracker()
         self.db = get_database()
         
         self._is_recording = False
@@ -257,28 +255,6 @@ class OmniMeMenuBarApp(rumps.App):
         except Exception as e:
             print(f"保存捕获诊断失败: {e}")
     
-    def _save_session(self, session):
-        """保存会话到数据库"""
-        if not session.buffer:
-            return
-        
-        record = InputRecord(
-            id=None,
-            timestamp=session.last_activity,
-            app_name=session.app_name,
-            app_bundle_id=session.app_bundle_id,
-            display_name=config.get_app_display_name(session.app_bundle_id, session.app_name),
-            content=session.buffer,
-            char_count=len(session.buffer),
-            session_id=session.session_id,
-            duration_seconds=(session.last_activity - session.start_time).total_seconds(),
-        )
-        
-        try:
-            self.db.save_input_record(record)
-        except Exception as e:
-            print(f"保存记录失败: {e}")
-    
     def _update_title(self, force=False):
         """更新状态栏标题（节流：最多每秒更新一次）"""
         now = time.monotonic()
@@ -367,10 +343,6 @@ class OmniMeMenuBarApp(rumps.App):
     def _stop_recording(self, sender):
         """停止记录"""
         if self.listener:
-            self.tracker.flush_current_session()
-            if self.tracker._current_session:
-                self._save_session(self.tracker._current_session)
-            
             self.listener.stop()
             self.listener = None
         
@@ -470,7 +442,7 @@ class OmniMeMenuBarApp(rumps.App):
     def _open_data_dir(self, _):
         """打开数据目录"""
         try:
-            os.system(f'open "{config.data_dir}"')
+            subprocess.run(["open", str(config.data_dir)], check=True)
         except Exception as e:
             print(f"打开数据目录错误: {e}")
             rumps.alert(
@@ -673,9 +645,6 @@ class OmniMeMenuBarApp(rumps.App):
         """退出应用"""
         # 停止记录
         if self.listener:
-            self.tracker.flush_current_session()
-            if self.tracker._current_session:
-                self._save_session(self.tracker._current_session)
             self.listener.stop()
         
         # 停止定时器
