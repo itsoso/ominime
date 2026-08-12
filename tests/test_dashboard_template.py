@@ -48,3 +48,10 @@ def test_dashboard_has_no_qwen_multimodal_panel():
     assert "Qwen 多模态识别" not in html
     assert "qwen_analysis" not in html
     assert "qwen_model" not in html
+
+
+def test_dashboard_explains_remote_ai_data_transfer():
+    html = TEMPLATE.read_text(encoding="utf-8")
+
+    assert "显式启用远程 AI" in html
+    assert "分析内容会发送" in html

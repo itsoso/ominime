@@ -214,7 +214,14 @@ class Analyzer:
         backend = self._get_llm_backend()
         if backend:
             return self._ai_generate_summary(app_stats, target_date)
-        
+
+        return self._generate_basic_summary(app_stats)
+
+    def _generate_basic_summary(self, app_stats: List[AppDailyStats]) -> str:
+        """Generate a local rules-based summary without entering an AI path."""
+        if not app_stats:
+            return "今日暂无输入记录。"
+
         # 基础总结
         total_chars = sum(s.total_chars for s in app_stats)
         top_app = max(app_stats, key=lambda x: x.total_chars)
@@ -241,7 +248,7 @@ class Analyzer:
         """使用 AI 生成总结"""
         backend = self._get_llm_backend()
         if not backend:
-            return self._generate_summary(app_stats, target_date)
+            return self._generate_basic_summary(app_stats)
         
         # 准备数据
         stats_text = "\n".join([
@@ -292,7 +299,7 @@ class Analyzer:
             return response.content.strip()
         except Exception as e:
             print(f"AI 总结生成失败: {e}")
-            return self._generate_summary(app_stats, target_date)
+            return self._generate_basic_summary(app_stats)
     
     def _generate_suggestions(
         self, 

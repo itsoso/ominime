@@ -40,7 +40,7 @@ class AppConfig:
     # 日志目录
     log_dir: Path = field(default_factory=lambda: Path.home() / ".ominime" / "logs")
     
-    # 是否启用 AI 总结（如果提供了 API Key 则自动启用）
+    # 是否启用 AI 总结。远程分析必须由用户显式开启。
     ai_enabled: bool = field(default=False)
     
     # OpenAI API Key (从环境变量或 .env 文件读取)
@@ -134,9 +134,6 @@ class AppConfig:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.log_dir.mkdir(parents=True, exist_ok=True)
         
-        # 如果提供了 API Key，自动启用 AI 功能
-        if self.openai_api_key and not self.ai_enabled:
-            self.ai_enabled = True
     
     def get_app_display_name(self, bundle_id: str, default_name: str) -> str:
         """获取应用显示名称"""
@@ -217,10 +214,6 @@ class AppConfig:
                     config.capture_key_event_text_fallback,
                 )
                 config.capture_context_on_enter = data.get("capture_context_on_enter", config.capture_context_on_enter)
-        
-        # 如果提供了 API Key，自动启用 AI 功能
-        if config.openai_api_key and not config.ai_enabled:
-            config.ai_enabled = True
         
         return config
 

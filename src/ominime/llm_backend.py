@@ -216,7 +216,8 @@ class OllamaBackend(LLMBackend):
                     "temperature": temperature,
                     "num_predict": max_tokens,
                 }
-            }
+            },
+            timeout=30,
         )
         response.raise_for_status()
         
