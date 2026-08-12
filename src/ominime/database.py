@@ -427,34 +427,6 @@ class Database:
             cursor.execute("SELECT id FROM submission_contexts WHERE submission_id = ?", (record.submission_id,))
             return cursor.fetchone()["id"]
 
-    def update_submission_context_analysis(
-        self,
-        submission_id: str,
-        analysis_status: str,
-        qwen_analysis_json: Optional[str] = None,
-        qwen_raw_output: Optional[str] = None,
-        qwen_model: Optional[str] = None,
-        analysis_error: Optional[str] = None,
-    ):
-        """更新 Qwen 多模态分析结果"""
-        with self._get_connection() as conn:
-            conn.execute("""
-                UPDATE submission_contexts
-                SET analysis_status = ?,
-                    qwen_analysis_json = ?,
-                    qwen_raw_output = ?,
-                    qwen_model = ?,
-                    analysis_error = ?
-                WHERE submission_id = ?
-            """, (
-                analysis_status,
-                qwen_analysis_json,
-                qwen_raw_output,
-                qwen_model,
-                analysis_error,
-                submission_id,
-            ))
-
     def get_submission_context(self, submission_id: str) -> Optional[SubmissionContextRecord]:
         """按 submission_id 查询上下文记录"""
         with self._get_connection() as conn:

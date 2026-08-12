@@ -22,9 +22,8 @@ echo "请选择要使用的本地 LLM 方案:"
 echo ""
 echo "1) Ollama (推荐 - 最简单，资源管理好)"
 echo "2) 本地 Qwen 模型 (需要更多内存，但更灵活)"
-echo "3) 保持使用 OpenAI API"
 echo ""
-read -p "请输入选项 (1-3): " choice
+read -p "请输入选项 (1-2): " choice
 
 case $choice in
     1)
@@ -91,15 +90,15 @@ case $choice in
         echo "配置信息:"
         echo "  LLM_BACKEND=ollama"
         echo "  OLLAMA_MODEL=$MODEL"
-        echo "  OLLAMA_BASE_URL=http://localhost:11434"
+        echo "  OLLAMA_BASE_URL=http://127.0.0.1:11434"
         echo ""
         
         # 更新 .env 文件
         if [ -f "$PROJECT_ROOT/.env" ]; then
-            # 备份
-            cp "$PROJECT_ROOT/.env" "$PROJECT_ROOT/.env.backup"
-            
             # 更新配置
+            sed -i '' '/^OPENAI_API_KEY=/d' "$PROJECT_ROOT/.env"
+            sed -i '' '/^OPENAI_MODEL=/d' "$PROJECT_ROOT/.env"
+            sed -i '' '/^OPENAI_BASE_URL=/d' "$PROJECT_ROOT/.env"
             sed -i '' '/^LLM_BACKEND=/d' "$PROJECT_ROOT/.env"
             sed -i '' '/^OLLAMA_MODEL=/d' "$PROJECT_ROOT/.env"
             sed -i '' '/^OLLAMA_BASE_URL=/d' "$PROJECT_ROOT/.env"
@@ -108,7 +107,8 @@ case $choice in
             echo "# Ollama 配置" >> "$PROJECT_ROOT/.env"
             echo "LLM_BACKEND=ollama" >> "$PROJECT_ROOT/.env"
             echo "OLLAMA_MODEL=$MODEL" >> "$PROJECT_ROOT/.env"
-            echo "OLLAMA_BASE_URL=http://localhost:11434" >> "$PROJECT_ROOT/.env"
+            echo "OLLAMA_BASE_URL=http://127.0.0.1:11434" >> "$PROJECT_ROOT/.env"
+            chmod 600 "$PROJECT_ROOT/.env"
             
             echo "✅ .env 文件已更新"
         else
@@ -166,10 +166,10 @@ case $choice in
         
         # 更新 .env 文件
         if [ -f "$PROJECT_ROOT/.env" ]; then
-            # 备份
-            cp "$PROJECT_ROOT/.env" "$PROJECT_ROOT/.env.backup"
-            
             # 更新配置
+            sed -i '' '/^OPENAI_API_KEY=/d' "$PROJECT_ROOT/.env"
+            sed -i '' '/^OPENAI_MODEL=/d' "$PROJECT_ROOT/.env"
+            sed -i '' '/^OPENAI_BASE_URL=/d' "$PROJECT_ROOT/.env"
             sed -i '' '/^LLM_BACKEND=/d' "$PROJECT_ROOT/.env"
             sed -i '' '/^QWEN_MODEL=/d' "$PROJECT_ROOT/.env"
             
@@ -177,21 +177,12 @@ case $choice in
             echo "# 本地 Qwen 配置" >> "$PROJECT_ROOT/.env"
             echo "LLM_BACKEND=qwen-local" >> "$PROJECT_ROOT/.env"
             echo "QWEN_MODEL=$MODEL" >> "$PROJECT_ROOT/.env"
+            chmod 600 "$PROJECT_ROOT/.env"
             
             echo "✅ .env 文件已更新"
         else
             echo "⚠️  未找到 .env 文件，请手动添加配置"
         fi
-        ;;
-        
-    3)
-        echo ""
-        echo "📦 保持使用 OpenAI API"
-        echo ""
-        echo "请确保 .env 文件中配置了:"
-        echo "  LLM_BACKEND=openai"
-        echo "  OPENAI_API_KEY=sk-xxx"
-        echo ""
         ;;
         
     *)

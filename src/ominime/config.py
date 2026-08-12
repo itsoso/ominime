@@ -40,14 +40,8 @@ class AppConfig:
     # 日志目录
     log_dir: Path = field(default_factory=lambda: Path.home() / ".ominime" / "logs")
     
-    # 是否启用 AI 总结。远程分析必须由用户显式开启。
+    # 是否启用本地 AI 总结。
     ai_enabled: bool = field(default=False)
-    
-    # OpenAI API Key (从环境变量或 .env 文件读取)
-    openai_api_key: Optional[str] = field(default_factory=lambda: os.getenv("OPENAI_API_KEY"))
-    
-    # OpenAI 模型
-    openai_model: str = "gpt-4o-mini"
     
     # 应用别名映射 (bundle_id -> 显示名称)
     app_aliases: Dict[str, str] = field(default_factory=lambda: {
@@ -149,7 +143,6 @@ class AppConfig:
         config_path = path or (self.data_dir / "config.json")
         config_data = {
             "ai_enabled": self.ai_enabled,
-            "openai_model": self.openai_model,
             "app_aliases": self.app_aliases,
             "ignored_apps": self.ignored_apps,
             "session_timeout": self.session_timeout,
@@ -182,24 +175,16 @@ class AppConfig:
                 load_dotenv(override=True)
             
             # 从环境变量更新配置
-            env_api_key = os.getenv("OPENAI_API_KEY")
-            if env_api_key:
-                config.openai_api_key = env_api_key
-            
-            env_model = os.getenv("OPENAI_MODEL")
-            if env_model:
-                config.openai_model = env_model
-            
             env_ai_enabled = os.getenv("AI_ENABLED")
             if env_ai_enabled:
                 config.ai_enabled = env_ai_enabled.lower() in ("true", "1", "yes", "on")
         
         # 从 config.json 加载配置（会覆盖环境变量中的部分设置）
         if config_path.exists():
+            config_path.chmod(0o600)
             with open(config_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 config.ai_enabled = data.get("ai_enabled", config.ai_enabled)
-                config.openai_model = data.get("openai_model", config.openai_model)
                 config.app_aliases.update(data.get("app_aliases", {}))
                 config.ignored_apps = data.get("ignored_apps", config.ignored_apps)
                 config.session_timeout = data.get("session_timeout", config.session_timeout)

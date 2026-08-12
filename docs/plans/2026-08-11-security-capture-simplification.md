@@ -4,7 +4,7 @@
 
 **Goal:** 封住本地输入数据暴露与跨应用误归属，移除伪多模态分析和 EventTap 截图风险，并统一隐私、统计、依赖与部署语义。
 
-**Architecture:** 保留现有 Enter snapshot 持久化主链路，把原生 callback 收缩为事件采样；worker 只读取目标 PID 的最小 AX 信息。Web 采用 loopback/同源边界，远程 AI 只允许显式启用；历史数据库列保留兼容，但运行时不再产生 Qwen 数据。
+**Architecture:** 保留现有 Enter snapshot 持久化主链路，把原生 callback 收缩为事件采样；worker 只读取目标 PID 的最小 AX 信息。Web 采用 loopback/同源边界，AI 只使用 loopback Ollama 或进程内 Qwen；历史数据库列保留兼容，但运行时不再产生 Qwen-VL 数据。
 
 **Tech Stack:** Python 3.10+、PyObjC、FastAPI、SQLite、rumps、pytest、原生 HTML/JavaScript。
 
@@ -148,7 +148,7 @@ Run: `PYTHONPATH=src venv/bin/python -m pytest tests/test_submission_processor.p
 
 Expected: PASS。
 
-### Task 5: AI 显式同意和可靠回退
+### Task 5: 本地 AI 边界和可靠回退
 
 **Files:**
 - Modify: `src/ominime/config.py`
@@ -161,10 +161,10 @@ Expected: PASS。
 
 **Step 1: Write failing tests**
 
-- 有 `OPENAI_API_KEY` 但未显式开启时 `ai_enabled` 仍为 false。
+- 配置、后端工厂和安装元数据中不再存在 OpenAI Key/后端。
 - backend.chat 抛错时规则总结只执行一次且正常返回。
 - Ollama POST 使用有限 timeout。
-- UI/关于文本准确说明远程 AI 可能发送内容。
+- UI/关于文本准确说明 AI 仅使用本地模型。
 
 **Step 2: Run tests to verify RED**
 
@@ -174,10 +174,11 @@ Expected: 自动开启和递归回退测试失败。
 
 **Step 3: Implement minimal fix**
 
-- 删除根据 API Key 自动开启 AI 的两处逻辑。
+- 删除 OpenAI 配置、后端类、可选依赖和文档入口。
+- 默认使用 Ollama，并拒绝非 loopback 的 Ollama 地址。
 - 提取纯规则 `_generate_basic_summary()`，AI 失败直接调用它。
 - 为 Ollama chat 设置明确 timeout。
-- 修改本地存储声明，区分本地默认与显式远程分析。
+- 修改本地存储声明，明确本地 AI 边界。
 
 **Step 4: Run tests to verify GREEN**
 
@@ -336,4 +337,3 @@ Expected: 只包含本计划文件；用户原有未跟踪文件未被暂存或�
 **Step 5: Commit in coherent slices**
 
 仅用显式路径暂存每一阶段，禁止 `git add -A`。部署前回到干净、已验证的主干集成状态。
-

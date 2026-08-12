@@ -22,7 +22,7 @@ if [ -f "$ENV_FILE" ]; then
     set +a
 fi
 
-# 清除代理设置（避免 OpenAI 连接问题）
+# 避免本地 Ollama 请求被代理转发
 unset all_proxy ALL_PROXY http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
 
 # 创建日志目录

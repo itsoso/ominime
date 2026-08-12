@@ -246,8 +246,7 @@ ominime obsidian -p /path/to/your/vault --no-raw --no-ai
     "com.apple.SecurityAgent"
   ],
   "session_timeout": 300,
-  "ai_enabled": false,
-  "openai_model": "gpt-4o-mini"
+  "ai_enabled": false
 }
 ```
 
@@ -283,11 +282,13 @@ osascript -e 'id of app "Safari"'
 
 ## 可选 AI 分析
 
-AI 功能用于生成每日总结、主题、工作重点、工作路径和建议。支持 OpenAI 兼容 API、本地 Ollama 和本地 Qwen；不开启 AI 不影响输入记录、统计和导出基础数据。
+AI 功能用于生成每日总结、主题、工作重点、工作路径和建议，仅支持本地 Ollama 和本地 Qwen。AI 默认关闭；只有显式设置 `AI_ENABLED=true` 才会启用，不开启 AI 不影响输入记录、统计和导出基础数据。
+
+OmniMe 不读取 OpenAI Key，也不提供远程模型后端。阿里云 TokenPlan 同样是远程服务，因此当前版本不接入。
 
 ```bash
 ./scripts/setup_local_llm.sh
-python3 scripts/test_llm.py
+python3 scripts/check_llm.py
 ```
 
 详细说明：

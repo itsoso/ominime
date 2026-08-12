@@ -617,7 +617,7 @@
         </div>
 
         <footer class="footer">
-            <p>OmniMe v0.1.0 - 数据默认仅存储在本地；显式启用远程 AI 后，分析内容会发送至所选服务</p>
+            <p>OmniMe v0.1.0 - 数据仅存储在本地；AI 分析仅使用本地模型</p>
         </footer>
     </div>
 
@@ -1085,7 +1085,7 @@
                 updateThemeAnalysis(theme);
             } catch (error) {
                 console.error('加载主题分析失败:', error);
-                container.innerHTML = '<div class="empty-state"><div class="icon">❌</div><p>分析失败，请确保已配置 OpenAI API Key</p></div>';
+                container.innerHTML = '<div class="empty-state"><div class="icon">❌</div><p>分析失败，请确认本地 Ollama 或 Qwen 模型可用</p></div>';
             }
         }
 

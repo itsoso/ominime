@@ -2,16 +2,16 @@
 LLM 后端抽象层
 
 支持多种大模型后端：
-- OpenAI API
 - 本地 Qwen 模型（通过 transformers）
 - 本地 Ollama 服务
-- 自定义 API（兼容 OpenAI 格式）
 """
 
 import os
+import ipaddress
 from abc import ABC, abstractmethod
 from typing import Optional, List, Dict, Any
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 
 @dataclass
@@ -46,60 +46,6 @@ class LLMBackend(ABC):
     def is_available(self) -> bool:
         """检查后端是否可用"""
         pass
-
-
-class OpenAIBackend(LLMBackend):
-    """OpenAI API 后端"""
-    
-    def __init__(self, api_key: str, model: str = "gpt-4o-mini", base_url: Optional[str] = None):
-        self.api_key = api_key
-        self.model = model
-        self.base_url = base_url
-        self._client = None
-    
-    def _get_client(self):
-        if self._client is None:
-            try:
-                from openai import OpenAI
-                self._client = OpenAI(
-                    api_key=self.api_key,
-                    base_url=self.base_url
-                )
-            except ImportError:
-                raise ImportError("请安装 openai: pip install openai")
-        return self._client
-    
-    def chat(
-        self,
-        messages: List[LLMMessage],
-        temperature: float = 0.7,
-        max_tokens: int = 1000,
-    ) -> LLMResponse:
-        client = self._get_client()
-        
-        response = client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": m.role, "content": m.content} for m in messages],
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-        
-        return LLMResponse(
-            content=response.choices[0].message.content,
-            model=response.model,
-            usage={
-                "prompt_tokens": response.usage.prompt_tokens,
-                "completion_tokens": response.usage.completion_tokens,
-                "total_tokens": response.usage.total_tokens,
-            }
-        )
-    
-    def is_available(self) -> bool:
-        try:
-            self._get_client()
-            return True
-        except Exception:
-            return False
 
 
 class QwenLocalBackend(LLMBackend):
@@ -194,9 +140,17 @@ class QwenLocalBackend(LLMBackend):
 class OllamaBackend(LLMBackend):
     """Ollama 本地服务后端"""
     
-    def __init__(self, model: str = "qwen2.5:7b", base_url: str = "http://localhost:11434"):
+    def __init__(self, model: str = "qwen2.5:7b", base_url: str = "http://127.0.0.1:11434"):
+        parsed = urlparse(base_url)
+        hostname = parsed.hostname
+        try:
+            is_loopback_ip = bool(hostname and ipaddress.ip_address(hostname).is_loopback)
+        except ValueError:
+            is_loopback_ip = False
+        if parsed.scheme != "http" or not (hostname == "localhost" or is_loopback_ip):
+            raise ValueError("Ollama endpoint must use HTTP on a loopback address")
         self.model = model
-        self.base_url = base_url
+        self.base_url = base_url.rstrip("/")
     
     def chat(
         self,
@@ -242,30 +196,22 @@ class LLMBackendFactory:
     @staticmethod
     def create_from_config() -> Optional[LLMBackend]:
         """从配置创建后端"""
-        backend_type = os.getenv("LLM_BACKEND", "openai").lower()
-        
-        if backend_type == "openai":
-            api_key = os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                return None
-            
-            return OpenAIBackend(
-                api_key=api_key,
-                model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-                base_url=os.getenv("OPENAI_BASE_URL")  # 支持自定义 API 地址
-            )
-        
-        elif backend_type == "qwen-local":
+        backend_type = os.getenv("LLM_BACKEND", "ollama").lower()
+
+        if backend_type == "qwen-local":
             model_name = os.getenv("QWEN_MODEL", "Qwen/Qwen2.5-7B-Instruct")
             backend = QwenLocalBackend(model_name=model_name)
             if backend.is_available():
                 return backend
             return None
         
-        elif backend_type == "ollama":
+        if backend_type == "ollama":
             model = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
-            base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-            backend = OllamaBackend(model=model, base_url=base_url)
+            base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+            try:
+                backend = OllamaBackend(model=model, base_url=base_url)
+            except ValueError:
+                return None
             if backend.is_available():
                 return backend
             return None

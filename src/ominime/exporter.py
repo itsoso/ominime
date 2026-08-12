@@ -110,16 +110,13 @@ class ObsidianExporter:
         try:
             backend = get_llm_backend()
             if backend:
-                backend_type = os.getenv("LLM_BACKEND", "openai")
+                backend_type = os.getenv("LLM_BACKEND", "ollama")
                 if backend_type == "ollama":
                     model = os.getenv("OLLAMA_MODEL", "unknown")
                     return model.replace(":", "-")
                 elif backend_type == "qwen-local":
                     model = os.getenv("QWEN_MODEL", "qwen-local")
                     return model.split("/")[-1] if "/" in model else model
-                elif backend_type == "openai":
-                    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-                    return model
             return "no-ai"
         except Exception:
             return "no-ai"

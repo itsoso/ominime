@@ -17,15 +17,8 @@ from ominime.llm_backend import LLMMessage, get_llm_backend
 
 
 def check_backend() -> bool:
-    backend_type = os.getenv("LLM_BACKEND", "openai")
+    backend_type = os.getenv("LLM_BACKEND", "ollama")
     print(f"LLM_BACKEND: {backend_type}")
-    if backend_type == "openai":
-        print(f"OPENAI_MODEL: {os.getenv('OPENAI_MODEL', 'gpt-4o-mini')}")
-        print(
-            "OPENAI_API_KEY: configured"
-            if os.getenv("OPENAI_API_KEY")
-            else "OPENAI_API_KEY: not configured"
-        )
 
     try:
         backend = get_llm_backend()

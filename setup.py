@@ -24,9 +24,6 @@ setup(
         "requests>=2.31.0",
         "rich>=13.0.0",
     ],
-    extras_require={
-        "ai": ["openai>=1.0.0"],
-    },
     entry_points={
         "console_scripts": [
             "ominime=ominime.main:main",

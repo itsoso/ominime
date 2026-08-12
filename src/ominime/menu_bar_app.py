@@ -633,8 +633,7 @@ class OmniMeMenuBarApp(rumps.App):
 • Web 后台管理
 • 开机自动启动
 
-数据默认仅存储在本地；显式启用远程 AI 后，
-分析内容会发送至所选服务。"""
+数据仅存储在本地；AI 分析仅使用本地模型。"""
         
         rumps.alert(
             title="❓ 关于 OmniMe",

@@ -50,11 +50,12 @@ def test_dashboard_has_no_qwen_multimodal_panel():
     assert "qwen_model" not in html
 
 
-def test_dashboard_explains_remote_ai_data_transfer():
+def test_dashboard_describes_local_only_ai():
     html = TEMPLATE.read_text(encoding="utf-8")
 
-    assert "显式启用远程 AI" in html
-    assert "分析内容会发送" in html
+    assert "AI 分析仅使用本地模型" in html
+    assert "OpenAI API Key" not in html
+    assert "远程 AI" not in html
 
 
 def test_dashboard_does_not_present_an_efficiency_score():
