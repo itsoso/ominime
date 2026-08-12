@@ -204,9 +204,9 @@ self._presubmit_composer_captures = {
 
 If tests need to express an intentionally disabled adapter, use a private sentinel so dependency injection can distinguish “not provided” from an explicit test override. Do not add a user-facing feature switch.
 
-**Step 5: Freeze only in the worker and only for eligible Enter fallback**
+**Step 5: Freeze lazily in the worker and only for eligible Enter fallback**
 
-Add a small helper called by `_process_raw_event()` after ignored/modifier/candidate-commit checks and before `_emit_submission_snapshot()`:
+Add a small helper used by `_emit_submission_snapshot()` only after the secure-field check and only inside the two existing OCR fallback branches:
 
 ```python
 def _freeze_presubmit_composer(self, bundle_id: str, target_pid: int):
@@ -221,7 +221,7 @@ def _freeze_presubmit_composer(self, bundle_id: str, target_pid: int):
     return frame, None if frame is not None else f"{failure_prefix}_frame_unavailable"
 ```
 
-Pass the returned frame/failure into `_emit_submission_snapshot()`. Do not call this helper from `_event_callback()`. Keep preparation on non-Enter worker events and the app-activation watcher.
+When an injected `pre_submit_frame` is already present, preserve it for compatibility tests. Otherwise call this helper immediately before the existing `recognize()` call. Do not call this helper from `_event_callback()` or before checking secure input, AXValue, candidate text, and key-event text. Keep preparation on non-Enter worker events and the app-activation watcher.
 
 **Step 6: Run focused tests and verify GREEN**
 
