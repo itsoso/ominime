@@ -4,9 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OmniMe - 输入追踪仪表板</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
@@ -789,7 +786,7 @@
                 <li class="app-item">
                     <div class="app-icon">${appIcons[app.display_name] || appIcons.default}</div>
                     <div class="app-info">
-                        <div class="app-name">${app.display_name}</div>
+                        <div class="app-name">${escapeHtml(app.display_name)}</div>
                         <div class="app-stats-text">${app.total_chars.toLocaleString()} 字符</div>
                     </div>
                     <div>
@@ -914,7 +911,7 @@
                 <div class="work-path-stats">
                     <div class="work-path-stat-item">
                         <div class="stat-label">工作模式</div>
-                        <div class="stat-value">${workPath.work_pattern}</div>
+                        <div class="stat-value">${escapeHtml(workPath.work_pattern)}</div>
                     </div>
                     <div class="work-path-stat-item">
                         <div class="stat-label">效率分数</div>
@@ -963,7 +960,7 @@
                                             ${start.toLocaleTimeString('zh-CN', {hour: '2-digit', minute: '2-digit'})} - 
                                             ${end.toLocaleTimeString('zh-CN', {hour: '2-digit', minute: '2-digit'})}
                                         </div>
-                                        <div class="focus-period-app">${p.app}</div>
+                                        <div class="focus-period-app">${escapeHtml(p.app)}</div>
                                         <div class="focus-period-duration">${Math.round(p.duration_minutes)} 分钟</div>
                                     </div>
                                 `;
@@ -996,7 +993,7 @@
                             <div class="app-content-info">
                                 <div class="app-content-icon">${appIcons[app.display_name] || appIcons.default}</div>
                                 <div>
-                                    <div class="app-content-name">${app.display_name}</div>
+                                    <div class="app-content-name">${escapeHtml(app.display_name)}</div>
                                     <div class="app-content-stats">${app.total_chars.toLocaleString()} 字符 · ${app.session_count} 个片段</div>
                                 </div>
                             </div>

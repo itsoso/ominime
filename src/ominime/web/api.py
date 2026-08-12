@@ -7,13 +7,13 @@ Web API 模块
 from datetime import date, datetime, timedelta
 from typing import List, Optional
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from pydantic import BaseModel
 import os
 from pathlib import Path
 import json
+from urllib.parse import urlsplit
 
 from ..database import get_database, InputRecord
 from ..analyzer import get_analyzer
@@ -30,14 +30,30 @@ app = FastAPI(
     version="0.1.0"
 )
 
-# 配置 CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+_LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost", "testserver"}
+
+
+def _hostname(authority: str) -> str | None:
+    try:
+        return urlsplit(f"//{authority}").hostname
+    except ValueError:
+        return None
+
+
+@app.middleware("http")
+async def enforce_local_same_origin(request, call_next):
+    """Keep captured input data behind a loopback, same-origin boundary."""
+    host = request.headers.get("host", "")
+    if _hostname(host) not in _LOCAL_HOSTS:
+        return JSONResponse({"detail": "local access only"}, status_code=403)
+
+    origin = request.headers.get("origin")
+    if origin:
+        parsed_origin = urlsplit(origin)
+        if parsed_origin.scheme not in {"http", "https"} or parsed_origin.netloc.lower() != host.lower():
+            return JSONResponse({"detail": "cross-origin access denied"}, status_code=403)
+
+    return await call_next(request)
 
 
 # ===== Pydantic 模型 =====
@@ -298,6 +314,12 @@ async def get_overview():
     }
 
 
+@app.get("/api/report/full")
+async def get_today_full_report():
+    """获取今日完整报告"""
+    return await get_full_report(business_today().isoformat())
+
+
 @app.get("/api/report/{target_date}", response_model=DailyReportResponse)
 async def get_daily_report(target_date: str):
     """获取指定日期的报告"""
@@ -504,12 +526,6 @@ async def get_full_report(target_date: str):
         ai_work_analysis=report.ai_work_analysis,
         theme_analysis=theme_response,
     )
-
-
-@app.get("/api/report/full")
-async def get_today_full_report():
-    """获取今日完整报告"""
-    return await get_full_report(business_today().isoformat())
 
 
 @app.get("/api/stats/hourly")

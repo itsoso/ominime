@@ -25,3 +25,18 @@ def test_dashboard_overview_uses_lightweight_stats_endpoints():
 
     assert "buildOverviewFromAppStats" in html
     assert "fetch(`/api/stats/apps?target_date=${dateStr}`)" in html
+
+
+def test_dashboard_escapes_dynamic_app_and_work_path_labels():
+    html = TEMPLATE.read_text(encoding="utf-8")
+
+    assert "${escapeHtml(app.display_name)}" in html
+    assert "${escapeHtml(workPath.work_pattern)}" in html
+    assert "${escapeHtml(p.app)}" in html
+
+
+def test_dashboard_does_not_contact_google_fonts():
+    html = TEMPLATE.read_text(encoding="utf-8")
+
+    assert "fonts.googleapis.com" not in html
+    assert "fonts.gstatic.com" not in html
