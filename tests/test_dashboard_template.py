@@ -71,3 +71,10 @@ def test_dashboard_does_not_present_an_efficiency_score():
 
     assert "效率分数" not in html
     assert "workPath.efficiency_score" not in html
+
+
+def test_dashboard_does_not_present_unmeasured_active_time():
+    html = TEMPLATE.read_text(encoding="utf-8")
+
+    assert "活跃时间" not in html
+    assert "todayTime" not in html

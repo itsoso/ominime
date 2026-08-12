@@ -21,7 +21,7 @@ OLLAMA_BASE_URL=http://127.0.0.1:11434
 
 ```bash
 venv/bin/python scripts/check_llm.py
-./scripts/install_all.sh
+./scripts/install_app.sh
 ```
 
 OmniMe 不使用 OpenAI Key，不支持远程分析。关闭 AI 时，基础统计和导出仍然可用。

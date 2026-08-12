@@ -629,14 +629,13 @@ class KeyboardListener:
         self._last_text_fallback_events: dict[tuple[str, str], tuple[int, str, float]] = {}
         self._pending_enter_keyups: set[tuple[str, str]] = set()
         self._candidate_reader = candidate_reader or DoubaoCandidateReader()
-        self._kim_composer_capture = kim_composer_capture or KimPreSubmitCapture()
-        self._wechat_composer_capture = (
-            wechat_composer_capture or WeChatPreSubmitCapture()
-        )
-        self._presubmit_composer_captures = {
-            LEGACY_KIM_BUNDLE_ID: self._kim_composer_capture,
-            WECHAT_BUNDLE_ID: self._wechat_composer_capture,
-        }
+        # Screenshot/OCR capture is disabled by default. Explicit injection is
+        # retained as a temporary compatibility hook for downstream callers.
+        self._presubmit_composer_captures = {}
+        if kim_composer_capture is not None:
+            self._presubmit_composer_captures[LEGACY_KIM_BUNDLE_ID] = kim_composer_capture
+        if wechat_composer_capture is not None:
+            self._presubmit_composer_captures[WECHAT_BUNDLE_ID] = wechat_composer_capture
         self._target_app_identities: dict[int, tuple[str, str]] = {}
         self._doubao_states: dict[tuple[str, str], DoubaoCompositionState] = {}
         self._doubao_failure_reasons: dict[tuple[str, str], str] = {}

@@ -3,7 +3,16 @@ Web 服务器启动模块
 """
 
 import uvicorn
-from pathlib import Path
+import ipaddress
+
+
+def _is_loopback_host(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def run_server(host: str = "127.0.0.1", port: int = 8001, reload: bool = False):
@@ -15,6 +24,9 @@ def run_server(host: str = "127.0.0.1", port: int = 8001, reload: bool = False):
         port: 端口号
         reload: 是否启用热重载（开发模式）
     """
+    if not _is_loopback_host(host):
+        raise ValueError("OmniMe Web server must bind to a loopback address")
+
     print(f"""
 ╔══════════════════════════════════════════════════════════╗
 ║                                                          ║

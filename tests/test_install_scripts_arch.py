@@ -70,3 +70,13 @@ def test_llm_check_is_not_a_pytest_module_and_never_prints_key_fragments():
     script = _read("scripts/check_llm.py")
     assert "api_key[:" not in script
     assert "api_key[-" not in script
+
+
+def test_local_llm_setup_creates_env_enables_ai_and_uses_real_restart_command():
+    script = _read("scripts/setup_local_llm.sh")
+
+    assert 'touch "$PROJECT_ROOT/.env"' in script
+    assert 'echo "AI_ENABLED=true"' in script
+    assert "./scripts/install_app.sh" in script
+    assert "install_all.sh" not in script
+    assert "report --ai" not in script

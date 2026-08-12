@@ -562,10 +562,6 @@
                 <div class="stat-label">🔢 会话数</div>
                 <div class="stat-value" id="todaySessions">-</div>
             </div>
-            <div class="stat-card">
-                <div class="stat-label">⏱️ 活跃时间</div>
-                <div class="stat-value" id="todayTime">-</div>
-            </div>
         </div>
 
         <!-- 概览标签页 -->
@@ -789,7 +785,6 @@
                 total_chars: safeApps.reduce((sum, app) => sum + (app.total_chars || 0), 0),
                 total_apps: safeApps.length,
                 total_sessions: safeApps.reduce((sum, app) => sum + (app.session_count || 0), 0),
-                total_time_minutes: safeApps.reduce((sum, app) => sum + (app.total_time_minutes || 0), 0),
             };
         }
 
@@ -797,10 +792,6 @@
             document.getElementById('todayChars').textContent = overview.total_chars.toLocaleString();
             document.getElementById('todayApps').textContent = overview.total_apps;
             document.getElementById('todaySessions').textContent = overview.total_sessions;
-            
-            const hours = Math.floor(overview.total_time_minutes / 60);
-            const mins = Math.round(overview.total_time_minutes % 60);
-            document.getElementById('todayTime').textContent = hours > 0 ? `${hours}h${mins}m` : `${mins}m`;
         }
 
         function updateAppList(apps) {

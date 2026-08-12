@@ -387,7 +387,13 @@ def main():
     
     # web 命令
     web_parser = subparsers.add_parser("web", help="启动 Web 后台管理")
-    web_parser.add_argument("-H", "--host", default="127.0.0.1", help="主机地址 (默认: 127.0.0.1)")
+    web_parser.add_argument(
+        "-H",
+        "--host",
+        choices=("127.0.0.1", "::1", "localhost"),
+        default="127.0.0.1",
+        help="本机回环地址 (默认: 127.0.0.1)",
+    )
     web_parser.add_argument("-p", "--port", type=int, default=8001, help="端口号 (默认: 8001)")
     web_parser.add_argument("--reload", action="store_true", help="启用热重载 (开发模式)")
     web_parser.set_defaults(func=cmd_web)

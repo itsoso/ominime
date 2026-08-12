@@ -67,7 +67,7 @@ class QwenLocalBackend(LLMBackend):
                 
                 self._tokenizer = AutoTokenizer.from_pretrained(
                     self.model_name,
-                    trust_remote_code=True
+                    trust_remote_code=False,
                 )
                 
                 # 根据可用硬件选择设备
@@ -77,7 +77,8 @@ class QwenLocalBackend(LLMBackend):
                     self.model_name,
                     torch_dtype=torch.float16 if device != "cpu" else torch.float32,
                     device_map="auto" if device == "cuda" else None,
-                    trust_remote_code=True
+                    trust_remote_code=False,
+                    use_safetensors=True,
                 )
                 
                 if device == "mps":
@@ -109,12 +110,13 @@ class QwenLocalBackend(LLMBackend):
         # 生成响应
         model_inputs = self._tokenizer([text], return_tensors="pt").to(self._model.device)
         
-        generated_ids = self._model.generate(
-            **model_inputs,
-            max_new_tokens=max_tokens,
-            temperature=temperature,
-            do_sample=True,
-        )
+        generation_options = {
+            "max_new_tokens": max_tokens,
+            "do_sample": temperature > 0,
+        }
+        if temperature > 0:
+            generation_options["temperature"] = temperature
+        generated_ids = self._model.generate(**model_inputs, **generation_options)
         
         generated_ids = [
             output_ids[len(input_ids):] 
@@ -159,8 +161,10 @@ class OllamaBackend(LLMBackend):
         max_tokens: int = 1000,
     ) -> LLMResponse:
         import requests
-        
-        response = requests.post(
+
+        session = requests.Session()
+        session.trust_env = False
+        response = session.post(
             f"{self.base_url}/api/chat",
             json={
                 "model": self.model,
@@ -172,6 +176,7 @@ class OllamaBackend(LLMBackend):
                 }
             },
             timeout=30,
+            allow_redirects=False,
         )
         response.raise_for_status()
         
@@ -184,7 +189,13 @@ class OllamaBackend(LLMBackend):
     def is_available(self) -> bool:
         try:
             import requests
-            response = requests.get(f"{self.base_url}/api/tags", timeout=2)
+            session = requests.Session()
+            session.trust_env = False
+            response = session.get(
+                f"{self.base_url}/api/tags",
+                timeout=2,
+                allow_redirects=False,
+            )
             return response.status_code == 200
         except Exception:
             return False

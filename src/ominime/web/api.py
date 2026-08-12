@@ -5,6 +5,7 @@ Web API 模块
 """
 
 from datetime import date, datetime, timedelta
+import ipaddress
 from typing import List, Optional
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
@@ -43,6 +44,14 @@ def _hostname(authority: str) -> str | None:
 @app.middleware("http")
 async def enforce_local_same_origin(request, call_next):
     """Keep captured input data behind a loopback, same-origin boundary."""
+    client_host = request.client.host if request.client else None
+    try:
+        client_is_loopback = bool(client_host and ipaddress.ip_address(client_host).is_loopback)
+    except ValueError:
+        client_is_loopback = client_host == "testclient"
+    if not client_is_loopback:
+        return JSONResponse({"detail": "local access only"}, status_code=403)
+
     host = request.headers.get("host", "")
     if _hostname(host) not in _LOCAL_HOSTS:
         return JSONResponse({"detail": "local access only"}, status_code=403)
@@ -63,7 +72,6 @@ class AppStatsResponse(BaseModel):
     display_name: str
     total_chars: int
     session_count: int
-    total_time_minutes: float
     percentage: float
 
 
@@ -73,7 +81,6 @@ class DailyOverview(BaseModel):
     total_chars: int
     total_apps: int
     total_sessions: int
-    total_time_minutes: float
 
 
 class WorkPathSegmentResponse(BaseModel):
@@ -313,13 +320,13 @@ async def get_overview():
 
 
 @app.get("/api/report/full")
-async def get_today_full_report():
+def get_today_full_report():
     """获取今日完整报告"""
-    return await get_full_report(business_today().isoformat())
+    return get_full_report(business_today().isoformat())
 
 
 @app.get("/api/report/{target_date}", response_model=DailyReportResponse)
-async def get_daily_report(target_date: str):
+def get_daily_report(target_date: str):
     """获取指定日期的报告"""
     try:
         report_date = datetime.strptime(target_date, "%Y-%m-%d").date()
@@ -337,7 +344,6 @@ async def get_daily_report(target_date: str):
             display_name=s.display_name,
             total_chars=s.total_chars,
             session_count=s.session_count,
-            total_time_minutes=round(s.total_time_minutes, 1),
             percentage=round(s.total_chars / total_chars * 100, 1),
         )
         for s in report.app_stats
@@ -383,7 +389,6 @@ async def get_daily_report(target_date: str):
             total_chars=report.total_chars,
             total_apps=report.total_apps,
             total_sessions=report.total_sessions,
-            total_time_minutes=round(report.total_time_minutes, 1),
         ),
         app_stats=app_stats,
         main_activities=report.main_activities,
@@ -395,13 +400,13 @@ async def get_daily_report(target_date: str):
 
 
 @app.get("/api/report")
-async def get_today_report():
+def get_today_report():
     """获取今日报告"""
-    return await get_daily_report(business_today().isoformat())
+    return get_daily_report(business_today().isoformat())
 
 
 @app.get("/api/analysis/theme/{target_date}", response_model=Optional[ThemeAnalysisResponse])
-async def get_theme_analysis(target_date: str):
+def get_theme_analysis(target_date: str):
     """
     获取指定日期的主题深度分析
     
@@ -433,13 +438,13 @@ async def get_theme_analysis(target_date: str):
 
 
 @app.get("/api/analysis/theme")
-async def get_today_theme_analysis():
+def get_today_theme_analysis():
     """获取今日主题深度分析"""
-    return await get_theme_analysis(business_today().isoformat())
+    return get_theme_analysis(business_today().isoformat())
 
 
 @app.get("/api/report/full/{target_date}", response_model=FullReportResponse)
-async def get_full_report(target_date: str):
+def get_full_report(target_date: str):
     """
     获取完整报告（包含主题深度分析）
     
@@ -466,7 +471,6 @@ async def get_full_report(target_date: str):
             display_name=s.display_name,
             total_chars=s.total_chars,
             session_count=s.session_count,
-            total_time_minutes=round(s.total_time_minutes, 1),
             percentage=round(s.total_chars / total_chars * 100, 1),
         )
         for s in report.app_stats
@@ -512,7 +516,6 @@ async def get_full_report(target_date: str):
             total_chars=report.total_chars,
             total_apps=report.total_apps,
             total_sessions=report.total_sessions,
-            total_time_minutes=round(report.total_time_minutes, 1),
         ),
         app_stats=app_stats,
         main_activities=report.main_activities,
@@ -596,11 +599,9 @@ async def get_app_stats(
                     "display_name": s.display_name,
                     "total_chars": 0,
                     "session_count": 0,
-                    "total_time_minutes": 0,
                 }
             all_stats[s.display_name]["total_chars"] += s.total_chars
             all_stats[s.display_name]["session_count"] += s.session_count
-            all_stats[s.display_name]["total_time_minutes"] += s.total_time_minutes
     
     # 排序并计算百分比
     total = sum(s["total_chars"] for s in all_stats.values()) or 1
@@ -608,7 +609,6 @@ async def get_app_stats(
     
     for s in result:
         s["percentage"] = round(s["total_chars"] / total * 100, 1)
-        s["total_time_minutes"] = round(s["total_time_minutes"], 1)
     
     return result
 

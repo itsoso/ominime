@@ -410,4 +410,3 @@ def test_full_menu_bar_saves_only_terminal_command_line(monkeypatch):
 
     assert saved == ["➜  ominime pytest"]
     assert app._today_chars == len("➜  ominime pytest")
-

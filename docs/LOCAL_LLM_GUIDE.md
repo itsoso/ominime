@@ -58,7 +58,7 @@ venv/bin/python scripts/check_llm.py
 成功后重启：
 
 ```bash
-./scripts/install_all.sh
+./scripts/install_app.sh
 ```
 
 如果检查失败：

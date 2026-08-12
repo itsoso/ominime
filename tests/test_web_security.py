@@ -1,10 +1,14 @@
 from datetime import date
+import inspect
 from types import SimpleNamespace
+
+import pytest
 
 from fastapi.testclient import TestClient
 
 from ominime.analyzer import DailyReport, WorkPathAnalysis
 from ominime.web import api as web_api
+from ominime.web.server import run_server
 
 
 def test_rejects_cross_site_origin():
@@ -23,6 +27,17 @@ def test_rejects_non_local_host():
     )
 
     assert response.status_code == 403
+
+
+def test_server_refuses_non_loopback_bind_address():
+    with pytest.raises(ValueError, match="loopback"):
+        run_server(host="0.0.0.0")
+
+
+def test_report_routes_run_in_fastapi_worker_threads():
+    assert not inspect.iscoroutinefunction(web_api.get_daily_report)
+    assert not inspect.iscoroutinefunction(web_api.get_full_report)
+    assert not inspect.iscoroutinefunction(web_api.get_theme_analysis)
 
 
 def test_allows_same_origin_test_client_request(monkeypatch):
@@ -71,4 +86,5 @@ def test_today_full_report_is_not_captured_by_date_route(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["overview"]["date"] == "2026-08-11"
+    assert "total_time_minutes" not in response.json()["overview"]
     assert "efficiency_score" not in response.json()["work_path"]
