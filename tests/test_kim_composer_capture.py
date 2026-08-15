@@ -363,11 +363,23 @@ def test_recognize_rejects_three_repeated_horizontal_ocr_rows():
             RecognizedLine("测试", 0.31, 0.15, 0.05, 0.02),
             RecognizedLine("测试", 0.31, 0.12, 0.05, 0.02),
             RecognizedLine("测试", 0.31, 0.09, 0.05, 0.02),
-            RecognizedLine("提交", 0.32, 0.12, 0.08, 0.02),
         )
     )
 
     assert capture.recognize(frame) == ("", "kim_ocr_repeated_text_untrusted")
+
+
+def test_recognize_accepts_repeated_words_within_one_visual_row():
+    frame = CapturedFrame("image", 123, 1197, 925, 12.5, DOUBAO_BUNDLE_ID)
+    capture = KimPreSubmitCapture(
+        ocr_provider=lambda image, roi: (
+            RecognizedLine("测试", 0.31, 0.12, 0.05, 0.02),
+            RecognizedLine("测试", 0.38, 0.12, 0.05, 0.02),
+            RecognizedLine("测试", 0.45, 0.12, 0.05, 0.02),
+        )
+    )
+
+    assert capture.recognize(frame) == ("测试 测试 测试", None)
 
 
 def test_recognize_removes_horizontal_prefix_of_slanted_tiled_watermark():
@@ -384,6 +396,21 @@ def test_recognize_removes_horizontal_prefix_of_slanted_tiled_watermark():
     )
 
     assert capture.recognize(frame) == ("提交", None)
+
+
+def test_recognize_keeps_text_with_tiled_watermark_as_prefix():
+    frame = CapturedFrame("image", 123, 1197, 925, 12.5, DOUBAO_BUNDLE_ID)
+    capture = KimPreSubmitCapture(
+        ocr_provider=lambda image, roi: (
+            RecognizedLine("panbaokun", 0.31, 0.15, 0.05, 0.02, 1.5),
+            RecognizedLine("panbaokun", 0.46, 0.15, 0.05, 0.02, 1.5),
+            RecognizedLine("panbaokun", 0.31, 0.09, 0.05, 0.02, 1.5),
+            RecognizedLine("panbaokun", 0.46, 0.09, 0.05, 0.02, 1.5),
+            RecognizedLine("panbaokun好", 0.32, 0.12, 0.12, 0.02, 0.0),
+        )
+    )
+
+    assert capture.recognize(frame) == ("panbaokun好", None)
 
 
 def test_recognize_filters_sparse_slanted_latin_watermarks_near_edges():
