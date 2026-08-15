@@ -8,11 +8,13 @@ import logging
 import queue
 import threading
 import time
-from typing import Callable, Protocol, Sequence
+from types import MappingProxyType
+from typing import Callable, Mapping, Protocol, Sequence
 
 
 MAX_TRUSTED_SUBMISSION_CHARS = 4000
 DEFAULT_RETRY_DELAYS = (0.15, 0.35, 0.65, 1.0, 1.5, 2.0)
+TASK_EXPIRY_GRACE_SECONDS = 0.05
 
 logger = logging.getLogger(__name__)
 
@@ -25,10 +27,17 @@ class SendIntent:
     app_name: str
     bundle_id: str
     target_pid: int
-    modifiers: dict
+    modifiers: Mapping[str, object]
     physical_key_count: int
     validation_text: str
     baseline: object | None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "modifiers",
+            MappingProxyType(dict(self.modifiers)),
+        )
 
 
 @dataclass(frozen=True)
@@ -39,6 +48,7 @@ class SourceResult:
     confidence: float | None = None
     observed_at: float | None = None
     target_pid: int | None = None
+    stability_key: str | None = None
     failure_reason: str | None = None
     diagnostics: tuple[str, ...] = ()
 
@@ -52,6 +62,7 @@ class SourceResult:
         confidence: float | None = None,
         observed_at: float | None = None,
         target_pid: int | None = None,
+        stability_key: str | None = None,
     ) -> SourceResult:
         return cls(
             content=content,
@@ -60,6 +71,7 @@ class SourceResult:
             confidence=confidence,
             observed_at=observed_at,
             target_pid=target_pid,
+            stability_key=stability_key,
         )
 
     @classmethod
@@ -163,7 +175,11 @@ class PostSendCaptureCoordinator:
         self._queue: queue.Queue[SendIntent | object] = queue.Queue(
             maxsize=max_queue_size
         )
+        self._deferred_diagnostics: queue.SimpleQueue[CaptureOutcome] = (
+            queue.SimpleQueue()
+        )
         self._accepting = True
+        self._stop_signaled = False
         self._state_lock = threading.Lock()
         self._worker = threading.Thread(
             target=self._run,
@@ -183,7 +199,7 @@ class PostSendCaptureCoordinator:
             try:
                 self._queue.put_nowait(intent)
             except queue.Full:
-                self._safe_diagnostic(
+                self._deferred_diagnostics.put(
                     CaptureOutcome(
                         intent_id=intent.intent_id,
                         failure_reason="post_send_queue_full",
@@ -194,15 +210,12 @@ class PostSendCaptureCoordinator:
 
     def stop(self, timeout: float = 3.0) -> None:
         with self._state_lock:
-            if not self._accepting:
-                return
-            self._accepting = False
-
-        try:
-            self._queue.put(_STOP, timeout=timeout)
-        except queue.Full:
-            logger.error("post-send coordinator stop timed out while queue was full")
-            return
+            if self._accepting:
+                self._accepting = False
+                self._discard_queued_intents()
+            if not self._stop_signaled:
+                self._queue.put_nowait(_STOP)
+                self._stop_signaled = True
         self._worker.join(timeout=timeout)
         if self._worker.is_alive():
             logger.error("post-send coordinator worker did not stop within %.2fs", timeout)
@@ -227,35 +240,66 @@ class PostSendCaptureCoordinator:
                 if isinstance(item, SendIntent):
                     self._release_baseline(item)
                 self._queue.task_done()
+                item = None
+                self._drain_deferred_diagnostics()
 
     def _capture(self, intent: SendIntent) -> None:
-        previous_ocr_text: str | None = None
+        previous_ocr_state: tuple[str, str] | None = None
         last_result = SourceResult.unavailable("capture_timeout")
+        deadline = (
+            intent.submitted_at
+            + max(self._retry_delays, default=0.0)
+            + TASK_EXPIRY_GRACE_SECONDS
+        )
 
         for relative_delay in self._retry_delays:
+            if self._clock() > deadline:
+                self._report_expired(intent)
+                return
             remaining = intent.submitted_at + relative_delay - self._clock()
             if remaining > 0:
                 self._wait(remaining)
+            if self._clock() > deadline:
+                self._report_expired(intent)
+                return
 
             last_result = self._source_chain.read(intent)
+            if self._clock() > deadline:
+                self._report_expired(intent)
+                return
             if last_result.failure_reason:
-                previous_ocr_text = None
+                previous_ocr_state = None
                 continue
 
             if not self._is_ocr(last_result):
                 self._safe_success(self._success_outcome(intent, last_result))
                 return
 
-            if previous_ocr_text == last_result.content:
+            if last_result.stability_key is None:
+                previous_ocr_state = None
+                continue
+            current_ocr_state = (
+                last_result.content,
+                last_result.stability_key,
+            )
+            if previous_ocr_state == current_ocr_state:
                 self._safe_success(self._success_outcome(intent, last_result))
                 return
-            previous_ocr_text = last_result.content
+            previous_ocr_state = current_ocr_state
 
         self._safe_diagnostic(
             CaptureOutcome(
                 intent_id=intent.intent_id,
                 failure_reason=last_result.failure_reason or "ocr_unstable",
                 diagnostics=last_result.diagnostics,
+            )
+        )
+
+    def _report_expired(self, intent: SendIntent) -> None:
+        self._safe_diagnostic(
+            CaptureOutcome(
+                intent_id=intent.intent_id,
+                failure_reason="capture_expired",
             )
         )
 
@@ -286,6 +330,33 @@ class PostSendCaptureCoordinator:
             self._on_diagnostic(outcome)
         except Exception:
             logger.exception("post-send diagnostic callback failed")
+
+    def _drain_deferred_diagnostics(self) -> None:
+        while True:
+            try:
+                outcome = self._deferred_diagnostics.get_nowait()
+            except queue.Empty:
+                return
+            self._safe_diagnostic(outcome)
+
+    def _discard_queued_intents(self) -> None:
+        while True:
+            try:
+                item = self._queue.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                if isinstance(item, SendIntent):
+                    self._release_baseline(item)
+                    self._deferred_diagnostics.put(
+                        CaptureOutcome(
+                            intent_id=item.intent_id,
+                            failure_reason="post_send_shutdown",
+                        )
+                    )
+            finally:
+                self._queue.task_done()
+                item = None
 
     def _release_baseline(self, intent: SendIntent) -> None:
         baseline = intent.baseline

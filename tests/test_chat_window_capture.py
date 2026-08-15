@@ -1,5 +1,7 @@
+import gc
 import threading
 import time
+import weakref
 
 from ominime.chat_window_capture import (
     ChatWindowBaselineSampler,
@@ -177,3 +179,57 @@ def test_sampler_failure_is_named_without_image_and_worker_survives():
 
     assert diagnostics == ["baseline_unavailable"]
     assert "secret pixels" not in repr(diagnostics)
+
+
+def test_sampler_drops_worker_reference_after_baseline_transfer():
+    class MemoryImage:
+        pass
+
+    image = MemoryImage()
+    image_ref = weakref.ref(image)
+    sampler = ChatWindowBaselineSampler(
+        window_provider=lambda: (WindowInfo(4, 123, 0, 900, 700),),
+        image_provider=lambda window_id: image,
+    )
+
+    try:
+        assert sampler.schedule(123)
+        _wait_until(lambda: sampler.has_baseline)
+        frame = sampler.take_baseline(123)
+        del frame
+        del image
+        gc.collect()
+        assert image_ref() is None
+    finally:
+        sampler.stop()
+
+
+def test_sampler_timeout_stop_eventually_clears_current_frame():
+    entered = threading.Event()
+    release_capture = threading.Event()
+
+    class MemoryImage:
+        pass
+
+    image = MemoryImage()
+    image_ref = weakref.ref(image)
+
+    def image_provider(window_id):
+        entered.set()
+        release_capture.wait(1)
+        return image
+
+    sampler = ChatWindowBaselineSampler(
+        window_provider=lambda: (WindowInfo(4, 123, 0, 900, 700),),
+        image_provider=image_provider,
+    )
+
+    assert sampler.schedule(123)
+    assert entered.wait(1)
+    sampler.stop(timeout=0.02)
+    del image
+    release_capture.set()
+    _wait_until(lambda: not sampler.worker_alive)
+    gc.collect()
+
+    assert image_ref() is None

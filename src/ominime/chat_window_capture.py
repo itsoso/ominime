@@ -137,8 +137,12 @@ class ChatWindowBaselineSampler:
     def _run(self) -> None:
         while True:
             item = self._queue.get()
+            frame = None
             try:
                 if item is _STOP:
+                    with self._lock:
+                        self._baseline = None
+                        self._pending = False
                     return
                 frame = self._capture(item)
                 with self._lock:
@@ -154,6 +158,8 @@ class ChatWindowBaselineSampler:
                 self._safe_diagnostic("baseline_unavailable")
             finally:
                 self._queue.task_done()
+                frame = None
+                item = None
 
     def _capture(self, target_pid: int) -> WindowFrame | None:
         try:
