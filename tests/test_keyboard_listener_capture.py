@@ -2873,23 +2873,148 @@ def doubao_raw_event(
     )
 
 
-def test_doubao_keyup_reads_candidates_after_printable_input(monkeypatch):
+@pytest.mark.parametrize(
+    ("app_name", "bundle_id"),
+    (
+        ("Kim", "Kem"),
+        ("微信", "com.tencent.xinWeChat"),
+    ),
+)
+def test_presubmit_ocr_keyup_backlog_skips_per_key_native_reads(
+    monkeypatch,
+    app_name,
+    bundle_id,
+):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
-    snapshot = keyboard_listener.CandidateSnapshot(("测试", "策士"), 123, time.monotonic())
-    reader = FakeDoubaoCandidateReader([snapshot])
-    listener = keyboard_listener.KeyboardListener(lambda event: None, candidate_reader=reader)
-    listener._record_recent_text_snapshot = lambda *args, **kwargs: None
-    monkeypatch.setattr(keyboard_listener, "get_app_by_pid", lambda pid: ("Kim", "Kem"))
+    capture = FakeKimComposerCapture()
+    capture_argument = (
+        {"kim_composer_capture": capture}
+        if bundle_id == "Kem"
+        else {"wechat_composer_capture": capture}
+    )
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None,
+        candidate_reader=FakeDoubaoCandidateReader([None]),
+        **capture_argument,
+    )
+    snapshot_calls = []
+    candidate_calls = []
+    listener._record_recent_text_snapshot = (
+        lambda *args, **kwargs: snapshot_calls.append((args, kwargs))
+    )
+    listener._refresh_doubao_candidates = (
+        lambda *args, **kwargs: candidate_calls.append((args, kwargs))
+    )
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_app_by_pid",
+        lambda pid: (app_name, bundle_id),
+    )
+    listener._capture_focused_context = lambda **kwargs: SimpleNamespace(
+        focused_role=None,
+        focused_subrole=None,
+        focused_protected=False,
+        capture_status="degraded",
+        capture_error="focused element unavailable",
+    )
+    listener._context_to_dict_safe = lambda context: {}
+    listener._emit_submission_snapshot = lambda *args, **kwargs: None
+
+    for _ in range(64):
+        listener._event_queue.put_nowait(
+            keyboard_listener.RawKeyboardEvent(
+                event_type=keyboard_listener.kCGEventKeyUp,
+                keycode=8,
+                text="c",
+                app_name=app_name,
+                bundle_id=bundle_id,
+                modifiers={
+                    "shift": False,
+                    "ctrl": False,
+                    "alt": False,
+                    "cmd": False,
+                },
+                target_pid=123,
+            )
+        )
+    listener._event_queue.put_nowait(
+        keyboard_listener.RawKeyboardEvent(
+            event_type=keyboard_listener.kCGEventKeyDown,
+            keycode=keyboard_listener.ENTER_KEYCODE,
+            text="",
+            app_name=app_name,
+            bundle_id=bundle_id,
+            modifiers={
+                "shift": False,
+                "ctrl": False,
+                "alt": False,
+                "cmd": False,
+            },
+            target_pid=123,
+            pending_replay=keyboard_listener.PendingReplay(
+                event=SimpleNamespace(keycode=keyboard_listener.ENTER_KEYCODE),
+                target_pid=123,
+            ),
+        )
+    )
+    listener._event_queue.put_nowait(None)
+
+    listener._event_worker_loop()
+
+    assert snapshot_calls == []
+    assert candidate_calls == []
+    assert capture.freeze_calls == [123]
+    assert listener._event_queue.empty()
+
+
+def test_non_ocr_keyup_keeps_snapshot_and_candidate_refresh(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    listener = keyboard_listener.KeyboardListener(lambda event: None)
+    snapshot_calls = []
+    candidate_calls = []
+    listener._record_recent_text_snapshot = (
+        lambda *args, **kwargs: snapshot_calls.append((args, kwargs))
+    )
+    listener._refresh_doubao_candidates = (
+        lambda *args, **kwargs: candidate_calls.append((args, kwargs))
+    )
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_app_by_pid",
+        lambda pid: ("Codex", "com.openai.codex"),
+    )
 
     listener._process_raw_event(
-        doubao_raw_event(keyboard_listener, keyboard_listener.kCGEventKeyDown, 8, "c")
-    )
-    listener._process_raw_event(
-        doubao_raw_event(keyboard_listener, keyboard_listener.kCGEventKeyUp, 8, "c")
+        keyboard_listener.RawKeyboardEvent(
+            event_type=keyboard_listener.kCGEventKeyUp,
+            keycode=8,
+            text="c",
+            app_name="Codex",
+            bundle_id="com.openai.codex",
+            modifiers={
+                "shift": False,
+                "ctrl": False,
+                "alt": False,
+                "cmd": False,
+            },
+            target_pid=123,
+        )
     )
 
-    assert reader.calls == [(123, "Kem")]
-    assert listener._doubao_states[("Kim", "Kem")].has_active_candidate
+    assert snapshot_calls == [
+        (("Codex", "com.openai.codex"), {"clear_on_empty": False})
+    ]
+    assert candidate_calls == [
+        (
+            ("Codex", "com.openai.codex", 123, 8, {
+                "shift": False,
+                "ctrl": False,
+                "alt": False,
+                "cmd": False,
+            }),
+            {},
+        )
+    ]
 
 
 def test_doubao_reader_is_not_called_for_unsupported_app(monkeypatch):
@@ -2920,7 +3045,7 @@ def test_doubao_reader_is_not_called_for_unsupported_app(monkeypatch):
 def test_doubao_enter_commits_candidate_without_submitting_chat(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     snapshot = keyboard_listener.CandidateSnapshot(("测试", "策士"), 123, time.monotonic())
-    reader = FakeDoubaoCandidateReader([snapshot, snapshot])
+    reader = FakeDoubaoCandidateReader([snapshot, None])
     events = []
     diagnostics = []
     submission_calls = []
@@ -2969,8 +3094,6 @@ def test_doubao_space_and_number_commit_do_not_submit_chat(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     snapshots = [
         keyboard_listener.CandidateSnapshot(("测试", "策士"), 123, time.monotonic()),
-        keyboard_listener.CandidateSnapshot(("测试", "策士"), 123, time.monotonic()),
-        keyboard_listener.CandidateSnapshot(("你好", "拟好"), 123, time.monotonic()),
         keyboard_listener.CandidateSnapshot(("你好", "拟好"), 123, time.monotonic()),
     ]
     reader = FakeDoubaoCandidateReader(snapshots)
@@ -3683,7 +3806,7 @@ def test_doubao_persists_confirmed_candidate_on_real_chat_enter(
 ):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     snapshot = keyboard_listener.CandidateSnapshot(("测试", "策士"), 123, time.monotonic())
-    reader = FakeDoubaoCandidateReader([snapshot, snapshot])
+    reader = FakeDoubaoCandidateReader([snapshot, None])
     capture = FakeKimComposerCapture(recognize_result=("不应覆盖候选", None))
     events = []
     listener = keyboard_listener.KeyboardListener(
@@ -3731,7 +3854,7 @@ def test_doubao_persists_confirmed_candidate_on_real_chat_enter(
 def test_doubao_secure_context_discards_confirmed_candidate(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     snapshot = keyboard_listener.CandidateSnapshot(("秘密",), 123, time.monotonic())
-    reader = FakeDoubaoCandidateReader([snapshot, snapshot])
+    reader = FakeDoubaoCandidateReader([snapshot, None])
     events = []
     diagnostics = []
     listener = keyboard_listener.KeyboardListener(
@@ -3789,10 +3912,9 @@ def test_doubao_missing_candidate_keeps_count_only_fallback(monkeypatch):
     }
 
 
-def test_doubao_enter_revalidates_candidate_before_commit(monkeypatch):
+def test_doubao_enter_missing_candidate_does_not_commit(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
-    snapshot = keyboard_listener.CandidateSnapshot(("测试",), 123, time.monotonic())
-    reader = FakeDoubaoCandidateReader([snapshot, None])
+    reader = FakeDoubaoCandidateReader([None])
     diagnostics = []
     submission_calls = []
     listener = keyboard_listener.KeyboardListener(
@@ -3815,15 +3937,15 @@ def test_doubao_enter_revalidates_candidate_before_commit(monkeypatch):
     ):
         listener._process_raw_event(raw_event)
 
-    assert reader.calls == [(123, "Kem"), (123, "Kem")]
+    assert reader.calls == [(123, "Kem")]
     assert submission_calls
     assert not any(item["decision_reason"] == "ime_candidate_commit" for item in diagnostics)
 
 
-def test_doubao_commit_key_recovers_when_keyup_candidate_was_early(monkeypatch):
+def test_doubao_enter_commits_candidate_from_single_commit_key_read(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     snapshot = keyboard_listener.CandidateSnapshot(("测试",), 123, time.monotonic())
-    reader = FakeDoubaoCandidateReader([None, snapshot])
+    reader = FakeDoubaoCandidateReader([snapshot])
     diagnostics = []
     submission_calls = []
     listener = keyboard_listener.KeyboardListener(
@@ -3846,16 +3968,16 @@ def test_doubao_commit_key_recovers_when_keyup_candidate_was_early(monkeypatch):
     ):
         listener._process_raw_event(raw_event)
 
-    assert reader.calls == [(123, "Kem"), (123, "Kem")]
+    assert reader.calls == [(123, "Kem")]
     assert submission_calls == []
     assert diagnostics[-1]["decision_reason"] == "ime_candidate_commit"
 
 
-def test_doubao_later_keyup_miss_preserves_confirmed_prefix_after_recovery(monkeypatch):
+def test_doubao_later_commit_preserves_confirmed_prefix(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     first = keyboard_listener.CandidateSnapshot(("测试",), 123, time.monotonic())
     second = keyboard_listener.CandidateSnapshot(("你好",), 123, time.monotonic())
-    reader = FakeDoubaoCandidateReader([first, first, None, second])
+    reader = FakeDoubaoCandidateReader([first, second])
     listener = keyboard_listener.KeyboardListener(lambda event: None, candidate_reader=reader)
     listener._record_recent_text_snapshot = lambda *args, **kwargs: None
     monkeypatch.setattr(keyboard_listener, "get_app_by_pid", lambda pid: ("Kim", "Kem"))
@@ -3870,7 +3992,7 @@ def test_doubao_later_keyup_miss_preserves_confirmed_prefix_after_recovery(monke
     ):
         listener._process_raw_event(raw_event)
 
-    assert reader.calls == [(123, "Kem")] * 4
+    assert reader.calls == [(123, "Kem")] * 2
     assert listener._doubao_states[("Kim", "Kem")].confirmed_text == "测试你好"
 
 

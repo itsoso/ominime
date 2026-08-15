@@ -1892,11 +1892,12 @@ class KeyboardListener:
             return
 
         if event_type == kCGEventKeyUp and keycode != ENTER_KEYCODE:
-            self._record_recent_text_snapshot(
-                app_name,
-                bundle_id,
-                clear_on_empty=keycode in (51, 117),
-            )
+            if bundle_id not in PRESUBMIT_OCR_METADATA:
+                self._record_recent_text_snapshot(
+                    app_name,
+                    bundle_id,
+                    clear_on_empty=keycode in (51, 117),
+                )
             self._record_text_fallback_key(
                 app_name,
                 bundle_id,
@@ -1905,13 +1906,14 @@ class KeyboardListener:
                 raw_event.text,
                 track_editing_keys=False,
             )
-            self._refresh_doubao_candidates(
-                app_name,
-                bundle_id,
-                application_pid,
-                keycode,
-                modifiers,
-            )
+            if bundle_id not in PRESUBMIT_OCR_METADATA:
+                self._refresh_doubao_candidates(
+                    app_name,
+                    bundle_id,
+                    application_pid,
+                    keycode,
+                    modifiers,
+                )
         if event_type == kCGEventKeyDown and keycode != ENTER_KEYCODE:
             self._record_text_fallback_key(
                 app_name,
