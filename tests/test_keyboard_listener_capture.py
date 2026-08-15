@@ -3262,7 +3262,7 @@ def test_wechat_worker_persists_trusted_multiline_ocr(monkeypatch):
     modifiers = {"shift": False, "ctrl": False, "alt": False, "cmd": False}
 
     for keycode in (8, 13, 0, 1, 2, 3):
-        listener._process_raw_event(
+        listener._event_queue.put_nowait(
             keyboard_listener.RawKeyboardEvent(
                 event_type=keyboard_listener.kCGEventKeyDown,
                 keycode=keycode,
@@ -3274,7 +3274,7 @@ def test_wechat_worker_persists_trusted_multiline_ocr(monkeypatch):
             )
         )
 
-    listener._process_raw_event(
+    listener._event_queue.put_nowait(
         keyboard_listener.RawKeyboardEvent(
             event_type=keyboard_listener.kCGEventKeyDown,
             keycode=keyboard_listener.ENTER_KEYCODE,
@@ -3289,6 +3289,7 @@ def test_wechat_worker_persists_trusted_multiline_ocr(monkeypatch):
             ),
         )
     )
+    listener._event_worker_loop()
 
     assert capture.freeze_calls == [4318]
     assert capture.recognize_calls == ["wechat-frame"]
@@ -3296,6 +3297,7 @@ def test_wechat_worker_persists_trusted_multiline_ocr(monkeypatch):
     assert events[0].character == "第一行\n第二行"
     assert events[0].modifiers["fallback_source"] == "wechat_presubmit_ocr"
     assert events[0].modifiers["redacted_content"] is False
+    assert events[0].modifiers["physical_key_count"] == 6
 
 
 def test_wechat_presubmit_ocr_runs_when_ax_context_is_ok_but_empty(monkeypatch):
