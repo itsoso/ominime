@@ -1,10 +1,14 @@
 from datetime import datetime
+import threading
+import time
 
 import pytest
 
 from ominime.post_send_capture import (
     MAX_TRUSTED_SUBMISSION_CHARS,
+    CaptureOutcome,
     MessageSourceChain,
+    PostSendCaptureCoordinator,
     SendIntent,
     SourceResult,
 )
@@ -145,3 +149,259 @@ def test_source_exception_is_named_and_next_source_runs(intent):
     assert result.content == "测试"
     assert result.diagnostics == ("source_exception:FakeSource",)
     assert "private candidate text" not in repr(result)
+
+
+class SequenceSource:
+    def __init__(self, results):
+        self.results = iter(results)
+        self.calls = 0
+
+    def read(self, intent):
+        self.calls += 1
+        return next(self.results, SourceResult.unavailable("capture_timeout"))
+
+
+class FakeClock:
+    def __init__(self, value=10.0):
+        self.value = value
+        self.waits = []
+
+    def __call__(self):
+        return self.value
+
+    def wait(self, delay):
+        self.waits.append(delay)
+        self.value += delay
+        return False
+
+
+class ReleasableBaseline:
+    def __init__(self):
+        self.released = False
+
+    def release(self):
+        self.released = True
+
+
+def _wait_until(predicate, timeout=1.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(0.005)
+    raise AssertionError("condition was not reached")
+
+
+def _result(content, source, identity, observed_at):
+    return SourceResult.success(
+        content,
+        source,
+        identity,
+        target_pid=123,
+        observed_at=observed_at,
+    )
+
+
+def test_coordinator_retries_at_relative_schedule_and_reports_timeout(intent):
+    clock = FakeClock()
+    diagnostics = []
+    coordinator = PostSendCaptureCoordinator(
+        MessageSourceChain([SequenceSource([])]),
+        on_success=lambda outcome: None,
+        on_diagnostic=diagnostics.append,
+        clock=clock,
+        wait=clock.wait,
+    )
+
+    try:
+        assert coordinator.submit(intent)
+        _wait_until(lambda: len(diagnostics) == 1)
+    finally:
+        coordinator.stop()
+
+    assert clock.waits == pytest.approx([0.15, 0.2, 0.3, 0.35, 0.5, 0.5])
+    assert diagnostics[0].failure_reason == "capture_timeout"
+
+
+def test_coordinator_structured_result_completes_immediately(intent):
+    clock = FakeClock()
+    completed = []
+    source = SequenceSource(
+        [_result("最终文本", "kim_postsend_ax", "ax-message-1", 10.15)]
+    )
+    coordinator = PostSendCaptureCoordinator(
+        MessageSourceChain([source]),
+        on_success=completed.append,
+        on_diagnostic=lambda outcome: None,
+        clock=clock,
+        wait=clock.wait,
+    )
+
+    try:
+        assert coordinator.submit(intent)
+        _wait_until(lambda: len(completed) == 1)
+    finally:
+        coordinator.stop()
+
+    assert completed == [
+        CaptureOutcome(
+            intent_id="send-1",
+            content="最终文本",
+            source="kim_postsend_ax",
+            message_identity="ax-message-1",
+            failure_reason=None,
+        )
+    ]
+    assert source.calls == 1
+    assert clock.waits == pytest.approx([0.15])
+
+
+def test_coordinator_requires_two_identical_ocr_results(intent):
+    clock = FakeClock()
+    completed = []
+    source = SequenceSource(
+        [
+            _result("草稿", "kim_postsend_ocr", "bubble-1", 10.15),
+            _result("最终文本", "kim_postsend_ocr", "bubble-2", 10.35),
+            _result("最终文本", "kim_postsend_ocr", "bubble-3", 10.65),
+        ]
+    )
+    coordinator = PostSendCaptureCoordinator(
+        MessageSourceChain([source]),
+        on_success=completed.append,
+        on_diagnostic=lambda outcome: None,
+        clock=clock,
+        wait=clock.wait,
+    )
+
+    try:
+        assert coordinator.submit(intent)
+        _wait_until(lambda: len(completed) == 1)
+    finally:
+        coordinator.stop()
+
+    assert completed[0].content == "最终文本"
+    assert completed[0].message_identity == "bubble-3"
+    assert source.calls == 3
+
+
+def test_coordinator_preserves_submit_order_for_one_pid(intent):
+    clock = FakeClock()
+    completed = []
+
+    class PerIntentSource:
+        def read(self, current):
+            return SourceResult.success(
+                current.intent_id,
+                "kim_postsend_ax",
+                f"message:{current.intent_id}",
+                target_pid=current.target_pid,
+                observed_at=clock(),
+            )
+
+    second = SendIntent(**{**intent.__dict__, "intent_id": "send-2"})
+    coordinator = PostSendCaptureCoordinator(
+        MessageSourceChain([PerIntentSource()]),
+        on_success=completed.append,
+        on_diagnostic=lambda outcome: None,
+        clock=clock,
+        wait=clock.wait,
+    )
+
+    try:
+        assert coordinator.submit(intent)
+        assert coordinator.submit(second)
+        _wait_until(lambda: len(completed) == 2)
+    finally:
+        coordinator.stop()
+
+    assert [outcome.intent_id for outcome in completed] == ["send-1", "send-2"]
+
+
+def test_coordinator_queue_full_is_non_blocking_and_named(intent):
+    entered = threading.Event()
+    release = threading.Event()
+    diagnostics = []
+
+    class BlockingSource:
+        def read(self, current):
+            entered.set()
+            release.wait(1)
+            return SourceResult.unavailable("blocked")
+
+    coordinator = PostSendCaptureCoordinator(
+        MessageSourceChain([BlockingSource()]),
+        on_success=lambda outcome: None,
+        on_diagnostic=diagnostics.append,
+        max_queue_size=1,
+        retry_delays=(0.0,),
+    )
+    second = SendIntent(**{**intent.__dict__, "intent_id": "send-2"})
+    third = SendIntent(**{**intent.__dict__, "intent_id": "send-3"})
+
+    try:
+        assert coordinator.submit(intent)
+        assert entered.wait(1)
+        assert coordinator.submit(second)
+        started = time.monotonic()
+        assert not coordinator.submit(third)
+        assert time.monotonic() - started < 0.05
+        assert diagnostics[-1].failure_reason == "post_send_queue_full"
+    finally:
+        release.set()
+        coordinator.stop()
+
+
+def test_coordinator_stop_rejects_new_tasks_and_releases_baselines(intent):
+    baseline = ReleasableBaseline()
+    with_baseline = SendIntent(**{**intent.__dict__, "baseline": baseline})
+    coordinator = PostSendCaptureCoordinator(
+        MessageSourceChain([SequenceSource([])]),
+        on_success=lambda outcome: None,
+        on_diagnostic=lambda outcome: None,
+        retry_delays=(0.0,),
+    )
+
+    assert coordinator.submit(with_baseline)
+    coordinator.stop()
+
+    assert baseline.released
+    assert not coordinator.submit(intent)
+
+
+def test_coordinator_source_exception_does_not_kill_worker(intent):
+    completed = []
+
+    class SometimesBrokenSource:
+        def read(self, current):
+            if current.intent_id == "send-1":
+                raise RuntimeError("boom")
+            return SourceResult.success(
+                "ok",
+                "kim_postsend_ax",
+                "message-ok",
+                target_pid=current.target_pid,
+                observed_at=time.monotonic(),
+            )
+
+    current_time = time.monotonic()
+    first = SendIntent(**{**intent.__dict__, "submitted_at": current_time})
+    second = SendIntent(
+        **{**intent.__dict__, "intent_id": "send-2", "submitted_at": current_time}
+    )
+    coordinator = PostSendCaptureCoordinator(
+        MessageSourceChain([SometimesBrokenSource()]),
+        on_success=completed.append,
+        on_diagnostic=lambda outcome: None,
+        retry_delays=(0.0,),
+    )
+
+    try:
+        assert coordinator.submit(first)
+        assert coordinator.submit(second)
+        _wait_until(lambda: len(completed) == 1)
+    finally:
+        coordinator.stop()
+
+    assert completed[0].intent_id == "send-2"
+    assert coordinator.worker_alive is False
