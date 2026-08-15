@@ -104,7 +104,7 @@ def test_wechat_capture_uses_wechat_failure_codes():
     )
 
 
-def test_wechat_capture_rejects_multiline_and_uncommitted_pinyin():
+def test_wechat_capture_accepts_multiline_but_rejects_uncommitted_pinyin():
     multiline = WeChatPreSubmitCapture(
         ocr_provider=lambda image, roi: (
             RecognizedLine("第一行", 0.38, 0.14, 0.2, 0.02),
@@ -117,11 +117,23 @@ def test_wechat_capture_rejects_multiline_and_uncommitted_pinyin():
         )
     )
 
-    assert multiline.recognize(_frame()) == (
-        "",
-        "wechat_ocr_multiline_untrusted",
-    )
+    assert multiline.recognize(_frame()) == ("第一行\n第二行", None)
     assert pinyin.recognize(_frame()) == (
         "",
         "wechat_ocr_uncommitted_text",
+    )
+
+
+def test_wechat_capture_rejects_three_repeated_ocr_rows():
+    capture = WeChatPreSubmitCapture(
+        ocr_provider=lambda image, roi: (
+            RecognizedLine("重复", 0.38, 0.14, 0.2, 0.02),
+            RecognizedLine("重复", 0.38, 0.11, 0.2, 0.02),
+            RecognizedLine("重复", 0.38, 0.08, 0.2, 0.02),
+        )
+    )
+
+    assert capture.recognize(_frame()) == (
+        "",
+        "wechat_ocr_repeated_text_untrusted",
     )

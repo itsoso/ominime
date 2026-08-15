@@ -332,7 +332,7 @@ def test_recognize_uses_input_source_captured_with_frame():
     assert capture.recognize(frame) == ("", "kim_ocr_uncommitted_text")
 
 
-def test_recognize_rejects_multiline_or_edge_clipped_text():
+def test_recognize_accepts_multiline_but_rejects_edge_clipped_text():
     frame = CapturedFrame("image", 123, 1197, 925, 12.5, DOUBAO_BUNDLE_ID)
     multiline = KimPreSubmitCapture(
         ocr_provider=lambda image, roi: (
@@ -351,27 +351,26 @@ def test_recognize_rejects_multiline_or_edge_clipped_text():
         )
     )
 
-    assert multiline.recognize(frame) == ("", "kim_ocr_multiline_untrusted")
+    assert multiline.recognize(frame) == ("第一行\n第二行", None)
     assert bottom_clipped.recognize(frame) == ("", "kim_ocr_edge_clipped")
     assert top_clipped.recognize(frame) == ("", "kim_ocr_edge_clipped")
 
 
-def test_recognize_does_not_treat_repeated_horizontal_text_as_watermark():
+def test_recognize_rejects_three_repeated_horizontal_ocr_rows():
     frame = CapturedFrame("image", 123, 1197, 925, 12.5, DOUBAO_BUNDLE_ID)
     capture = KimPreSubmitCapture(
         ocr_provider=lambda image, roi: (
             RecognizedLine("测试", 0.31, 0.15, 0.05, 0.02),
-            RecognizedLine("测试", 0.46, 0.15, 0.05, 0.02),
+            RecognizedLine("测试", 0.31, 0.12, 0.05, 0.02),
             RecognizedLine("测试", 0.31, 0.09, 0.05, 0.02),
-            RecognizedLine("测试", 0.46, 0.09, 0.05, 0.02),
             RecognizedLine("提交", 0.32, 0.12, 0.08, 0.02),
         )
     )
 
-    assert capture.recognize(frame) == ("", "kim_ocr_multiline_untrusted")
+    assert capture.recognize(frame) == ("", "kim_ocr_repeated_text_untrusted")
 
 
-def test_recognize_keeps_horizontal_prefix_of_slanted_watermark():
+def test_recognize_removes_horizontal_prefix_of_slanted_tiled_watermark():
     frame = CapturedFrame("image", 123, 1197, 925, 12.5, DOUBAO_BUNDLE_ID)
     capture = KimPreSubmitCapture(
         ocr_provider=lambda image, roi: (
@@ -384,7 +383,7 @@ def test_recognize_keeps_horizontal_prefix_of_slanted_watermark():
         )
     )
 
-    assert capture.recognize(frame) == ("", "kim_ocr_multiline_untrusted")
+    assert capture.recognize(frame) == ("提交", None)
 
 
 def test_recognize_filters_sparse_slanted_latin_watermarks_near_edges():

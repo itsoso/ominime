@@ -102,12 +102,8 @@ def recognized_content_lines(lines) -> tuple[RecognizedLine, ...]:
     }
 
     def is_tiled_watermark_variant(line: RecognizedLine) -> bool:
-        if line.slant_ratio < MIN_WATERMARK_SLANT_RATIO:
-            return False
         candidate = line.text.strip().casefold()
-        if re.fullmatch(r"[a-z]{4,}", candidate):
-            return True
-        return any(
+        matches_tiled_watermark = any(
             candidate == watermark
             or (
                 min(len(candidate), len(watermark)) >= 4
@@ -118,6 +114,12 @@ def recognized_content_lines(lines) -> tuple[RecognizedLine, ...]:
                 )
             )
             for watermark in tiled_watermarks
+        )
+        if matches_tiled_watermark:
+            return True
+        return (
+            line.slant_ratio >= MIN_WATERMARK_SLANT_RATIO
+            and re.fullmatch(r"[a-z]{4,}", candidate) is not None
         )
 
     return tuple(
@@ -312,11 +314,14 @@ class KimPreSubmitCapture:
                 for line in content_lines
             ):
                 return "", self._failure_code("edge_clipped")
+            normalized_counts: dict[str, int] = defaultdict(int)
+            for line in content_lines:
+                normalized_counts[line.text.strip().casefold()] += 1
+            if any(count >= 3 for count in normalized_counts.values()):
+                return "", self._failure_code("repeated_text_untrusted")
             text = assemble_recognized_text(content_lines)
             if not text:
                 return "", self._failure_code("empty")
-            if "\n" in text:
-                return "", self._failure_code("multiline_untrusted")
             if not ocr_text_is_trusted(
                 text,
                 frame.input_source_bundle_id,
