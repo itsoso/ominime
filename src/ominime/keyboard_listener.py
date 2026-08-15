@@ -14,7 +14,7 @@ import time
 import re
 import uuid
 from typing import Callable, Optional
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 import queue
@@ -48,7 +48,12 @@ from Quartz import (
     CGEventGetFlags,
 )
 from AppKit import NSWorkspace, NSRunningApplication
-from Foundation import NSObject, NSRunLoop, NSDefaultRunLoopMode, NSDistributedNotificationCenter
+from Foundation import (
+    NSObject,
+    NSRunLoop,
+    NSDefaultRunLoopMode,
+    NSDistributedNotificationCenter,
+)
 import Quartz
 import objc
 
@@ -62,21 +67,13 @@ from .context_capture import (
 )
 from .input_snapshot import format_submission_terminal_notice, normalize_submission_text
 from .ime_candidate_capture import (
-    CandidateSnapshot,
     DoubaoCandidateReader,
     DoubaoCompositionState,
     NUMBER_KEYCODE_TO_INDEX,
     SUPPORTED_TARGET_BUNDLE_IDS,
 )
-from .kim_composer_capture import (
-    LEGACY_KIM_BUNDLE_ID,
-    KimPreSubmitCapture,
-    ocr_text_matches_physical_count,
-)
-from .wechat_composer_capture import (
-    WECHAT_BUNDLE_ID,
-    WeChatPreSubmitCapture,
-)
+from .kim_composer_capture import LEGACY_KIM_BUNDLE_ID
+from .wechat_composer_capture import WECHAT_BUNDLE_ID
 from .chat_window_capture import ChatWindowBaselineSampler
 from .post_send_capture import (
     CaptureOutcome,
@@ -84,22 +81,23 @@ from .post_send_capture import (
     SendIntent,
     build_default_message_source_chain,
 )
-from .runtime_state import record_runtime_error, refresh_runtime_heartbeat, set_recording_status
+from .runtime_state import (
+    record_runtime_error,
+    refresh_runtime_heartbeat,
+    set_recording_status,
+)
 from .time_utils import storage_now
 
 
 EVENT_TAP_DISABLED_BY_TIMEOUT = getattr(Quartz, "kCGEventTapDisabledByTimeout", -1)
 EVENT_TAP_DISABLED_BY_USER_INPUT = getattr(Quartz, "kCGEventTapDisabledByUserInput", -2)
 KEYBOARD_EVENT_AUTOREPEAT_FIELD = getattr(Quartz, "kCGKeyboardEventAutorepeat", 8)
-EVENT_SOURCE_USER_DATA_FIELD = getattr(Quartz, "kCGEventSourceUserData", 42)
-REPLAY_EVENT_MARKER = 0x4F4D4E49
-ENTER_REPLAY_TIMEOUT_SECONDS = 0.75
-SUPPRESSED_ENTER_KEYUP_TTL_SECONDS = 5.0
 
 
 @dataclass
 class KeyEvent:
     """按键事件"""
+
     timestamp: datetime
     keycode: int
     character: str
@@ -107,27 +105,6 @@ class KeyEvent:
     app_bundle_id: str
     modifiers: dict
     is_ime_input: bool = False
-
-
-@dataclass
-class PendingReplay:
-    """A suppressed native Enter event waiting to be posted once."""
-
-    event: object
-    target_pid: int
-    keyup_event: object | None = None
-    watchdog: threading.Timer | None = field(
-        default=None,
-        compare=False,
-    )
-    released: threading.Event = field(
-        default_factory=threading.Event,
-        compare=False,
-    )
-    lock: threading.Lock = field(
-        default_factory=threading.Lock,
-        compare=False,
-    )
 
 
 @dataclass(frozen=True)
@@ -143,9 +120,6 @@ class RawKeyboardEvent:
     target_pid: int = 0
     frontmost_pid: int = 0
     is_autorepeat: bool = False
-    pre_submit_frame: object | None = None
-    pre_submit_capture_failure: str | None = None
-    pending_replay: PendingReplay | None = None
     occurred_at: float = 0.0
     timestamp: datetime | None = None
 
@@ -165,22 +139,80 @@ class PendingPostSendSubmission:
 
 # 键码映射
 SPECIAL_KEYCODE_MAP = {
-    36: '\n', 48: '\t', 49: ' ', 51: '\b', 53: 'esc', 117: 'del',
-    123: '←', 124: '→', 125: '↓', 126: '↑',
-    122: 'F1', 120: 'F2', 99: 'F3', 118: 'F4', 96: 'F5', 97: 'F6',
-    98: 'F7', 100: 'F8', 101: 'F9', 109: 'F10', 103: 'F11', 111: 'F12',
+    36: "\n",
+    48: "\t",
+    49: " ",
+    51: "\b",
+    53: "esc",
+    117: "del",
+    123: "←",
+    124: "→",
+    125: "↓",
+    126: "↑",
+    122: "F1",
+    120: "F2",
+    99: "F3",
+    118: "F4",
+    96: "F5",
+    97: "F6",
+    98: "F7",
+    100: "F8",
+    101: "F9",
+    109: "F10",
+    103: "F11",
+    111: "F12",
 }
 
 IGNORED_KEYCODES = {54, 55, 56, 60, 58, 61, 59, 62, 57, 63}
 
 KEYCODE_TO_CHAR = {
-    0: 'a', 1: 's', 2: 'd', 3: 'f', 4: 'h', 5: 'g', 6: 'z', 7: 'x',
-    8: 'c', 9: 'v', 11: 'b', 12: 'q', 13: 'w', 14: 'e', 15: 'r',
-    16: 'y', 17: 't', 18: '1', 19: '2', 20: '3', 21: '4', 22: '6',
-    23: '5', 24: '=', 25: '9', 26: '7', 27: '-', 28: '8', 29: '0',
-    30: ']', 31: 'o', 32: 'u', 33: '[', 34: 'i', 35: 'p', 37: 'l',
-    38: 'j', 39: "'", 40: 'k', 41: ';', 42: '\\', 43: ',', 44: '/',
-    45: 'n', 46: 'm', 47: '.', 50: '`',
+    0: "a",
+    1: "s",
+    2: "d",
+    3: "f",
+    4: "h",
+    5: "g",
+    6: "z",
+    7: "x",
+    8: "c",
+    9: "v",
+    11: "b",
+    12: "q",
+    13: "w",
+    14: "e",
+    15: "r",
+    16: "y",
+    17: "t",
+    18: "1",
+    19: "2",
+    20: "3",
+    21: "4",
+    22: "6",
+    23: "5",
+    24: "=",
+    25: "9",
+    26: "7",
+    27: "-",
+    28: "8",
+    29: "0",
+    30: "]",
+    31: "o",
+    32: "u",
+    33: "[",
+    34: "i",
+    35: "p",
+    37: "l",
+    38: "j",
+    39: "'",
+    40: "k",
+    41: ";",
+    42: "\\",
+    43: ",",
+    44: "/",
+    45: "n",
+    46: "m",
+    47: ".",
+    50: "`",
 }
 
 
@@ -262,17 +294,7 @@ BROWSER_BUNDLE_HINTS = (
     "safari",
     "vivaldi",
 )
-DEGRADED_CHAT_COMPATIBILITY_BUNDLE_IDS = {
-    "Kem",
-    "com.tencent.xinWeChat",
-}
-PRESUBMIT_OCR_METADATA = {
-    LEGACY_KIM_BUNDLE_ID: ("kim_ocr", "kim_presubmit_ocr"),
-    WECHAT_BUNDLE_ID: ("wechat_ocr", "wechat_presubmit_ocr"),
-}
-POST_SEND_CHAT_BUNDLE_IDS = frozenset(
-    {LEGACY_KIM_BUNDLE_ID, WECHAT_BUNDLE_ID}
-)
+POST_SEND_CHAT_BUNDLE_IDS = frozenset({LEGACY_KIM_BUNDLE_ID, WECHAT_BUNDLE_ID})
 POST_SEND_BASELINE_WAIT_SECONDS = 0.15
 
 
@@ -422,15 +444,15 @@ def _start_app_watcher(
     initialized = threading.Event()
     abort_watcher = threading.Event()
     initialization_errors: list[Exception] = []
-    
+
     from Foundation import NSDate
-    
+
     # 创建监听器类
     class AppWatcher(NSObject):
         def init(self):
             self = objc.super(AppWatcher, self).init()
             return self
-        
+
         def applicationActivated_(self, notification):
             try:
                 app = notification.userInfo()["NSWorkspaceApplicationKey"]
@@ -441,7 +463,7 @@ def _start_app_watcher(
             except Exception as e:
                 if _DEBUG:
                     print(f"[DEBUG] App watcher error: {e}")
-    
+
     def run_watcher():
         try:
             watcher = AppWatcher.alloc().init()
@@ -453,9 +475,9 @@ def _start_app_watcher(
             # 先注册切换通知，再初始化当前应用，避免启动窗口期漏事件。
             nc.addObserver_selector_name_object_(
                 watcher,
-                objc.selector(watcher.applicationActivated_, signature=b'v@:@'),
+                objc.selector(watcher.applicationActivated_, signature=b"v@:@"),
                 "NSWorkspaceDidActivateApplicationNotification",
-                None
+                None,
             )
             initialization_deadline = (
                 time.monotonic() + APP_WATCHER_START_TIMEOUT_SECONDS
@@ -486,10 +508,12 @@ def _start_app_watcher(
         # 必须加 sleep 防止在 Rosetta 翻译下忙循环
         run_loop = NSRunLoop.currentRunLoop()
         while True:
-            run_loop.runMode_beforeDate_(NSDefaultRunLoopMode, NSDate.dateWithTimeIntervalSinceNow_(1.0))
+            run_loop.runMode_beforeDate_(
+                NSDefaultRunLoopMode, NSDate.dateWithTimeIntervalSinceNow_(1.0)
+            )
             _refresh_app_activation_callback()
             time.sleep(0.1)  # 防止 RunLoop 立即返回导致忙循环
-    
+
     thread = threading.Thread(target=run_watcher, daemon=True)
     thread.start()
 
@@ -501,7 +525,9 @@ def _start_app_watcher(
     if initialization_errors:
         _app_watcher_started = False
         _set_app_activation_callback(None)
-        raise RuntimeError("app watcher initialization failed") from initialization_errors[0]
+        raise RuntimeError(
+            "app watcher initialization failed"
+        ) from initialization_errors[0]
 
 
 def get_frontmost_app() -> tuple[str, str]:
@@ -556,9 +582,9 @@ def get_current_app_fresh() -> tuple[str, str]:
 
 class RimeLogWatcher:
     """监听 Rime 输入法日志文件"""
-    
+
     RIME_LOG_PATH = Path.home() / ".ominime" / "rime_input.log"
-    
+
     def __init__(self, callback: Callable[[str, datetime, str, str], None]):
         """callback: (text, timestamp, app_name, bundle_id) -> None"""
         self.callback = callback
@@ -566,26 +592,26 @@ class RimeLogWatcher:
         self._thread = None
         self._last_position = 0
         self._last_mtime = 0
-    
+
     def _ensure_log_file(self):
         self.RIME_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
         if not self.RIME_LOG_PATH.exists():
             self.RIME_LOG_PATH.touch()
-    
+
     def _parse_content(self, content: str) -> str:
-        text = re.sub(r'\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]', '', content)
+        text = re.sub(r"\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]", "", content)
         return text
-    
+
     def _watch_loop(self):
         self._ensure_log_file()
-        
+
         try:
             self._last_position = self.RIME_LOG_PATH.stat().st_size
             self._last_mtime = self.RIME_LOG_PATH.stat().st_mtime
         except:
             self._last_position = 0
             self._last_mtime = 0
-        
+
         while self._running:
             try:
                 try:
@@ -593,41 +619,45 @@ class RimeLogWatcher:
                 except:
                     time.sleep(0.1)
                     continue
-                
+
                 if current_mtime > self._last_mtime:
                     self._last_mtime = current_mtime
-                    
+
                     # 使用最近接收键盘输入的应用（拼音输入时记录的目标应用）
                     app_name, bundle_id = get_last_input_app()
                     if app_name == "Unknown":
                         # 如果没有记录，回退到 frontmost
                         app_name, bundle_id = get_frontmost_app()
-                    
-                    with open(self.RIME_LOG_PATH, 'r', encoding='utf-8', errors='ignore') as f:
+
+                    with open(
+                        self.RIME_LOG_PATH, "r", encoding="utf-8", errors="ignore"
+                    ) as f:
                         f.seek(self._last_position)
                         new_content = f.read()
                         self._last_position = f.tell()
-                    
+
                     if new_content:
                         text = self._parse_content(new_content)
                         if text and self.callback:
                             if _DEBUG:
-                                print(f"[DEBUG] Rime 输入: '{text}' -> {app_name} ({bundle_id})")
+                                print(
+                                    f"[DEBUG] Rime 输入: '{text}' -> {app_name} ({bundle_id})"
+                                )
                             self.callback(text, storage_now(), app_name, bundle_id)
-                
+
                 time.sleep(0.3)
             except Exception as e:
                 if _DEBUG:
                     print(f"[DEBUG] Rime watch error: {e}")
                 time.sleep(1.0)
-    
+
     def start(self):
         if self._running:
             return
         self._running = True
         self._thread = threading.Thread(target=self._watch_loop, daemon=True)
         self._thread.start()
-    
+
     def stop(self):
         self._running = False
         if self._thread:
@@ -653,8 +683,6 @@ class KeyboardListener:
         callback: Callable[[KeyEvent], None],
         diagnostics_callback: Optional[Callable[[dict], None]] = None,
         candidate_reader: DoubaoCandidateReader | None = None,
-        kim_composer_capture: KimPreSubmitCapture | None = None,
-        wechat_composer_capture: WeChatPreSubmitCapture | None = None,
         post_send_coordinator: PostSendCaptureCoordinator | None = None,
         baseline_sampler: ChatWindowBaselineSampler | None = None,
     ):
@@ -676,17 +704,17 @@ class KeyboardListener:
         self._fallback_buffer_updated_at: dict[tuple[str, str], float] = {}
         self._text_fallback_buffers: dict[tuple[str, str], list[str]] = {}
         self._text_fallback_buffer_updated_at: dict[tuple[str, str], float] = {}
-        self._recent_text_snapshots: dict[tuple[str, str], tuple[str, float, str | None]] = {}
+        self._recent_text_snapshots: dict[
+            tuple[str, str], tuple[str, float, str | None]
+        ] = {}
         self._active_field_ids: dict[tuple[str, str], str | None] = {}
         self._text_fallback_field_ids: dict[tuple[str, str], str | None] = {}
         self._fallback_field_ids: dict[tuple[str, str], str | None] = {}
-        self._last_text_fallback_events: dict[tuple[str, str], tuple[int, str, float]] = {}
+        self._last_text_fallback_events: dict[
+            tuple[str, str], tuple[int, str, float]
+        ] = {}
         self._pending_enter_keyups: set[tuple[str, str]] = set()
         self._candidate_reader = candidate_reader or DoubaoCandidateReader()
-        self._presubmit_composer_captures = {
-            LEGACY_KIM_BUNDLE_ID: kim_composer_capture or KimPreSubmitCapture(),
-            WECHAT_BUNDLE_ID: wechat_composer_capture or WeChatPreSubmitCapture(),
-        }
         self._post_send_coordinator = post_send_coordinator
         self._baseline_sampler = baseline_sampler
         self._owns_post_send_coordinator = post_send_coordinator is None
@@ -694,14 +722,10 @@ class KeyboardListener:
         self._post_send_pending: dict[str, PendingPostSendSubmission] = {}
         self._post_send_pending_lock = threading.Lock()
         self._target_app_identities: dict[int, tuple[str, str]] = {}
-        self._suppressed_enter_keyups: dict[int, list[float]] = {}
-        self._suppressed_enter_keyups_lock = threading.Lock()
         self._doubao_states: dict[tuple[str, str], DoubaoCompositionState] = {}
         self._doubao_failure_reasons: dict[tuple[str, str], str] = {}
         self._doubao_arrow_read_attempts: set[tuple[str, str]] = set()
-        self._doubao_untrusted_candidate_selections: set[
-            tuple[str, str]
-        ] = set()
+        self._doubao_untrusted_candidate_selections: set[tuple[str, str]] = set()
         self._last_doubao_target: tuple[str, str, int] | None = None
         self._event_queue: queue.Queue[RawKeyboardEvent | None] = queue.Queue(
             maxsize=EVENT_QUEUE_MAX_SIZE
@@ -740,147 +764,10 @@ class KeyboardListener:
             return
         if bundle_id in POST_SEND_CHAT_BUNDLE_IDS:
             self._target_app_identities[target_pid] = (app_name, bundle_id)
-            return
-        composer_capture = self._presubmit_composer_captures.get(bundle_id)
-        if composer_capture is None:
-            return
-        if composer_capture.prepare(target_pid):
-            self._target_app_identities[target_pid] = (
-                app_name,
-                bundle_id,
-            )
-        else:
-            self._target_app_identities.pop(target_pid, None)
 
-    def _create_pending_replay(
-        self,
-        event,
-        target_pid: int,
-    ) -> PendingReplay | None:
-        try:
-            copied_event = Quartz.CGEventCreateCopy(event)
-            copied_keyup = Quartz.CGEventCreateCopy(event)
-            if copied_event is None or copied_keyup is None:
-                return None
-            for copied, copied_type in (
-                (copied_event, kCGEventKeyDown),
-                (copied_keyup, kCGEventKeyUp),
-            ):
-                Quartz.CGEventSetType(copied, copied_type)
-                Quartz.CGEventSetIntegerValueField(
-                    copied,
-                    EVENT_SOURCE_USER_DATA_FIELD,
-                    REPLAY_EVENT_MARKER,
-                )
-            return PendingReplay(copied_event, target_pid, copied_keyup)
-        except Exception:
-            return None
-
-    def _arm_pending_replay_watchdog(self, pending: PendingReplay) -> None:
-        watchdog = threading.Timer(
-            ENTER_REPLAY_TIMEOUT_SECONDS,
-            self._release_pending_replay_value,
-            args=(pending,),
-        )
-        watchdog.daemon = True
-        pending.watchdog = watchdog
-        watchdog.start()
-
-    def _register_suppressed_enter_keyup(self, target_pid: int) -> None:
-        expires_at = time.monotonic() + SUPPRESSED_ENTER_KEYUP_TTL_SECONDS
-        with self._suppressed_enter_keyups_lock:
-            self._suppressed_enter_keyups.setdefault(target_pid, []).append(
-                expires_at
-            )
-
-    def _consume_suppressed_enter_keyup(self, target_pid: int) -> bool:
-        now = time.monotonic()
-        with self._suppressed_enter_keyups_lock:
-            deadlines = [
-                deadline
-                for deadline in self._suppressed_enter_keyups.get(target_pid, [])
-                if deadline >= now
-            ]
-            if not deadlines:
-                self._suppressed_enter_keyups.pop(target_pid, None)
-                return False
-            deadlines.pop(0)
-            if deadlines:
-                self._suppressed_enter_keyups[target_pid] = deadlines
-            else:
-                self._suppressed_enter_keyups.pop(target_pid, None)
-            return True
-
-    def _has_suppressed_enter_keyup(self, target_pid: int) -> bool:
-        now = time.monotonic()
-        with self._suppressed_enter_keyups_lock:
-            deadlines = [
-                deadline
-                for deadline in self._suppressed_enter_keyups.get(target_pid, [])
-                if deadline >= now
-            ]
-            if deadlines:
-                self._suppressed_enter_keyups[target_pid] = deadlines
-                return True
-            self._suppressed_enter_keyups.pop(target_pid, None)
-            return False
-
-    def _release_pending_replay_value(self, pending: PendingReplay) -> None:
-        with pending.lock:
-            if pending.released.is_set():
-                return
-            try:
-                if pending.keyup_event is None:
-                    pending.keyup_event = Quartz.CGEventCreateCopy(pending.event)
-                    if pending.keyup_event is None:
-                        raise RuntimeError("could not create Enter keyUp replay")
-                    for copied, copied_type in (
-                        (pending.event, kCGEventKeyDown),
-                        (pending.keyup_event, kCGEventKeyUp),
-                    ):
-                        Quartz.CGEventSetType(copied, copied_type)
-                        Quartz.CGEventSetIntegerValueField(
-                            copied,
-                            EVENT_SOURCE_USER_DATA_FIELD,
-                            REPLAY_EVENT_MARKER,
-                        )
-                Quartz.CGEventPostToPid(pending.target_pid, pending.event)
-                Quartz.CGEventPostToPid(
-                    pending.target_pid,
-                    pending.keyup_event,
-                )
-            except Exception as exc:
-                record_runtime_error(f"enter_replay_failed:{exc}")
-            finally:
-                pending.released.set()
-                if pending.watchdog is not None:
-                    pending.watchdog.cancel()
-
-    def _release_pending_replay(self, raw_event: RawKeyboardEvent) -> None:
-        pending = raw_event.pending_replay
-        if pending is None:
-            return
-        self._release_pending_replay_value(pending)
-
-    def _freeze_presubmit_composer(
-        self,
-        bundle_id: str,
-        target_pid: int,
-    ) -> tuple[object | None, str | None]:
-        composer_capture = self._presubmit_composer_captures.get(bundle_id)
-        capture_metadata = PRESUBMIT_OCR_METADATA.get(bundle_id)
-        if composer_capture is None or capture_metadata is None or target_pid <= 0:
-            return None, None
-        failure_prefix, _ = capture_metadata
-        try:
-            frame = composer_capture.freeze(target_pid)
-        except Exception:
-            return None, f"{failure_prefix}_capture_error"
-        if frame is None:
-            return None, f"{failure_prefix}_frame_unavailable"
-        return frame, None
-
-    def _on_rime_input(self, text: str, timestamp: datetime, app_name: str, bundle_id: str):
+    def _on_rime_input(
+        self, text: str, timestamp: datetime, app_name: str, bundle_id: str
+    ):
         """Rime log events are ignored in submission-snapshot mode."""
         return
 
@@ -1016,9 +903,7 @@ class KeyboardListener:
     ) -> str:
         key = self._fallback_buffer_key(app_name, bundle_id)
         state = self._doubao_states.pop(key, None)
-        selection_is_untrusted = (
-            key in self._doubao_untrusted_candidate_selections
-        )
+        selection_is_untrusted = key in self._doubao_untrusted_candidate_selections
         self._doubao_arrow_read_attempts.discard(key)
         self._doubao_untrusted_candidate_selections.discard(key)
         if state is None or target_pid is None or target_pid <= 0:
@@ -1066,11 +951,14 @@ class KeyboardListener:
                 target_bundle_id=bundle_id,
             )
             if snapshot is None:
-                self._doubao_failure_reasons[key] = getattr(
-                    self._candidate_reader,
-                    "last_failure_reason",
-                    None,
-                ) or "candidate_unavailable"
+                self._doubao_failure_reasons[key] = (
+                    getattr(
+                        self._candidate_reader,
+                        "last_failure_reason",
+                        None,
+                    )
+                    or "candidate_unavailable"
+                )
                 if is_candidate_arrow:
                     self._doubao_untrusted_candidate_selections.add(key)
                 if state.has_active_candidate:
@@ -1129,11 +1017,14 @@ class KeyboardListener:
         )
         key = self._fallback_buffer_key(app_name, bundle_id)
         if snapshot is None:
-            self._doubao_failure_reasons[key] = getattr(
-                self._candidate_reader,
-                "last_failure_reason",
-                None,
-            ) or "candidate_unavailable"
+            self._doubao_failure_reasons[key] = (
+                getattr(
+                    self._candidate_reader,
+                    "last_failure_reason",
+                    None,
+                )
+                or "candidate_unavailable"
+            )
         else:
             self._doubao_failure_reasons.pop(key, None)
         state.update_candidates(snapshot, target_pid=target_pid)
@@ -1176,7 +1067,9 @@ class KeyboardListener:
             return
 
         key = self._fallback_buffer_key(app_name, bundle_id)
-        if self._is_fallback_buffer_expired(self._text_fallback_buffer_updated_at.get(key)):
+        if self._is_fallback_buffer_expired(
+            self._text_fallback_buffer_updated_at.get(key)
+        ):
             self._text_fallback_buffers.pop(key, None)
 
         if track_editing_keys and keycode == 51:  # Backspace
@@ -1239,7 +1132,9 @@ class KeyboardListener:
             return ""
         return content
 
-    def _record_recent_text_snapshot(self, app_name: str, bundle_id: str, *, clear_on_empty: bool = False):
+    def _record_recent_text_snapshot(
+        self, app_name: str, bundle_id: str, *, clear_on_empty: bool = False
+    ):
         key = self._fallback_buffer_key(app_name, bundle_id)
         context = self._capture_focused_context(max_depth=1)
         if not is_text_entry_context(context):
@@ -1251,7 +1146,11 @@ class KeyboardListener:
 
         field_id = focused_field_identity(context)
         previous_field_id = self._active_field_ids.get(key)
-        if field_id is not None and previous_field_id is not None and field_id != previous_field_id:
+        if (
+            field_id is not None
+            and previous_field_id is not None
+            and field_id != previous_field_id
+        ):
             self._clear_submission_buffers(app_name, bundle_id)
         self._active_field_ids[key] = field_id
 
@@ -1280,7 +1179,9 @@ class KeyboardListener:
         snapshot = self._recent_text_snapshots.pop(key, None)
         if snapshot is None:
             return ""
-        if len(snapshot) == 2:  # Compatibility with snapshots created before field scoping.
+        if (
+            len(snapshot) == 2
+        ):  # Compatibility with snapshots created before field scoping.
             content, updated_at = snapshot
             snapshot_field_id = None
         else:
@@ -1366,13 +1267,10 @@ class KeyboardListener:
         updated_at = self._fallback_buffer_updated_at.pop(key, None)
         buffer = self._fallback_buffers.pop(key, [])
         buffer_field_id = self._fallback_field_ids.pop(key, None)
-        if (
-            (current_field_id is None) != (buffer_field_id is None)
-            or (
-                current_field_id is not None
-                and buffer_field_id is not None
-                and current_field_id != buffer_field_id
-            )
+        if (current_field_id is None) != (buffer_field_id is None) or (
+            current_field_id is not None
+            and buffer_field_id is not None
+            and current_field_id != buffer_field_id
         ):
             return 0
         if self._is_fallback_buffer_expired(updated_at):
@@ -1463,7 +1361,9 @@ class KeyboardListener:
             }
         )
 
-    def _should_ignore_enter_keyup(self, app_name: str, bundle_id: str, event_type) -> bool:
+    def _should_ignore_enter_keyup(
+        self, app_name: str, bundle_id: str, event_type
+    ) -> bool:
         if event_type != kCGEventKeyUp:
             return False
         key = self._fallback_buffer_key(app_name, bundle_id)
@@ -1618,9 +1518,7 @@ class KeyboardListener:
         intent = SendIntent(
             intent_id=intent_id,
             submitted_at=(
-                raw_event.occurred_at
-                if raw_event.occurred_at > 0
-                else time.monotonic()
+                raw_event.occurred_at if raw_event.occurred_at > 0 else time.monotonic()
             ),
             timestamp=raw_event.timestamp or storage_now(),
             app_name=app_name,
@@ -1670,9 +1568,7 @@ class KeyboardListener:
         if pending is None:
             return
         try:
-            current_app_name, current_bundle_id, current_pid = (
-                get_current_app_target()
-            )
+            current_app_name, current_bundle_id, current_pid = get_current_app_target()
         except Exception:
             current_app_name, current_bundle_id, current_pid = (
                 "Unknown",
@@ -1680,8 +1576,7 @@ class KeyboardListener:
                 -1,
             )
         if current_pid <= 0 or (
-            current_pid != pending.target_pid
-            or current_bundle_id != pending.bundle_id
+            current_pid != pending.target_pid or current_bundle_id != pending.bundle_id
         ):
             self._emit_capture_diagnostic(
                 pending.app_name,
@@ -1738,9 +1633,7 @@ class KeyboardListener:
             return
         diagnostic_details = {"intent_id": pending.intent_id}
         if outcome.diagnostics:
-            diagnostic_details["source_diagnostics"] = list(
-                outcome.diagnostics
-            )
+            diagnostic_details["source_diagnostics"] = list(outcome.diagnostics)
         self._emit_capture_diagnostic(
             pending.app_name,
             pending.bundle_id,
@@ -1759,8 +1652,6 @@ class KeyboardListener:
         key_modifiers: dict | None = None,
         event_type=None,
         target_pid: int | None = None,
-        pre_submit_frame: object | None = None,
-        pre_submit_capture_failure: str | None = None,
         captured_context=None,
     ):
         """Emit the full focused input value when Enter is pressed."""
@@ -1780,9 +1671,9 @@ class KeyboardListener:
         captured_context_data = self._context_to_dict_safe(context)
         context_data = captured_context_data if config.capture_context_on_enter else {}
         current_field_id = focused_field_identity(context)
-        capture_status = getattr(context, "capture_status", None) or captured_context_data.get(
-            "capture_status", "ok"
-        )
+        capture_status = getattr(
+            context, "capture_status", None
+        ) or captured_context_data.get("capture_status", "ok")
         if is_secure_text_entry_context(context):
             physical_key_count = self._pop_fallback_count(
                 app_name, bundle_id, current_field_id=current_field_id
@@ -1800,151 +1691,6 @@ class KeyboardListener:
             return
 
         if capture_status != "ok":
-            if bundle_id in DEGRADED_CHAT_COMPATIBILITY_BUNDLE_IDS:
-                candidate_failure = self._doubao_failure_reasons.pop(
-                    self._fallback_buffer_key(app_name, bundle_id),
-                    None,
-                )
-                candidate_diagnostics = (
-                    {"doubao_candidate_failure": candidate_failure}
-                    if candidate_failure
-                    else {}
-                )
-                capture_metadata = PRESUBMIT_OCR_METADATA.get(bundle_id)
-                if capture_metadata and pre_submit_capture_failure:
-                    failure_prefix, _ = capture_metadata
-                    candidate_diagnostics[f"{failure_prefix}_failure"] = (
-                        pre_submit_capture_failure
-                    )
-                if not candidate_diagnostics:
-                    candidate_diagnostics = None
-                physical_key_count = self._pop_fallback_count(
-                    app_name, bundle_id, current_field_id=current_field_id
-                )
-                candidate_content = normalize_submission_text(
-                    self._pop_doubao_submission(
-                        app_name,
-                        bundle_id,
-                        target_pid,
-                    ),
-                    app_name=app_name,
-                    bundle_id=bundle_id,
-                )
-                if candidate_content:
-                    self._clear_recent_text_snapshot(app_name, bundle_id)
-                    self._clear_text_fallback_buffer(app_name, bundle_id)
-                    self._emit_submission_event(
-                        app_name=app_name,
-                        bundle_id=bundle_id,
-                        content=candidate_content,
-                        key_modifiers=key_modifiers,
-                        context_data=context_data,
-                        fallback_source="doubao_candidate_text",
-                        physical_key_count=physical_key_count,
-                    )
-                    return
-                content = normalize_submission_text(
-                    self._pop_text_fallback_content(
-                        app_name,
-                        bundle_id,
-                        current_field_id=current_field_id,
-                        allow_unscoped=True,
-                    ),
-                    app_name=app_name,
-                    bundle_id=bundle_id,
-                )
-                self._clear_recent_text_snapshot(app_name, bundle_id)
-                if content:
-                    self._emit_submission_event(
-                        app_name=app_name,
-                        bundle_id=bundle_id,
-                        content=content,
-                        key_modifiers=key_modifiers,
-                        context_data=context_data,
-                        fallback_source="degraded_key_event_text",
-                        physical_key_count=physical_key_count,
-                        capture_diagnostics=candidate_diagnostics,
-                    )
-                    return
-                composer_capture = self._presubmit_composer_captures.get(
-                    bundle_id
-                )
-                if composer_capture is not None and pre_submit_frame is not None:
-                    failure_prefix, fallback_source = PRESUBMIT_OCR_METADATA[
-                        bundle_id
-                    ]
-                    try:
-                        recognized_text, ocr_failure = (
-                            composer_capture.recognize(pre_submit_frame)
-                        )
-                    except Exception:
-                        recognized_text = ""
-                        ocr_failure = f"{failure_prefix}_native_error"
-                    recognized_content = normalize_submission_text(
-                        recognized_text,
-                        app_name=app_name,
-                        bundle_id=bundle_id,
-                    )
-                    if recognized_content and ocr_text_matches_physical_count(
-                        recognized_content,
-                        physical_key_count,
-                    ):
-                        self._clear_text_fallback_buffer(app_name, bundle_id)
-                        self._emit_submission_event(
-                            app_name=app_name,
-                            bundle_id=bundle_id,
-                            content=recognized_content,
-                            key_modifiers=key_modifiers,
-                            context_data=context_data,
-                            fallback_source=fallback_source,
-                            physical_key_count=physical_key_count,
-                        )
-                        return
-                    if recognized_content and not ocr_failure:
-                        ocr_failure = f"{failure_prefix}_key_count_mismatch"
-                    if ocr_failure:
-                        candidate_diagnostics = dict(
-                            candidate_diagnostics or {}
-                        )
-                        candidate_diagnostics[
-                            f"{failure_prefix}_failure"
-                        ] = ocr_failure
-                elif capture_metadata and pre_submit_capture_failure:
-                    failure_prefix, _ = capture_metadata
-                    candidate_diagnostics = dict(candidate_diagnostics or {})
-                    candidate_diagnostics[f"{failure_prefix}_failure"] = (
-                        pre_submit_capture_failure
-                    )
-                if (
-                    physical_key_count > 0
-                    and getattr(config, "count_unreadable_submissions", True)
-                ):
-                    self._emit_submission_event(
-                        app_name=app_name,
-                        bundle_id=bundle_id,
-                        content=UNREADABLE_SUBMISSION_PLACEHOLDER,
-                        key_modifiers=key_modifiers,
-                        context_data=context_data,
-                        fallback_source="degraded_count_unreadable",
-                        char_count_override=physical_key_count,
-                        redacted_content=True,
-                        physical_key_count=physical_key_count,
-                        capture_diagnostics=candidate_diagnostics,
-                    )
-                    return
-                self._clear_submission_buffers(app_name, bundle_id)
-                self._emit_capture_diagnostic(
-                    app_name,
-                    bundle_id,
-                    event_type=event_type,
-                    decision_action="skip",
-                    decision_reason="no_trusted_content",
-                    physical_key_count=physical_key_count,
-                    context_data=captured_context_data,
-                    diagnostics=candidate_diagnostics,
-                )
-                return
-
             physical_key_count = self._pop_fallback_count(
                 app_name, bundle_id, current_field_id=current_field_id
             )
@@ -1977,7 +1723,9 @@ class KeyboardListener:
             return
 
         text_entry_context = is_text_entry_context(context)
-        self._active_field_ids[self._fallback_buffer_key(app_name, bundle_id)] = current_field_id
+        self._active_field_ids[self._fallback_buffer_key(app_name, bundle_id)] = (
+            current_field_id
+        )
         ax_content = ""
         if text_entry_context:
             focused_value = getattr(context, "focused_value", None)
@@ -2011,28 +1759,6 @@ class KeyboardListener:
         fallback_source = None
         physical_key_count = None
         capture_diagnostics = None
-        if (
-            text_entry_context
-            and not content
-            and bundle_id in self._presubmit_composer_captures
-        ):
-            candidate_content = normalize_submission_text(
-                self._pop_doubao_submission(
-                    app_name,
-                    bundle_id,
-                    target_pid,
-                ),
-                app_name=app_name,
-                bundle_id=bundle_id,
-            )
-            if candidate_content:
-                content = candidate_content
-                fallback_source = "doubao_candidate_text"
-                physical_key_count = self._pop_fallback_count(
-                    app_name,
-                    bundle_id,
-                    current_field_id=current_field_id,
-                )
         if (
             text_entry_context
             and fallback_source != "doubao_candidate_text"
@@ -2080,45 +1806,16 @@ class KeyboardListener:
                 now = time.monotonic()
                 if now - self._last_empty_submission_log >= 5.0:
                     role = context_data.get("focused_role") or "unknown"
-                    print(f"⚠️  Enter 提交未保存：焦点不是文本输入控件 ({role}) -> {app_name} ({bundle_id})")
+                    print(
+                        f"⚠️  Enter 提交未保存：焦点不是文本输入控件 ({role}) -> {app_name} ({bundle_id})"
+                    )
                     self._last_empty_submission_log = now
                 return
-            composer_capture = self._presubmit_composer_captures.get(bundle_id)
-            if composer_capture is not None and pre_submit_frame is not None:
-                failure_prefix, ocr_fallback_source = PRESUBMIT_OCR_METADATA[
-                    bundle_id
-                ]
-                try:
-                    recognized_text, ocr_failure = composer_capture.recognize(
-                        pre_submit_frame
-                    )
-                except Exception:
-                    recognized_text = ""
-                    ocr_failure = f"{failure_prefix}_native_error"
-                recognized_content = normalize_submission_text(
-                    recognized_text,
-                    app_name=app_name,
-                    bundle_id=bundle_id,
-                )
-                if recognized_content and ocr_text_matches_physical_count(
-                    recognized_content,
-                    physical_key_count,
-                ):
-                    content = recognized_content
-                    fallback_source = ocr_fallback_source
-                else:
-                    if recognized_content and not ocr_failure:
-                        ocr_failure = f"{failure_prefix}_key_count_mismatch"
-                    if ocr_failure:
-                        capture_diagnostics = {
-                            f"{failure_prefix}_failure": ocr_failure
-                        }
-            elif bundle_id in PRESUBMIT_OCR_METADATA and pre_submit_capture_failure:
-                failure_prefix, _ = PRESUBMIT_OCR_METADATA[bundle_id]
-                capture_diagnostics = {
-                    f"{failure_prefix}_failure": pre_submit_capture_failure
-                }
-            fallback_count = physical_key_count if getattr(config, "count_unreadable_submissions", True) else 0
+            fallback_count = (
+                physical_key_count
+                if getattr(config, "count_unreadable_submissions", True)
+                else 0
+            )
             if content:
                 self._clear_submission_buffers(app_name, bundle_id)
             elif fallback_count > 0:
@@ -2137,12 +1834,16 @@ class KeyboardListener:
                     physical_key_count=physical_key_count,
                     context_data=captured_context_data,
                     diagnostics={
-                        "count_unreadable_enabled": getattr(config, "count_unreadable_submissions", True),
+                        "count_unreadable_enabled": getattr(
+                            config, "count_unreadable_submissions", True
+                        ),
                     },
                 )
                 now = time.monotonic()
                 if now - self._last_empty_submission_log >= 5.0:
-                    print(f"⚠️  Enter 提交未保存：无法读取输入框文本 -> {app_name} ({bundle_id})")
+                    print(
+                        f"⚠️  Enter 提交未保存：无法读取输入框文本 -> {app_name} ({bundle_id})"
+                    )
                     self._last_empty_submission_log = now
                 return
         else:
@@ -2151,12 +1852,16 @@ class KeyboardListener:
         if redacted_content:
             now = time.monotonic()
             if now - self._last_empty_submission_log >= 5.0:
-                print(f"⚠️  Enter 提交使用计数降级：{char_count_override} chars -> {app_name} ({bundle_id})")
+                print(
+                    f"⚠️  Enter 提交使用计数降级：{char_count_override} chars -> {app_name} ({bundle_id})"
+                )
                 self._last_empty_submission_log = now
         elif fallback_source == "key_event_text":
             now = time.monotonic()
             if now - self._last_empty_submission_log >= 5.0:
-                print(f"⚠️  Enter 提交使用键盘文本降级：{len(content)} chars -> {app_name} ({bundle_id})")
+                print(
+                    f"⚠️  Enter 提交使用键盘文本降级：{len(content)} chars -> {app_name} ({bundle_id})"
+                )
                 self._last_empty_submission_log = now
 
         if _DEBUG:
@@ -2196,9 +1901,7 @@ class KeyboardListener:
         """Process a sampled key event outside the EventTap callback thread."""
         event_type = raw_event.event_type
         keycode = raw_event.keycode
-        app_name, bundle_id, application_pid = self._resolve_raw_event_target(
-            raw_event
-        )
+        app_name, bundle_id, application_pid = self._resolve_raw_event_target(raw_event)
         if application_pid > 0:
             if len(self._target_app_identities) >= 32:
                 self._target_app_identities.clear()
@@ -2206,20 +1909,6 @@ class KeyboardListener:
                 app_name,
                 bundle_id,
             )
-            composer_capture = self._presubmit_composer_captures.get(bundle_id)
-            if (
-                composer_capture is not None
-                and not (
-                    bundle_id in POST_SEND_CHAT_BUNDLE_IDS
-                    and (
-                        self._post_send_coordinator is not None
-                        or self._baseline_sampler is not None
-                    )
-                )
-                and raw_event.event_type == kCGEventKeyDown
-                and raw_event.keycode != ENTER_KEYCODE
-            ):
-                composer_capture.prepare(application_pid)
         self._update_doubao_target(
             app_name,
             bundle_id,
@@ -2227,7 +1916,9 @@ class KeyboardListener:
         )
         if config.is_app_ignored(bundle_id):
             self._clear_submission_buffers(app_name, bundle_id)
-            self._active_field_ids.pop(self._fallback_buffer_key(app_name, bundle_id), None)
+            self._active_field_ids.pop(
+                self._fallback_buffer_key(app_name, bundle_id), None
+            )
             return
         set_last_input_app(app_name, bundle_id)
         modifiers = raw_event.modifiers
@@ -2266,7 +1957,7 @@ class KeyboardListener:
             return
 
         if event_type == kCGEventKeyUp and keycode != ENTER_KEYCODE:
-            if bundle_id not in PRESUBMIT_OCR_METADATA or (
+            if bundle_id not in POST_SEND_CHAT_BUNDLE_IDS or (
                 bundle_id in POST_SEND_CHAT_BUNDLE_IDS
                 and keycode == 9
                 and modifiers.get("cmd")
@@ -2286,7 +1977,7 @@ class KeyboardListener:
                 raw_event.text,
                 track_editing_keys=False,
             )
-            if bundle_id not in PRESUBMIT_OCR_METADATA:
+            if bundle_id not in POST_SEND_CHAT_BUNDLE_IDS:
                 self._refresh_doubao_candidates(
                     app_name,
                     bundle_id,
@@ -2332,7 +2023,10 @@ class KeyboardListener:
                 application_pid,
             )
 
-        if keycode != ENTER_KEYCODE or event_type not in (kCGEventKeyDown, kCGEventKeyUp):
+        if keycode != ENTER_KEYCODE or event_type not in (
+            kCGEventKeyDown,
+            kCGEventKeyUp,
+        ):
             return
         if (
             bundle_id in POST_SEND_CHAT_BUNDLE_IDS
@@ -2403,32 +2097,6 @@ class KeyboardListener:
                 decision_reason="shortcut_modifier",
             )
         else:
-            captured_context = None
-            pre_submit_frame = raw_event.pre_submit_frame
-            pre_submit_capture_failure = raw_event.pre_submit_capture_failure
-            if raw_event.pending_replay is not None:
-                captured_context = self._capture_focused_context(
-                    target_pid=application_pid
-                )
-                if is_secure_text_entry_context(captured_context):
-                    self._emit_submission_snapshot(
-                        None,
-                        app_name=app_name,
-                        bundle_id=bundle_id,
-                        key_modifiers=modifiers,
-                        event_type=event_type,
-                        target_pid=application_pid,
-                        captured_context=captured_context,
-                    )
-                    self._release_pending_replay(raw_event)
-                    return
-                (
-                    pre_submit_frame,
-                    pre_submit_capture_failure,
-                ) = self._freeze_presubmit_composer(
-                    bundle_id,
-                    application_pid,
-                )
             candidate_result = self._handle_doubao_keydown(
                 app_name,
                 bundle_id,
@@ -2439,7 +2107,6 @@ class KeyboardListener:
                 raw_event.is_autorepeat,
             )
             if candidate_result is not None and candidate_result.candidate_committed:
-                self._release_pending_replay(raw_event)
                 self._emit_capture_diagnostic(
                     app_name,
                     bundle_id,
@@ -2450,8 +2117,6 @@ class KeyboardListener:
                     selected_confidence=0.9,
                 )
                 return
-            if raw_event.pending_replay is not None:
-                self._release_pending_replay(raw_event)
             self._emit_submission_snapshot(
                 None,
                 app_name=app_name,
@@ -2459,9 +2124,6 @@ class KeyboardListener:
                 key_modifiers=modifiers,
                 event_type=event_type,
                 target_pid=application_pid,
-                pre_submit_frame=pre_submit_frame,
-                pre_submit_capture_failure=pre_submit_capture_failure,
-                captured_context=captured_context,
             )
 
     def _event_worker_loop(self):
@@ -2482,23 +2144,10 @@ class KeyboardListener:
                 if _DEBUG:
                     print(f"[DEBUG] queued keyboard event failed: {e}")
             finally:
-                if raw_event is not None:
-                    self._release_pending_replay(raw_event)
                 self._event_queue.task_done()
 
     def _event_callback(self, proxy, event_type, event, refcon):
         """Sample the native event quickly and return control to macOS."""
-        try:
-            if (
-                CGEventGetIntegerValueField(
-                    event,
-                    EVENT_SOURCE_USER_DATA_FIELD,
-                )
-                == REPLAY_EVENT_MARKER
-            ):
-                return event
-        except Exception:
-            pass
         if event_type in (
             EVENT_TAP_DISABLED_BY_TIMEOUT,
             EVENT_TAP_DISABLED_BY_USER_INPUT,
@@ -2517,9 +2166,7 @@ class KeyboardListener:
             try:
                 target_pid = self._get_event_target_pid(event)
                 if self._has_started:
-                    app_name, bundle_id, frontmost_pid = (
-                        get_current_app_target()
-                    )
+                    app_name, bundle_id, frontmost_pid = get_current_app_target()
                 else:
                     app_name, bundle_id = self._get_event_target_app(event)
                     frontmost_pid = target_pid
@@ -2540,42 +2187,6 @@ class KeyboardListener:
                         KEYBOARD_EVENT_AUTOREPEAT_FIELD,
                     )
                 )
-                if (
-                    event_type == kCGEventKeyUp
-                    and keycode == ENTER_KEYCODE
-                    and self._consume_suppressed_enter_keyup(target_pid)
-                ):
-                    return None
-                if (
-                    event_type == kCGEventKeyDown
-                    and keycode == ENTER_KEYCODE
-                    and is_autorepeat
-                    and self._has_suppressed_enter_keyup(target_pid)
-                ):
-                    return None
-                pending_replay = None
-                composer_capture = self._presubmit_composer_captures.get(
-                    bundle_id
-                )
-                if (
-                    event_type == kCGEventKeyDown
-                    and keycode == ENTER_KEYCODE
-                    and composer_capture is not None
-                    and bundle_id not in POST_SEND_CHAT_BUNDLE_IDS
-                    and target_pid > 0
-                    and frontmost_pid == target_pid
-                    and self._target_app_identities.get(target_pid)
-                    == (app_name, bundle_id)
-                    and not is_autorepeat
-                    and not any(modifiers.values())
-                    and config.input_capture_mode == "enter-text"
-                    and not config.is_app_ignored(bundle_id)
-                    and self._event_worker_running
-                ):
-                    pending_replay = self._create_pending_replay(
-                        event,
-                        target_pid,
-                    )
                 raw_event = RawKeyboardEvent(
                     event_type=event_type,
                     keycode=keycode,
@@ -2586,7 +2197,6 @@ class KeyboardListener:
                     target_pid=target_pid,
                     frontmost_pid=frontmost_pid,
                     is_autorepeat=is_autorepeat,
-                    pending_replay=pending_replay,
                     occurred_at=time.monotonic(),
                     timestamp=storage_now(),
                 )
@@ -2595,20 +2205,15 @@ class KeyboardListener:
                         self._event_queue.put_nowait(raw_event)
                     except queue.Full:
                         self._dropped_event_count += 1
-                        pending_replay = None
                 elif not self._has_started:
                     self._process_raw_event(raw_event)
                 else:
                     self._dropped_event_count += 1
-                if pending_replay is not None:
-                    self._register_suppressed_enter_keyup(target_pid)
-                    self._arm_pending_replay_watchdog(pending_replay)
-                    return None
             except Exception:
                 self._dropped_event_count += 1
-        
+
         return event
-    
+
     def _create_event_tap(self) -> bool:
         """创建 CGEventTap，返回是否成功"""
         with self._tap_lock:
@@ -2635,7 +2240,7 @@ class KeyboardListener:
                 0,
                 event_mask,
                 self._event_callback,
-                None
+                None,
             )
 
             if self._tap is None:
@@ -2703,7 +2308,11 @@ class KeyboardListener:
             # 移除旧的 source
             if self._run_loop_source and self._run_loop:
                 try:
-                    CFRunLoopRemoveSource(self._run_loop, self._run_loop_source, Quartz.kCFRunLoopCommonModes)
+                    CFRunLoopRemoveSource(
+                        self._run_loop,
+                        self._run_loop_source,
+                        Quartz.kCFRunLoopCommonModes,
+                    )
                 except:
                     pass
                 self._run_loop_source = None
@@ -2711,9 +2320,15 @@ class KeyboardListener:
         # 创建新的 tap
         if self._create_event_tap():
             with self._tap_lock:
-                self._run_loop_source = CFMachPortCreateRunLoopSource(None, self._tap, 0)
+                self._run_loop_source = CFMachPortCreateRunLoopSource(
+                    None, self._tap, 0
+                )
                 if self._run_loop:
-                    CFRunLoopAddSource(self._run_loop, self._run_loop_source, Quartz.kCFRunLoopCommonModes)
+                    CFRunLoopAddSource(
+                        self._run_loop,
+                        self._run_loop_source,
+                        Quartz.kCFRunLoopCommonModes,
+                    )
                     CGEventTapEnable(self._tap, True)
                     print("✅ CGEventTap 重建成功")
                     set_recording_status("recording")
@@ -2725,6 +2340,7 @@ class KeyboardListener:
     def _on_system_wake(self, notification):
         """系统唤醒回调"""
         print("💤 检测到系统唤醒，检查 CGEventTap 状态...")
+
         # 延迟一下再检查，等系统完全唤醒
         def delayed_check():
             time.sleep(2)
@@ -2733,6 +2349,7 @@ class KeyboardListener:
                 self._rebuild_tap()
             else:
                 print("✅ 系统唤醒后 CGEventTap 状态正常")
+
         threading.Thread(target=delayed_check, daemon=True).start()
 
     def _start_wake_observer(self):
@@ -2755,9 +2372,9 @@ class KeyboardListener:
             # 监听系统唤醒事件
             nc.addObserver_selector_name_object_(
                 self._wake_observer,
-                objc.selector(self._wake_observer.onWake_, signature=b'v@:@'),
+                objc.selector(self._wake_observer.onWake_, signature=b"v@:@"),
                 "NSWorkspaceDidWakeNotification",
-                None
+                None,
             )
             print("👁️  系统唤醒监听已启动")
         except Exception as e:
@@ -2770,7 +2387,9 @@ class KeyboardListener:
         with self._tap_lock:
             self._run_loop_source = CFMachPortCreateRunLoopSource(None, self._tap, 0)
             self._run_loop = CFRunLoopGetCurrent()
-            CFRunLoopAddSource(self._run_loop, self._run_loop_source, Quartz.kCFRunLoopCommonModes)
+            CFRunLoopAddSource(
+                self._run_loop, self._run_loop_source, Quartz.kCFRunLoopCommonModes
+            )
             CGEventTapEnable(self._tap, True)
 
         print("✅ 键盘监听已启动")
@@ -2781,7 +2400,7 @@ class KeyboardListener:
         # 避免 Rosetta 翻译下 CGEventTap 回调导致忙循环
         while self._running:
             Quartz.CFRunLoopRunInMode(Quartz.kCFRunLoopDefaultMode, 1.0, False)
-    
+
     def start(self):
         if self._running:
             return
@@ -2797,7 +2416,9 @@ class KeyboardListener:
         self._has_started = True
         self._running = True
         self._event_worker_running = True
-        self._event_worker_thread = threading.Thread(target=self._event_worker_loop, daemon=True)
+        self._event_worker_thread = threading.Thread(
+            target=self._event_worker_loop, daemon=True
+        )
         self._event_worker_thread.start()
 
         # 启动系统唤醒监听
@@ -2808,7 +2429,9 @@ class KeyboardListener:
         self._thread.start()
 
         # 启动健康检查线程
-        self._health_check_thread = threading.Thread(target=self._health_check_loop, daemon=True)
+        self._health_check_thread = threading.Thread(
+            target=self._health_check_loop, daemon=True
+        )
         self._health_check_thread.start()
 
         # 提交快照模式不启动 Rime 日志监听，避免保存拼音中间态。
@@ -2829,10 +2452,7 @@ class KeyboardListener:
         with self._event_processing_lock:
             self._running = False
             self._event_worker_running = False
-        if (
-            self._owns_post_send_coordinator
-            and self._post_send_coordinator is not None
-        ):
+        if self._owns_post_send_coordinator and self._post_send_coordinator is not None:
             self._post_send_coordinator.stop()
             self._post_send_coordinator = None
         if self._owns_baseline_sampler and self._baseline_sampler is not None:
@@ -2869,63 +2489,71 @@ class KeyboardListener:
 
         print("⏹️ 监听已停止")
         set_recording_status("paused")
-    
+
     def is_running(self) -> bool:
         return self._running
 
 
 def check_accessibility_permission() -> bool:
     from ApplicationServices import AXIsProcessTrusted
+
     return AXIsProcessTrusted()
 
 
 def request_accessibility_permission():
     from ApplicationServices import AXIsProcessTrustedWithOptions
     from Foundation import NSDictionary
-    options = NSDictionary.dictionaryWithObject_forKey_(True, "AXTrustedCheckOptionPrompt")
+
+    options = NSDictionary.dictionaryWithObject_forKey_(
+        True, "AXTrustedCheckOptionPrompt"
+    )
     AXIsProcessTrustedWithOptions(options)
 
 
 if __name__ == "__main__":
     print("🔍 检查辅助功能权限...")
-    
+
     if not check_accessibility_permission():
         print("❌ 没有辅助功能权限，正在请求...")
         request_accessibility_permission()
         print("请在系统偏好设置中授予权限后重新运行")
         exit(1)
-    
+
     print("✅ 已获得辅助功能权限")
     print("-" * 50)
-    
+
     last_app = [""]
-    
+
     def on_key(event: KeyEvent):
         if last_app[0] != event.app_name:
             if last_app[0]:
                 print()
             print(f"\n[{event.app_name}] ", end="", flush=True)
             last_app[0] = event.app_name
-        
+
         char = event.character
         if event.modifiers.get("submit_snapshot"):
-            print(f"\033[32m{format_submission_terminal_notice(char)}\033[0m", flush=True)
-        elif char == '\n':
+            print(
+                f"\033[32m{format_submission_terminal_notice(char)}\033[0m", flush=True
+            )
+        elif char == "\n":
             print()
             print(f"[{event.app_name}] ", end="", flush=True)
-        elif char == '\b':
-            print('\b \b', end='', flush=True)
-        elif char in ['esc', '←', '→', '↑', '↓', 'del'] or (len(char) <= 3 and char.startswith('F')):
+        elif char == "\b":
+            print("\b \b", end="", flush=True)
+        elif char in ["esc", "←", "→", "↑", "↓", "del"] or (
+            len(char) <= 3 and char.startswith("F")
+        ):
             pass
         else:
             if event.is_ime_input:
                 print(f"\033[32m{char}\033[0m", end="", flush=True)
             else:
                 print(f"{char}", end="", flush=True)
-    
+
     listener = KeyboardListener(on_key)
     listener.start()
-    
+
     print("\n按 Ctrl+C 停止监听...")
     print("💡 中文显示为绿色\n")
     try:

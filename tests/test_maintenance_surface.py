@@ -18,8 +18,11 @@ def test_unused_input_diff_and_app_tracker_modules_are_removed():
     assert not (ROOT / "src/ominime/app_tracker.py").exists()
 
 
-def test_production_listener_constructs_local_chat_captures():
+def test_production_listener_constructs_postsend_chat_services():
     source = (ROOT / "src/ominime/keyboard_listener.py").read_text(encoding="utf-8")
 
-    assert "kim_composer_capture or KimPreSubmitCapture()" in source
-    assert "wechat_composer_capture or WeChatPreSubmitCapture()" in source
+    assert "ChatWindowBaselineSampler()" in source
+    assert "build_default_message_source_chain(" in source
+    assert "PostSendCaptureCoordinator(" in source
+    assert "KimPreSubmitCapture" not in source
+    assert "WeChatPreSubmitCapture" not in source
