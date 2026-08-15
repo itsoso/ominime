@@ -972,12 +972,14 @@ class KeyboardListener:
             return None
         if modifiers.get("cmd") or modifiers.get("ctrl") or modifiers.get("alt"):
             return None
-        candidate_commit_keycodes = {
+        candidate_read_keycodes = {
             ENTER_KEYCODE,
             49,
+            123,
+            124,
             *NUMBER_KEYCODE_TO_INDEX,
         }
-        if keycode in candidate_commit_keycodes:
+        if keycode in candidate_read_keycodes:
             snapshot = self._candidate_reader.read(
                 target_pid=target_pid,
                 target_bundle_id=bundle_id,
@@ -1960,6 +1962,21 @@ class KeyboardListener:
                 decision_reason="shortcut_modifier",
             )
         else:
+            captured_context = None
+            pre_submit_frame = raw_event.pre_submit_frame
+            pre_submit_capture_failure = raw_event.pre_submit_capture_failure
+            if raw_event.pending_replay is not None:
+                captured_context = self._capture_focused_context(
+                    target_pid=application_pid
+                )
+                if not is_secure_text_entry_context(captured_context):
+                    (
+                        pre_submit_frame,
+                        pre_submit_capture_failure,
+                    ) = self._freeze_presubmit_composer(
+                        bundle_id,
+                        application_pid,
+                    )
             candidate_result = self._handle_doubao_keydown(
                 app_name,
                 bundle_id,
@@ -1980,21 +1997,7 @@ class KeyboardListener:
                     selected_confidence=0.9,
                 )
                 return
-            captured_context = None
-            pre_submit_frame = raw_event.pre_submit_frame
-            pre_submit_capture_failure = raw_event.pre_submit_capture_failure
             if raw_event.pending_replay is not None:
-                captured_context = self._capture_focused_context(
-                    target_pid=application_pid
-                )
-                if not is_secure_text_entry_context(captured_context):
-                    (
-                        pre_submit_frame,
-                        pre_submit_capture_failure,
-                    ) = self._freeze_presubmit_composer(
-                        bundle_id,
-                        application_pid,
-                    )
                 self._release_pending_replay(raw_event)
             self._emit_submission_snapshot(
                 None,

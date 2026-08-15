@@ -2832,13 +2832,16 @@ def test_enter_does_not_emit_count_only_fallback_when_disabled(monkeypatch):
 
 
 class FakeDoubaoCandidateReader:
-    def __init__(self, snapshots=()):
+    def __init__(self, snapshots=(), on_read=None):
         self.snapshots = list(snapshots)
+        self.on_read = on_read
         self.calls = []
         self.last_failure_reason = None
 
     def read(self, *, target_pid, target_bundle_id):
         self.calls.append((target_pid, target_bundle_id))
+        if self.on_read is not None:
+            self.on_read()
         if self.snapshots:
             snapshot = self.snapshots.pop(0)
             self.last_failure_reason = (
@@ -2858,6 +2861,7 @@ def doubao_raw_event(
     frontmost_pid=0,
     pre_submit_frame=None,
     pre_submit_capture_failure=None,
+    pending_replay=None,
 ):
     return keyboard_listener.RawKeyboardEvent(
         event_type=event_type,
@@ -2870,6 +2874,7 @@ def doubao_raw_event(
         frontmost_pid=frontmost_pid,
         pre_submit_frame=pre_submit_frame,
         pre_submit_capture_failure=pre_submit_capture_failure,
+        pending_replay=pending_replay,
     )
 
 
@@ -3124,6 +3129,180 @@ def test_doubao_space_and_number_commit_do_not_submit_chat(monkeypatch):
 
     assert submission_calls == []
     assert listener._doubao_states[("Kim", "Kem")].confirmed_text == "测试拟好"
+
+
+def test_doubao_right_arrow_selects_second_candidate_without_keyup_read(
+    monkeypatch,
+):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    snapshot = keyboard_listener.CandidateSnapshot(
+        ("测试", "策士"),
+        123,
+        time.monotonic(),
+    )
+    reader = FakeDoubaoCandidateReader([snapshot, snapshot, None])
+    capture = FakeKimComposerCapture(recognize_result=("不应覆盖候选", None))
+    events = []
+    listener = keyboard_listener.KeyboardListener(
+        events.append,
+        candidate_reader=reader,
+        kim_composer_capture=capture,
+    )
+    configure_listener_context(listener)
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_app_by_pid",
+        lambda pid: ("Kim", "Kem"),
+    )
+
+    for raw_event in (
+        doubao_raw_event(
+            keyboard_listener,
+            keyboard_listener.kCGEventKeyDown,
+            8,
+            "c",
+        ),
+        doubao_raw_event(
+            keyboard_listener,
+            keyboard_listener.kCGEventKeyUp,
+            8,
+            "c",
+        ),
+    ):
+        listener._process_raw_event(raw_event)
+
+    assert reader.calls == []
+
+    listener._process_raw_event(
+        doubao_raw_event(
+            keyboard_listener,
+            keyboard_listener.kCGEventKeyDown,
+            124,
+        )
+    )
+
+    assert reader.calls == [(123, "Kem")]
+
+    for raw_event in (
+        doubao_raw_event(
+            keyboard_listener,
+            keyboard_listener.kCGEventKeyDown,
+            49,
+            " ",
+        ),
+        doubao_raw_event(
+            keyboard_listener,
+            keyboard_listener.kCGEventKeyDown,
+            keyboard_listener.ENTER_KEYCODE,
+            pre_submit_frame="kim-frame",
+        ),
+    ):
+        listener._process_raw_event(raw_event)
+
+    assert reader.calls == [(123, "Kem")] * 3
+    assert len(events) == 1
+    assert events[0].character == "策士"
+    assert events[0].modifiers["fallback_source"] == "doubao_candidate_text"
+    assert capture.recognize_calls == []
+
+
+def test_pending_enter_freezes_frame_before_candidate_lookup_and_watchdog_replay(
+    monkeypatch,
+):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    capture = FakeKimComposerCapture()
+    freeze_calls_seen_by_reader = []
+    reader = FakeDoubaoCandidateReader([None])
+    emitted = []
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None,
+        candidate_reader=reader,
+        kim_composer_capture=capture,
+    )
+    configure_listener_context(listener)
+    listener._emit_submission_snapshot = (
+        lambda *args, **kwargs: emitted.append(kwargs)
+    )
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_app_by_pid",
+        lambda pid: ("Kim", "Kem"),
+    )
+    pending = listener._create_pending_replay(
+        SimpleNamespace(keycode=keyboard_listener.ENTER_KEYCODE),
+        123,
+    )
+
+    def observe_candidate_read_and_fire_watchdog():
+        freeze_calls_seen_by_reader.append(list(capture.freeze_calls))
+        listener._release_pending_replay_value(pending)
+
+    reader.on_read = observe_candidate_read_and_fire_watchdog
+
+    listener._process_raw_event(
+        doubao_raw_event(
+            keyboard_listener,
+            keyboard_listener.kCGEventKeyDown,
+            keyboard_listener.ENTER_KEYCODE,
+            pending_replay=pending,
+        )
+    )
+
+    assert freeze_calls_seen_by_reader == [[123]]
+    assert emitted[0]["pre_submit_frame"] == "kim-frame"
+    assert pending.released.is_set()
+    assert len(keyboard_listener.Quartz.posted_events) == 2
+
+
+def test_pending_secure_enter_checks_context_before_candidate_lookup_without_freeze(
+    monkeypatch,
+):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    capture = FakeKimComposerCapture()
+    steps = []
+    reader = FakeDoubaoCandidateReader(
+        [None],
+        on_read=lambda: steps.append("candidate"),
+    )
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None,
+        candidate_reader=reader,
+        kim_composer_capture=capture,
+    )
+    def capture_secure_context(**kwargs):
+        steps.append("context")
+        return SimpleNamespace(
+            focused_role="AXTextField",
+            focused_subrole="AXSecureTextField",
+            focused_protected=True,
+            capture_status="ok",
+            capture_error=None,
+        )
+
+    listener._capture_focused_context = capture_secure_context
+    listener._emit_submission_snapshot = lambda *args, **kwargs: None
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_app_by_pid",
+        lambda pid: ("Kim", "Kem"),
+    )
+    pending = listener._create_pending_replay(
+        SimpleNamespace(keycode=keyboard_listener.ENTER_KEYCODE),
+        123,
+    )
+
+    listener._process_raw_event(
+        doubao_raw_event(
+            keyboard_listener,
+            keyboard_listener.kCGEventKeyDown,
+            keyboard_listener.ENTER_KEYCODE,
+            pending_replay=pending,
+        )
+    )
+
+    assert steps == ["context", "candidate"]
+    assert reader.calls == [(123, "Kem")]
+    assert capture.freeze_calls == []
 
 
 def test_doubao_pid_change_discards_old_composition(monkeypatch):
