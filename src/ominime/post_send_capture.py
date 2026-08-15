@@ -529,3 +529,10 @@ class PostSendCaptureCoordinator:
                     failure_reason="baseline_release_failed",
                 )
             )
+
+
+def build_default_message_source_chain(**source_options) -> MessageSourceChain:
+    """Build the supported local AX-first, Vision-second source chain."""
+    from .chat_message_sources import default_message_sources
+
+    return MessageSourceChain(default_message_sources(**source_options))
