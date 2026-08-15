@@ -129,6 +129,19 @@ class MessageSourceChain:
             diagnostics=tuple(diagnostics),
         )
 
+    def cancel(self) -> None:
+        for source in self._sources:
+            cancel = getattr(source, "cancel", None)
+            if not callable(cancel):
+                continue
+            try:
+                cancel()
+            except Exception:
+                logger.exception(
+                    "post-send source cancellation failed: %s",
+                    type(source).__name__,
+                )
+
     @staticmethod
     def _rejection_reason(
         intent: SendIntent, result: SourceResult, content: str
@@ -177,21 +190,16 @@ class _BoundedSourceReader:
         self._lock = threading.Lock()
         self._poisoned = False
         self._stopping = False
-        self._owns_slot = _SOURCE_WORKER_SLOT.acquire(blocking=False)
+        self._owns_slot = False
         self._worker: threading.Thread | None = None
-        if not self._owns_slot:
-            self._poisoned = True
-            return
-        self._worker = threading.Thread(
-            target=self._run,
-            name="ominime-post-send-source",
-            daemon=True,
-        )
-        self._worker.start()
+        with self._lock:
+            self._ensure_worker_locked()
 
     def read(self, intent: SendIntent, timeout: float) -> SourceResult:
         with self._lock:
-            if self._poisoned or self._stopping or self._worker is None:
+            if self._poisoned or self._stopping:
+                return SourceResult.unavailable("source_worker_unavailable")
+            if not self._ensure_worker_locked():
                 return SourceResult.unavailable("source_worker_unavailable")
             request = _SourceReadRequest(intent=intent)
             try:
@@ -202,6 +210,7 @@ class _BoundedSourceReader:
         if not request.completed.wait(timeout):
             with self._lock:
                 self._poisoned = True
+            self._source_chain.cancel()
             return SourceResult.unavailable("source_read_timeout")
         return request.result or SourceResult.unavailable("source_worker_exception")
 
@@ -216,6 +225,20 @@ class _BoundedSourceReader:
                 self._queue.put_nowait(_STOP)
             except queue.Full:
                 return
+
+    def _ensure_worker_locked(self) -> bool:
+        if self._worker is not None and self._worker.is_alive():
+            return True
+        if not _SOURCE_WORKER_SLOT.acquire(blocking=False):
+            return False
+        self._owns_slot = True
+        self._worker = threading.Thread(
+            target=self._run,
+            name="ominime-post-send-source",
+            daemon=True,
+        )
+        self._worker.start()
+        return True
 
     def _run(self) -> None:
         try:
@@ -242,9 +265,10 @@ class _BoundedSourceReader:
                     self._queue.task_done()
                     item = None
         finally:
-            if self._owns_slot:
-                self._owns_slot = False
-                _SOURCE_WORKER_SLOT.release()
+            with self._lock:
+                if self._owns_slot:
+                    self._owns_slot = False
+                    _SOURCE_WORKER_SLOT.release()
 
 
 class PostSendCaptureCoordinator:

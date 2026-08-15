@@ -779,6 +779,18 @@ def test_coordinator_times_out_hung_source_and_releases_baseline(intent):
     )
 
     second_diagnostics = []
+    second_completed = []
+
+    class RecoveringSource:
+        def read(self, current_intent):
+            return SourceResult.success(
+                "recovered",
+                "kim_postsend_ax",
+                "message-recovered",
+                target_pid=current_intent.target_pid,
+                observed_at=time.monotonic(),
+            )
+
     second = SendIntent(
         **{
             **intent.__dict__,
@@ -787,8 +799,8 @@ def test_coordinator_times_out_hung_source_and_releases_baseline(intent):
         }
     )
     second_coordinator = PostSendCaptureCoordinator(
-        MessageSourceChain([SequenceSource([])]),
-        on_success=lambda outcome: None,
+        MessageSourceChain([RecoveringSource()]),
+        on_success=second_completed.append,
         on_diagnostic=second_diagnostics.append,
         retry_delays=(0.0,),
     )
@@ -801,6 +813,24 @@ def test_coordinator_times_out_hung_source_and_releases_baseline(intent):
             and thread.is_alive()
             for thread in threading.enumerate()
         ) == 1
+        never_release.set()
+        _wait_until(
+            lambda: not any(
+                thread.name == "ominime-post-send-source"
+                and thread.is_alive()
+                for thread in threading.enumerate()
+            )
+        )
+        recovered = SendIntent(
+            **{
+                **intent.__dict__,
+                "intent_id": "recovered",
+                "submitted_at": time.monotonic(),
+            }
+        )
+        assert second_coordinator.submit(recovered)
+        _wait_until(lambda: len(second_completed) == 1)
+        assert second_completed[0].content == "recovered"
     finally:
         second_coordinator.stop()
         never_release.set()
@@ -811,3 +841,57 @@ def test_coordinator_times_out_hung_source_and_releases_baseline(intent):
                 for thread in threading.enumerate()
             )
         )
+
+
+def test_coordinator_cancels_source_timeout_and_releases_underlying_image(intent):
+    import gc
+
+    from ominime.chat_window_capture import WindowFrame
+
+    class MemoryImage:
+        pass
+
+    entered = threading.Event()
+    cancelled = threading.Event()
+    image = MemoryImage()
+    image_ref = weakref.ref(image)
+    frame = WindowFrame(image, 4, 123, 900, 700, time.monotonic())
+    current = SendIntent(
+        **{
+            **intent.__dict__,
+            "submitted_at": time.monotonic(),
+            "baseline": frame,
+        }
+    )
+
+    class CancellableSource:
+        def read(self, current_intent):
+            held_image = current_intent.baseline.image
+            entered.set()
+            cancelled.wait(1)
+            assert held_image is not None
+            return SourceResult.unavailable("cancelled")
+
+        def cancel(self):
+            cancelled.set()
+
+    diagnostics = []
+    coordinator = PostSendCaptureCoordinator(
+        MessageSourceChain([CancellableSource()]),
+        on_success=lambda outcome: None,
+        on_diagnostic=diagnostics.append,
+        retry_delays=(0.0,),
+        source_timeout=0.02,
+    )
+
+    assert coordinator.submit(current)
+    assert entered.wait(1)
+    _wait_until(lambda: cancelled.is_set())
+    _wait_until(lambda: frame.image is None)
+    coordinator.stop()
+    del current
+    del frame
+    del image
+    gc.collect()
+
+    assert image_ref() is None

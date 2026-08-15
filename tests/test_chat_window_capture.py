@@ -269,3 +269,25 @@ def test_sampler_does_not_transfer_stale_same_pid_frame_during_refresh():
     finally:
         release_capture.set()
         sampler.stop()
+
+
+def test_sampler_take_rejects_throttled_same_pid_window_switch():
+    clock = MutableClock()
+    window_id = [4]
+    sampler = ChatWindowBaselineSampler(
+        window_provider=lambda: (
+            WindowInfo(window_id[0], 123, 0, 900, 700),
+        ),
+        image_provider=lambda selected: f"image-{selected}",
+        clock=clock,
+    )
+
+    try:
+        assert sampler.schedule(123)
+        _wait_until(lambda: sampler.has_baseline)
+        window_id[0] = 8
+        clock.value = 0.1
+        assert not sampler.schedule(123)
+        assert sampler.take_baseline(123) is None
+    finally:
+        sampler.stop()

@@ -123,12 +123,24 @@ class ChatWindowBaselineSampler:
 
     def take_baseline(self, target_pid: int) -> WindowFrame | None:
         with self._lock:
-            if (
-                self._baseline is None
-                or self._baseline.target_pid != target_pid
-            ):
-                return None
             baseline = self._baseline
+            if baseline is None or baseline.target_pid != target_pid:
+                return None
+        try:
+            current_window = self._select_window(target_pid)
+        except Exception:
+            logger.exception("chat window validation failed")
+            current_window = None
+        with self._lock:
+            if (
+                self._baseline is not baseline
+                or current_window is None
+                or baseline.window_id != current_window.window_id
+            ):
+                if self._baseline is baseline:
+                    self._release_frame(baseline)
+                    self._baseline = None
+                return None
             self._baseline = None
             return baseline
 
@@ -200,17 +212,7 @@ class ChatWindowBaselineSampler:
 
     def _capture(self, target_pid: int) -> WindowFrame | None:
         try:
-            window = next(
-                (
-                    candidate
-                    for candidate in self._window_provider()
-                    if candidate.pid == target_pid
-                    and candidate.layer == 0
-                    and candidate.width >= MIN_CHAT_WINDOW_WIDTH
-                    and candidate.height >= MIN_CHAT_WINDOW_HEIGHT
-                ),
-                None,
-            )
+            window = self._select_window(target_pid)
             if window is None:
                 return None
             image = self._image_provider(window.window_id)
@@ -227,6 +229,19 @@ class ChatWindowBaselineSampler:
         except Exception:
             logger.exception("native chat window baseline capture failed")
             return None
+
+    def _select_window(self, target_pid: int) -> WindowInfo | None:
+        return next(
+            (
+                candidate
+                for candidate in self._window_provider()
+                if candidate.pid == target_pid
+                and candidate.layer == 0
+                and candidate.width >= MIN_CHAT_WINDOW_WIDTH
+                and candidate.height >= MIN_CHAT_WINDOW_HEIGHT
+            ),
+            None,
+        )
 
     def _safe_diagnostic(self, reason: str) -> None:
         try:
