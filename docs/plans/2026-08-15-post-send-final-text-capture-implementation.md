@@ -514,7 +514,9 @@ git add README.md docs/plans/2026-08-15-post-send-final-text-capture-design.md d
 git commit -m "docs: describe post-send final text capture"
 ```
 
-### Task 10: Integrate, deploy, and run real acceptance
+**Implementation note:** Tasks 1–8 were completed in the isolated feature worktree with strict local TDD and batch review. The final implementation requires non-empty validation for every Visual success, binds AX/Visual results to PID + window + session anchors, uses bounded structured identity deduplication, waits only on the non-EventTap worker for a pending baseline, and has removed the Kim/微信 pre-submit freeze/replay/fixed-ROI production path. Task 10 remains gated on automated verification, independent review and real Kim/微信 smoke tests; no merge, push or deployment is authorized before all three pass.
+
+### Task 10: Run real acceptance, then integrate and deploy
 
 **Files:**
 - Modify only if deployment verification exposes a directly related defect.
@@ -523,11 +525,25 @@ git commit -m "docs: describe post-send final text capture"
 
 Confirm only this feature's explicit files are staged/committed. Preserve the user's existing untracked root documents, plans and `reports/`; never use `git add -A`.
 
-**Step 2: Integrate from a clean main worktree**
+**Step 2: Run the verified candidate without deploying it**
+
+From the isolated feature worktree, run the verified candidate in the foreground for acceptance. If an installed listener would conflict, pause that listener for the duration of the test and restore it afterward; do not install files, change LaunchAgent definitions, merge, push or deploy.
+
+**Step 3: Run real Kim and WeChat acceptance**
+
+Send unique tests covering short Chinese, English/numbers, multiline, paste, Doubao candidate commit, two identical consecutive messages and a rapid burst. For every message verify exact database content, correct `*_postsend_ax` or `*_postsend_ocr` source, one record only, no context row, no screenshot artifact and no new crash report.
+
+**Step 4: Verify pre-integration failure behavior**
+
+Repeat with the target window minimized or switched immediately after Enter. Require a named failure diagnostic, no wrong/old text record, and no effect on message delivery or listener health.
+
+Only after automated verification, independent review, and Steps 3–4 all pass may the work proceed to integration, push or deployment.
+
+**Step 5: Integrate from a clean main worktree**
 
 Fetch `origin`, fast-forward the verified feature branch into `main`, rerun the full test suite on `main`, then push. Do not deploy from a dirty or unverified branch.
 
-**Step 3: Restart local services**
+**Step 6: Restart local services and verify deployment**
 
 ```bash
 launchctl kickstart -k "gui/$(id -u)/com.ominime.app"
@@ -535,12 +551,3 @@ launchctl kickstart -k "gui/$(id -u)/com.ominime.web"
 ```
 
 Verify new stable PIDs, current heartbeat, `last_runtime_error: null`, and the Web service bound only to loopback.
-
-**Step 4: Run real Kim and WeChat acceptance**
-
-Send unique tests covering short Chinese, English/numbers, multiline, paste, Doubao candidate commit, two identical consecutive messages and a rapid burst. For every message verify exact database content, correct `*_postsend_ax` or `*_postsend_ocr` source, one record only, no context row, no screenshot artifact and no new crash report.
-
-**Step 5: Verify failure behavior**
-
-Repeat with the target window minimized or switched immediately after Enter. Require a named failure diagnostic, no wrong/old text record, and no effect on message delivery or listener health.
-
