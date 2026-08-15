@@ -19,6 +19,12 @@ DEFAULT_SOURCE_TIMEOUT_SECONDS = 0.2
 
 logger = logging.getLogger(__name__)
 
+# CPython cannot cancel a thread inside an arbitrary native AX/Vision call. A
+# process-wide slot therefore caps a poisoned source worker at one: after a
+# timeout, later coordinator lifecycles fail closed instead of accumulating
+# stuck threads. Normal workers release the slot when they exit.
+_SOURCE_WORKER_SLOT = threading.BoundedSemaphore(1)
+
 
 @dataclass(frozen=True)
 class SendIntent:
@@ -171,6 +177,11 @@ class _BoundedSourceReader:
         self._lock = threading.Lock()
         self._poisoned = False
         self._stopping = False
+        self._owns_slot = _SOURCE_WORKER_SLOT.acquire(blocking=False)
+        self._worker: threading.Thread | None = None
+        if not self._owns_slot:
+            self._poisoned = True
+            return
         self._worker = threading.Thread(
             target=self._run,
             name="ominime-post-send-source",
@@ -180,7 +191,7 @@ class _BoundedSourceReader:
 
     def read(self, intent: SendIntent, timeout: float) -> SourceResult:
         with self._lock:
-            if self._poisoned or self._stopping:
+            if self._poisoned or self._stopping or self._worker is None:
                 return SourceResult.unavailable("source_worker_unavailable")
             request = _SourceReadRequest(intent=intent)
             try:
@@ -199,32 +210,41 @@ class _BoundedSourceReader:
             if self._stopping:
                 return
             self._stopping = True
+            if self._worker is None:
+                return
             try:
                 self._queue.put_nowait(_STOP)
             except queue.Full:
                 return
 
     def _run(self) -> None:
-        while True:
-            item = self._queue.get()
-            try:
-                if item is _STOP:
-                    return
+        try:
+            while True:
+                item = self._queue.get()
                 try:
-                    item.result = self._source_chain.read(item.intent)
-                except Exception:
-                    logger.exception("unexpected post-send source worker failure")
-                    item.result = SourceResult.unavailable(
-                        "source_worker_exception"
-                    )
-                finally:
-                    item.completed.set()
-                with self._lock:
-                    if self._stopping:
+                    if item is _STOP:
                         return
-            finally:
-                self._queue.task_done()
-                item = None
+                    try:
+                        item.result = self._source_chain.read(item.intent)
+                    except Exception:
+                        logger.exception(
+                            "unexpected post-send source worker failure"
+                        )
+                        item.result = SourceResult.unavailable(
+                            "source_worker_exception"
+                        )
+                    finally:
+                        item.completed.set()
+                    with self._lock:
+                        if self._stopping:
+                            return
+                finally:
+                    self._queue.task_done()
+                    item = None
+        finally:
+            if self._owns_slot:
+                self._owns_slot = False
+                _SOURCE_WORKER_SLOT.release()
 
 
 class PostSendCaptureCoordinator:
@@ -273,10 +293,12 @@ class PostSendCaptureCoordinator:
     def submit(self, intent: SendIntent) -> bool:
         with self._state_lock:
             if not self._accepting:
+                self._release_baseline(intent)
                 return False
             try:
                 self._queue.put_nowait(intent)
             except queue.Full:
+                self._release_baseline(intent)
                 self._defer_diagnostic(
                     CaptureOutcome(
                         intent_id=intent.intent_id,

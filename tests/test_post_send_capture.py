@@ -570,6 +570,49 @@ def test_coordinator_queue_full_does_not_run_callback_on_submitter(intent):
         coordinator.stop()
 
 
+def test_coordinator_queue_rejection_releases_transferred_baseline(intent):
+    entered = threading.Event()
+    release_source = threading.Event()
+
+    class BlockingSource:
+        def read(self, current):
+            entered.set()
+            release_source.wait(1)
+            return SourceResult.unavailable("blocked")
+
+    submitted_at = time.monotonic()
+    coordinator = PostSendCaptureCoordinator(
+        MessageSourceChain([BlockingSource()]),
+        on_success=lambda outcome: None,
+        on_diagnostic=lambda outcome: None,
+        max_queue_size=1,
+        retry_delays=(0.0,),
+    )
+    first = SendIntent(**{**intent.__dict__, "submitted_at": submitted_at})
+    queued = SendIntent(
+        **{**intent.__dict__, "intent_id": "queued", "submitted_at": submitted_at}
+    )
+    rejected_baseline = ReleasableBaseline()
+    rejected = SendIntent(
+        **{
+            **intent.__dict__,
+            "intent_id": "rejected",
+            "submitted_at": submitted_at,
+            "baseline": rejected_baseline,
+        }
+    )
+
+    try:
+        assert coordinator.submit(first)
+        assert entered.wait(1)
+        assert coordinator.submit(queued)
+        assert not coordinator.submit(rejected)
+        assert rejected_baseline.released
+    finally:
+        release_source.set()
+        coordinator.stop()
+
+
 def test_coordinator_drops_worker_reference_to_finished_baseline(intent):
     class MemoryImage:
         pass
@@ -734,3 +777,37 @@ def test_coordinator_times_out_hung_source_and_releases_baseline(intent):
         outcome.failure_reason == "source_read_timeout"
         for outcome in diagnostics
     )
+
+    second_diagnostics = []
+    second = SendIntent(
+        **{
+            **intent.__dict__,
+            "intent_id": "after-hang",
+            "submitted_at": time.monotonic(),
+        }
+    )
+    second_coordinator = PostSendCaptureCoordinator(
+        MessageSourceChain([SequenceSource([])]),
+        on_success=lambda outcome: None,
+        on_diagnostic=second_diagnostics.append,
+        retry_delays=(0.0,),
+    )
+    try:
+        assert second_coordinator.submit(second)
+        _wait_until(lambda: len(second_diagnostics) == 1)
+        assert second_diagnostics[0].failure_reason == "source_worker_unavailable"
+        assert sum(
+            thread.name == "ominime-post-send-source"
+            and thread.is_alive()
+            for thread in threading.enumerate()
+        ) == 1
+    finally:
+        second_coordinator.stop()
+        never_release.set()
+        _wait_until(
+            lambda: not any(
+                thread.name == "ominime-post-send-source"
+                and thread.is_alive()
+                for thread in threading.enumerate()
+            )
+        )

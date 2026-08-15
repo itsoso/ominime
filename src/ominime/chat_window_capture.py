@@ -42,6 +42,12 @@ class WindowFrame:
 _STOP = object()
 
 
+@dataclass(frozen=True)
+class _CaptureRequest:
+    target_pid: int
+    generation: int
+
+
 class ChatWindowBaselineSampler:
     """Coalesce typing activity into one recent in-memory window frame."""
 
@@ -59,10 +65,14 @@ class ChatWindowBaselineSampler:
         self._image_provider = image_provider or self._native_window_image
         self._on_diagnostic = on_diagnostic or (lambda reason: None)
         self._min_interval = min_interval
-        self._queue: queue.Queue[int | object] = queue.Queue(maxsize=1)
+        self._queue: queue.Queue[_CaptureRequest | object] = queue.Queue(
+            maxsize=1
+        )
         self._lock = threading.Lock()
         self._accepting = True
         self._pending = False
+        self._generation = 0
+        self._reschedule: _CaptureRequest | None = None
         self._last_scheduled_pid: int | None = None
         self._last_scheduled_at: float | None = None
         self._baseline: WindowFrame | None = None
@@ -87,7 +97,7 @@ class ChatWindowBaselineSampler:
             return False
         now = self._clock()
         with self._lock:
-            if not self._accepting or self._pending:
+            if not self._accepting:
                 return False
             if (
                 self._last_scheduled_pid == target_pid
@@ -95,14 +105,20 @@ class ChatWindowBaselineSampler:
                 and now - self._last_scheduled_at < self._min_interval
             ):
                 return False
+            self._generation += 1
+            request = _CaptureRequest(target_pid, self._generation)
+            self._release_frame(self._baseline)
             self._baseline = None
+            self._last_scheduled_pid = target_pid
+            self._last_scheduled_at = now
+            if self._pending:
+                self._reschedule = request
+                return True
             try:
-                self._queue.put_nowait(target_pid)
+                self._queue.put_nowait(request)
             except queue.Full:
                 return False
             self._pending = True
-            self._last_scheduled_pid = target_pid
-            self._last_scheduled_at = now
             return True
 
     def take_baseline(self, target_pid: int) -> WindowFrame | None:
@@ -131,6 +147,7 @@ class ChatWindowBaselineSampler:
             logger.error("baseline sampler worker did not stop within %.2fs", timeout)
             return
         with self._lock:
+            self._release_frame(self._baseline)
             self._baseline = None
 
     def _run(self) -> None:
@@ -140,15 +157,31 @@ class ChatWindowBaselineSampler:
             try:
                 if item is _STOP:
                     with self._lock:
+                        self._release_frame(self._baseline)
                         self._baseline = None
                         self._pending = False
+                        self._reschedule = None
                     return
-                frame = self._capture(item)
-                with self._lock:
-                    self._baseline = frame
-                    self._pending = False
-                if frame is None:
-                    self._safe_diagnostic("baseline_unavailable")
+                request = item
+                while request is not None:
+                    frame = self._capture(request.target_pid)
+                    with self._lock:
+                        next_request = self._reschedule
+                        self._reschedule = None
+                        if not self._accepting:
+                            next_request = None
+                        if next_request is None:
+                            self._baseline = frame if self._accepting else None
+                            self._pending = False
+                        else:
+                            self._release_frame(frame)
+                            frame = None
+                    if next_request is None:
+                        if frame is None and self._accepting:
+                            self._safe_diagnostic("baseline_unavailable")
+                        request = None
+                    else:
+                        request = next_request
             except Exception:
                 logger.exception("unexpected baseline sampler worker failure")
                 with self._lock:
@@ -159,6 +192,11 @@ class ChatWindowBaselineSampler:
                 self._queue.task_done()
                 frame = None
                 item = None
+
+    @staticmethod
+    def _release_frame(frame: WindowFrame | None) -> None:
+        if frame is not None:
+            frame.release()
 
     def _capture(self, target_pid: int) -> WindowFrame | None:
         try:
