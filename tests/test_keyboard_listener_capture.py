@@ -974,6 +974,50 @@ def test_pending_enter_watchdog_replays_when_worker_is_blocked(monkeypatch):
     assert len(keyboard_listener.Quartz.posted_events) == 2
 
 
+def test_pending_enter_watchdog_uses_cold_capture_timeout(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    listener = keyboard_listener.KeyboardListener(lambda event: None)
+    created_timers = []
+
+    class FakeTimer:
+        def __init__(self, interval, function, args=()):
+            self.interval = interval
+            self.function = function
+            self.args = args
+            self.daemon = False
+            self.started = False
+            created_timers.append(self)
+
+        def start(self):
+            self.started = True
+
+    monkeypatch.setattr(keyboard_listener.threading, "Timer", FakeTimer)
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_current_app_target",
+        lambda: ("Kim", "Kem", 123),
+    )
+    listener._target_app_identities[123] = ("Kim", "Kem")
+    listener._has_started = True
+    listener._event_worker_running = True
+
+    returned = listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyDown,
+        SimpleNamespace(
+            keycode=keyboard_listener.ENTER_KEYCODE,
+            text="",
+            target_pid=123,
+        ),
+        None,
+    )
+
+    assert returned is None
+    assert len(created_timers) == 1
+    assert created_timers[0].interval == 0.75
+    assert created_timers[0].started is True
+
+
 def test_physical_keyup_is_suppressed_after_enter_pair_is_replayed(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     listener = keyboard_listener.KeyboardListener(lambda event: None)
