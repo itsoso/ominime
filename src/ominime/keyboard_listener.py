@@ -664,6 +664,10 @@ class KeyboardListener:
         self._suppressed_enter_keyups_lock = threading.Lock()
         self._doubao_states: dict[tuple[str, str], DoubaoCompositionState] = {}
         self._doubao_failure_reasons: dict[tuple[str, str], str] = {}
+        self._doubao_arrow_read_attempts: set[tuple[str, str]] = set()
+        self._doubao_untrusted_candidate_selections: set[
+            tuple[str, str]
+        ] = set()
         self._last_doubao_target: tuple[str, str, int] | None = None
         self._event_queue: queue.Queue[RawKeyboardEvent | None] = queue.Queue(
             maxsize=EVENT_QUEUE_MAX_SIZE
@@ -935,12 +939,16 @@ class KeyboardListener:
                 state.clear()
             self._doubao_states.clear()
             self._doubao_failure_reasons.clear()
+            self._doubao_arrow_read_attempts.clear()
+            self._doubao_untrusted_candidate_selections.clear()
         self._last_doubao_target = target
 
     def _clear_doubao_state(self, app_name: str, bundle_id: str):
         key = self._fallback_buffer_key(app_name, bundle_id)
         state = self._doubao_states.pop(key, None)
         self._doubao_failure_reasons.pop(key, None)
+        self._doubao_arrow_read_attempts.discard(key)
+        self._doubao_untrusted_candidate_selections.discard(key)
         if state is not None:
             state.clear()
 
@@ -952,7 +960,15 @@ class KeyboardListener:
     ) -> str:
         key = self._fallback_buffer_key(app_name, bundle_id)
         state = self._doubao_states.pop(key, None)
+        selection_is_untrusted = (
+            key in self._doubao_untrusted_candidate_selections
+        )
+        self._doubao_arrow_read_attempts.discard(key)
+        self._doubao_untrusted_candidate_selections.discard(key)
         if state is None or target_pid is None or target_pid <= 0:
+            return ""
+        if selection_is_untrusted:
+            state.clear()
             return ""
         content = state.pop_submission(target_pid=target_pid)
         state.clear()
@@ -966,41 +982,52 @@ class KeyboardListener:
         keycode: int,
         event_text: str,
         modifiers: dict,
+        is_autorepeat: bool = False,
     ):
         state = self._doubao_state(app_name, bundle_id)
         if state is None or target_pid <= 0:
             return None
         if modifiers.get("cmd") or modifiers.get("ctrl") or modifiers.get("alt"):
             return None
-        candidate_read_keycodes = {
+        key = self._fallback_buffer_key(app_name, bundle_id)
+        candidate_commit_keycodes = {
             ENTER_KEYCODE,
             49,
-            123,
-            124,
             *NUMBER_KEYCODE_TO_INDEX,
         }
-        if keycode in candidate_read_keycodes:
+        is_candidate_arrow = keycode in {123, 124}
+        should_read_candidate_arrow = (
+            is_candidate_arrow
+            and not is_autorepeat
+            and not state.has_active_candidate
+            and key not in self._doubao_arrow_read_attempts
+        )
+        if should_read_candidate_arrow:
+            self._doubao_arrow_read_attempts.add(key)
+        if keycode in candidate_commit_keycodes or should_read_candidate_arrow:
             snapshot = self._candidate_reader.read(
                 target_pid=target_pid,
                 target_bundle_id=bundle_id,
             )
             if snapshot is None:
-                self._doubao_failure_reasons[
-                    self._fallback_buffer_key(app_name, bundle_id)
-                ] = getattr(
+                self._doubao_failure_reasons[key] = getattr(
                     self._candidate_reader,
                     "last_failure_reason",
                     None,
                 ) or "candidate_unavailable"
+                if is_candidate_arrow:
+                    self._doubao_untrusted_candidate_selections.add(key)
                 if state.has_active_candidate:
                     state.clear()
                     return None
             else:
-                self._doubao_failure_reasons.pop(
-                    self._fallback_buffer_key(app_name, bundle_id),
-                    None,
-                )
+                if key not in self._doubao_untrusted_candidate_selections:
+                    self._doubao_failure_reasons.pop(key, None)
                 state.update_candidates(snapshot, target_pid=target_pid)
+                if is_candidate_arrow and not state.has_active_candidate:
+                    self._doubao_untrusted_candidate_selections.add(key)
+        elif is_candidate_arrow and not state.has_active_candidate:
+            self._doubao_untrusted_candidate_selections.add(key)
         result = state.handle_key(
             keycode=keycode,
             text=event_text,
@@ -1017,6 +1044,8 @@ class KeyboardListener:
             *NUMBER_KEYCODE_TO_INDEX,
         }
         if keycode not in handled_keycodes and keycode in KEYCODE_TO_CHAR:
+            if not state.pending_preedit and not state.has_active_candidate:
+                self._doubao_arrow_read_attempts.discard(key)
             state.record_printable(
                 event_text or KEYCODE_TO_CHAR[keycode],
                 target_pid=target_pid,
@@ -1932,6 +1961,7 @@ class KeyboardListener:
                 keycode,
                 raw_event.text,
                 modifiers,
+                raw_event.is_autorepeat,
             )
 
         if keycode != ENTER_KEYCODE or event_type not in (kCGEventKeyDown, kCGEventKeyUp):
@@ -1969,14 +1999,25 @@ class KeyboardListener:
                 captured_context = self._capture_focused_context(
                     target_pid=application_pid
                 )
-                if not is_secure_text_entry_context(captured_context):
-                    (
-                        pre_submit_frame,
-                        pre_submit_capture_failure,
-                    ) = self._freeze_presubmit_composer(
-                        bundle_id,
-                        application_pid,
+                if is_secure_text_entry_context(captured_context):
+                    self._emit_submission_snapshot(
+                        None,
+                        app_name=app_name,
+                        bundle_id=bundle_id,
+                        key_modifiers=modifiers,
+                        event_type=event_type,
+                        target_pid=application_pid,
+                        captured_context=captured_context,
                     )
+                    self._release_pending_replay(raw_event)
+                    return
+                (
+                    pre_submit_frame,
+                    pre_submit_capture_failure,
+                ) = self._freeze_presubmit_composer(
+                    bundle_id,
+                    application_pid,
+                )
             candidate_result = self._handle_doubao_keydown(
                 app_name,
                 bundle_id,
@@ -1984,6 +2025,7 @@ class KeyboardListener:
                 keycode,
                 raw_event.text,
                 modifiers,
+                raw_event.is_autorepeat,
             )
             if candidate_result is not None and candidate_result.candidate_committed:
                 self._release_pending_replay(raw_event)
