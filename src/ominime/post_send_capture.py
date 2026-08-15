@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 import logging
 import queue
@@ -15,6 +15,7 @@ from typing import Callable, Mapping, Protocol, Sequence
 MAX_TRUSTED_SUBMISSION_CHARS = 4000
 DEFAULT_RETRY_DELAYS = (0.15, 0.35, 0.65, 1.0, 1.5, 2.0)
 TASK_EXPIRY_GRACE_SECONDS = 0.05
+DEFAULT_SOURCE_TIMEOUT_SECONDS = 0.2
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +153,80 @@ class CaptureOutcome:
 _STOP = object()
 
 
+@dataclass
+class _SourceReadRequest:
+    intent: SendIntent
+    completed: threading.Event = field(default_factory=threading.Event)
+    result: SourceResult | None = None
+
+
+class _BoundedSourceReader:
+    """Run source calls on one fixed worker so a native hang is contained."""
+
+    def __init__(self, source_chain: MessageSourceChain):
+        self._source_chain = source_chain
+        self._queue: queue.Queue[_SourceReadRequest | object] = queue.Queue(
+            maxsize=1
+        )
+        self._lock = threading.Lock()
+        self._poisoned = False
+        self._stopping = False
+        self._worker = threading.Thread(
+            target=self._run,
+            name="ominime-post-send-source",
+            daemon=True,
+        )
+        self._worker.start()
+
+    def read(self, intent: SendIntent, timeout: float) -> SourceResult:
+        with self._lock:
+            if self._poisoned or self._stopping:
+                return SourceResult.unavailable("source_worker_unavailable")
+            request = _SourceReadRequest(intent=intent)
+            try:
+                self._queue.put_nowait(request)
+            except queue.Full:
+                return SourceResult.unavailable("source_worker_busy")
+
+        if not request.completed.wait(timeout):
+            with self._lock:
+                self._poisoned = True
+            return SourceResult.unavailable("source_read_timeout")
+        return request.result or SourceResult.unavailable("source_worker_exception")
+
+    def stop(self) -> None:
+        with self._lock:
+            if self._stopping:
+                return
+            self._stopping = True
+            try:
+                self._queue.put_nowait(_STOP)
+            except queue.Full:
+                return
+
+    def _run(self) -> None:
+        while True:
+            item = self._queue.get()
+            try:
+                if item is _STOP:
+                    return
+                try:
+                    item.result = self._source_chain.read(item.intent)
+                except Exception:
+                    logger.exception("unexpected post-send source worker failure")
+                    item.result = SourceResult.unavailable(
+                        "source_worker_exception"
+                    )
+                finally:
+                    item.completed.set()
+                with self._lock:
+                    if self._stopping:
+                        return
+            finally:
+                self._queue.task_done()
+                item = None
+
+
 class PostSendCaptureCoordinator:
     """Run bounded post-send source reads away from the keyboard event path."""
 
@@ -165,18 +240,21 @@ class PostSendCaptureCoordinator:
         wait: Callable[[float], object] = time.sleep,
         max_queue_size: int = 64,
         retry_delays: Sequence[float] = DEFAULT_RETRY_DELAYS,
+        source_timeout: float = DEFAULT_SOURCE_TIMEOUT_SECONDS,
     ):
         self._source_chain = source_chain
+        self._source_reader = _BoundedSourceReader(source_chain)
         self._on_success = on_success
         self._on_diagnostic = on_diagnostic
         self._clock = clock
         self._wait = wait
         self._retry_delays = tuple(retry_delays)
+        self._source_timeout = source_timeout
         self._queue: queue.Queue[SendIntent | object] = queue.Queue(
             maxsize=max_queue_size
         )
-        self._deferred_diagnostics: queue.SimpleQueue[CaptureOutcome] = (
-            queue.SimpleQueue()
+        self._deferred_diagnostics: queue.Queue[CaptureOutcome] = queue.Queue(
+            maxsize=1
         )
         self._accepting = True
         self._stop_signaled = False
@@ -199,7 +277,7 @@ class PostSendCaptureCoordinator:
             try:
                 self._queue.put_nowait(intent)
             except queue.Full:
-                self._deferred_diagnostics.put(
+                self._defer_diagnostic(
                     CaptureOutcome(
                         intent_id=intent.intent_id,
                         failure_reason="post_send_queue_full",
@@ -225,6 +303,7 @@ class PostSendCaptureCoordinator:
             item = self._queue.get()
             try:
                 if item is _STOP:
+                    self._source_reader.stop()
                     return
                 self._capture(item)
             except Exception:
@@ -263,9 +342,24 @@ class PostSendCaptureCoordinator:
                 self._report_expired(intent)
                 return
 
-            last_result = self._source_chain.read(intent)
+            read_timeout = min(
+                self._source_timeout,
+                max(0.0, deadline - self._clock()),
+            )
+            if read_timeout <= 0:
+                self._report_expired(intent)
+                return
+            last_result = self._source_reader.read(intent, read_timeout)
             if self._clock() > deadline:
                 self._report_expired(intent)
+                return
+            if last_result.failure_reason == "source_read_timeout":
+                self._safe_diagnostic(
+                    CaptureOutcome(
+                        intent_id=intent.intent_id,
+                        failure_reason="source_read_timeout",
+                    )
+                )
                 return
             if last_result.failure_reason:
                 previous_ocr_state = None
@@ -339,6 +433,13 @@ class PostSendCaptureCoordinator:
                 return
             self._safe_diagnostic(outcome)
 
+    def _defer_diagnostic(self, outcome: CaptureOutcome) -> bool:
+        try:
+            self._deferred_diagnostics.put_nowait(outcome)
+        except queue.Full:
+            return False
+        return True
+
     def _discard_queued_intents(self) -> None:
         while True:
             try:
@@ -348,7 +449,7 @@ class PostSendCaptureCoordinator:
             try:
                 if isinstance(item, SendIntent):
                     self._release_baseline(item)
-                    self._deferred_diagnostics.put(
+                    self._defer_diagnostic(
                         CaptureOutcome(
                             intent_id=item.intent_id,
                             failure_reason="post_send_shutdown",

@@ -233,3 +233,39 @@ def test_sampler_timeout_stop_eventually_clears_current_frame():
     gc.collect()
 
     assert image_ref() is None
+
+
+def test_sampler_does_not_transfer_stale_same_pid_frame_during_refresh():
+    clock = MutableClock()
+    window_id = [4]
+    capture_started = threading.Event()
+    release_capture = threading.Event()
+
+    def image_provider(selected):
+        if selected == 8:
+            capture_started.set()
+            release_capture.wait(1)
+        return f"image-{selected}"
+
+    sampler = ChatWindowBaselineSampler(
+        window_provider=lambda: (
+            WindowInfo(window_id[0], 123, 0, 900, 700),
+        ),
+        image_provider=image_provider,
+        clock=clock,
+    )
+
+    try:
+        assert sampler.schedule(123)
+        _wait_until(lambda: sampler.has_baseline)
+        window_id[0] = 8
+        clock.value = 0.3
+        assert sampler.schedule(123)
+        assert capture_started.wait(1)
+        assert sampler.take_baseline(123) is None
+        release_capture.set()
+        _wait_until(lambda: sampler.has_baseline)
+        assert sampler.take_baseline(123).window_id == 8
+    finally:
+        release_capture.set()
+        sampler.stop()

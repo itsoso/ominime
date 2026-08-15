@@ -28,12 +28,15 @@ class WindowInfo:
 
 @dataclass(frozen=True)
 class WindowFrame:
-    image: object
+    image: object | None
     window_id: int
     target_pid: int
     width: float
     height: float
     captured_at: float
+
+    def release(self) -> None:
+        object.__setattr__(self, "image", None)
 
 
 _STOP = object()
@@ -92,11 +95,7 @@ class ChatWindowBaselineSampler:
                 and now - self._last_scheduled_at < self._min_interval
             ):
                 return False
-            if (
-                self._baseline is not None
-                and self._baseline.target_pid != target_pid
-            ):
-                self._baseline = None
+            self._baseline = None
             try:
                 self._queue.put_nowait(target_pid)
             except queue.Full:

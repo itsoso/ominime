@@ -640,3 +640,97 @@ def test_coordinator_stop_releases_queued_baseline_and_eventually_current(intent
     release_source.set()
     _wait_until(lambda: not coordinator.worker_alive)
     assert current_baseline.released
+
+
+def test_coordinator_coalesces_queue_full_diagnostics(intent):
+    entered = threading.Event()
+    release_source = threading.Event()
+    diagnostics = []
+
+    class BlockingSource:
+        def read(self, current):
+            entered.set()
+            release_source.wait(1)
+            return SourceResult.unavailable("blocked")
+
+    submitted_at = time.monotonic()
+    first = SendIntent(**{**intent.__dict__, "submitted_at": submitted_at})
+    queued = SendIntent(
+        **{**intent.__dict__, "intent_id": "queued", "submitted_at": submitted_at}
+    )
+    coordinator = PostSendCaptureCoordinator(
+        MessageSourceChain([BlockingSource()]),
+        on_success=lambda outcome: None,
+        on_diagnostic=diagnostics.append,
+        max_queue_size=1,
+        retry_delays=(0.0,),
+    )
+
+    try:
+        assert coordinator.submit(first)
+        assert entered.wait(1)
+        assert coordinator.submit(queued)
+        for index in range(1000):
+            rejected = SendIntent(
+                **{
+                    **intent.__dict__,
+                    "intent_id": f"rejected-{index}",
+                    "submitted_at": submitted_at,
+                }
+            )
+            assert not coordinator.submit(rejected)
+        release_source.set()
+        _wait_until(
+            lambda: any(
+                outcome.failure_reason == "post_send_queue_full"
+                for outcome in diagnostics
+            )
+        )
+    finally:
+        release_source.set()
+        coordinator.stop()
+
+    assert sum(
+        outcome.failure_reason == "post_send_queue_full"
+        for outcome in diagnostics
+    ) == 1
+
+
+def test_coordinator_times_out_hung_source_and_releases_baseline(intent):
+    entered = threading.Event()
+    never_release = threading.Event()
+    diagnostics = []
+    baseline = ReleasableBaseline()
+    submitted_at = time.monotonic()
+    current = SendIntent(
+        **{
+            **intent.__dict__,
+            "submitted_at": submitted_at,
+            "baseline": baseline,
+        }
+    )
+
+    class HungSource:
+        def read(self, current_intent):
+            entered.set()
+            never_release.wait()
+            raise AssertionError("unreachable")
+
+    coordinator = PostSendCaptureCoordinator(
+        MessageSourceChain([HungSource()]),
+        on_success=lambda outcome: None,
+        on_diagnostic=diagnostics.append,
+        retry_delays=(0.0,),
+        source_timeout=0.02,
+    )
+
+    assert coordinator.submit(current)
+    assert entered.wait(1)
+    _wait_until(lambda: baseline.released)
+    coordinator.stop(timeout=0.1)
+    _wait_until(lambda: not coordinator.worker_alive)
+
+    assert any(
+        outcome.failure_reason == "source_read_timeout"
+        for outcome in diagnostics
+    )
