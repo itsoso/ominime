@@ -3240,6 +3240,64 @@ def test_wechat_presubmit_ocr_persists_degraded_content(monkeypatch):
     assert events[0].modifiers["redacted_content"] is False
 
 
+def test_wechat_worker_persists_trusted_multiline_ocr(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    events = []
+    capture = FakeKimComposerCapture(
+        frame="wechat-frame",
+        requires_prepare=True,
+        recognize_result=("第一行\n第二行", None),
+    )
+    listener = keyboard_listener.KeyboardListener(
+        events.append,
+        candidate_reader=FakeDoubaoCandidateReader([None]),
+        wechat_composer_capture=capture,
+    )
+    configure_listener_context(listener)
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_app_by_pid",
+        lambda pid: ("微信", "com.tencent.xinWeChat"),
+    )
+    modifiers = {"shift": False, "ctrl": False, "alt": False, "cmd": False}
+
+    for keycode in (8, 13, 0, 1, 2, 3):
+        listener._process_raw_event(
+            keyboard_listener.RawKeyboardEvent(
+                event_type=keyboard_listener.kCGEventKeyDown,
+                keycode=keycode,
+                text="",
+                app_name="微信",
+                bundle_id="com.tencent.xinWeChat",
+                modifiers=modifiers,
+                target_pid=4318,
+            )
+        )
+
+    listener._process_raw_event(
+        keyboard_listener.RawKeyboardEvent(
+            event_type=keyboard_listener.kCGEventKeyDown,
+            keycode=keyboard_listener.ENTER_KEYCODE,
+            text="",
+            app_name="微信",
+            bundle_id="com.tencent.xinWeChat",
+            modifiers=modifiers,
+            target_pid=4318,
+            pending_replay=keyboard_listener.PendingReplay(
+                event=SimpleNamespace(keycode=keyboard_listener.ENTER_KEYCODE),
+                target_pid=4318,
+            ),
+        )
+    )
+
+    assert capture.freeze_calls == [4318]
+    assert capture.recognize_calls == ["wechat-frame"]
+    assert len(events) == 1
+    assert events[0].character == "第一行\n第二行"
+    assert events[0].modifiers["fallback_source"] == "wechat_presubmit_ocr"
+    assert events[0].modifiers["redacted_content"] is False
+
+
 def test_wechat_presubmit_ocr_runs_when_ax_context_is_ok_but_empty(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     events = []
