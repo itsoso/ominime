@@ -853,6 +853,8 @@ def test_coordinator_cancels_source_timeout_and_releases_underlying_image(intent
 
     entered = threading.Event()
     cancelled = threading.Event()
+    source_returned = threading.Event()
+    calls = []
     image = MemoryImage()
     image_ref = weakref.ref(image)
     frame = WindowFrame(image, 4, 123, 900, 700, time.monotonic())
@@ -866,19 +868,30 @@ def test_coordinator_cancels_source_timeout_and_releases_underlying_image(intent
 
     class CancellableSource:
         def read(self, current_intent):
+            calls.append(current_intent.intent_id)
+            if len(calls) > 1:
+                return SourceResult.success(
+                    "recovered",
+                    "kim_postsend_ax",
+                    "message-recovered",
+                    target_pid=current_intent.target_pid,
+                    observed_at=time.monotonic(),
+                )
             held_image = current_intent.baseline.image
             entered.set()
             cancelled.wait(1)
             assert held_image is not None
+            source_returned.set()
             return SourceResult.unavailable("cancelled")
 
         def cancel(self):
             cancelled.set()
 
     diagnostics = []
+    completed = []
     coordinator = PostSendCaptureCoordinator(
         MessageSourceChain([CancellableSource()]),
-        on_success=lambda outcome: None,
+        on_success=completed.append,
         on_diagnostic=diagnostics.append,
         retry_delays=(0.0,),
         source_timeout=0.02,
@@ -887,7 +900,19 @@ def test_coordinator_cancels_source_timeout_and_releases_underlying_image(intent
     assert coordinator.submit(current)
     assert entered.wait(1)
     _wait_until(lambda: cancelled.is_set())
+    assert source_returned.wait(1)
     _wait_until(lambda: frame.image is None)
+    recovered = SendIntent(
+        **{
+            **intent.__dict__,
+            "intent_id": "after-cancel",
+            "submitted_at": time.monotonic(),
+        }
+    )
+    assert coordinator.submit(recovered)
+    _wait_until(lambda: len(completed) == 1)
+    assert completed[0].content == "recovered"
+    assert calls == ["send-1", "after-cancel"]
     coordinator.stop()
     del current
     del frame

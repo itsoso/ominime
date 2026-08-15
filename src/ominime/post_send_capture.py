@@ -189,6 +189,7 @@ class _BoundedSourceReader:
         )
         self._lock = threading.Lock()
         self._poisoned = False
+        self._timed_out_request: _SourceReadRequest | None = None
         self._stopping = False
         self._owns_slot = False
         self._worker: threading.Thread | None = None
@@ -197,6 +198,13 @@ class _BoundedSourceReader:
 
     def read(self, intent: SendIntent, timeout: float) -> SourceResult:
         with self._lock:
+            if (
+                self._poisoned
+                and self._timed_out_request is not None
+                and self._timed_out_request.completed.is_set()
+            ):
+                self._poisoned = False
+                self._timed_out_request = None
             if self._poisoned or self._stopping:
                 return SourceResult.unavailable("source_worker_unavailable")
             if not self._ensure_worker_locked():
@@ -210,6 +218,7 @@ class _BoundedSourceReader:
         if not request.completed.wait(timeout):
             with self._lock:
                 self._poisoned = True
+                self._timed_out_request = request
             self._source_chain.cancel()
             return SourceResult.unavailable("source_read_timeout")
         return request.result or SourceResult.unavailable("source_worker_exception")
