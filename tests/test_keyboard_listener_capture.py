@@ -8,6 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from ominime.ime_candidate_capture import CandidateSnapshot
+
 
 def test_no_chat_presubmit_interception_symbols_remain_in_production():
     root = Path(__file__).parents[1]
@@ -293,6 +295,37 @@ def test_postsend_chat_enter_callback_returns_original_without_native_capture(
     assert keyboard_listener.Quartz.posted_events == []
     assert coordinator.submitted == []
     assert sampler.scheduled == []
+
+
+@pytest.mark.parametrize("event_type", (1, 2))
+def test_postsend_chat_enter_keydown_and_keyup_are_passed_through(
+    monkeypatch, event_type
+):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None,
+        post_send_coordinator=FakePostSendCoordinator(),
+        baseline_sampler=FakeBaselineSampler(),
+    )
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_current_app_target",
+        lambda: ("Kim", "Kem", 123),
+    )
+    listener._has_started = True
+    listener._event_worker_running = True
+    native_event = SimpleNamespace(
+        keycode=keyboard_listener.ENTER_KEYCODE,
+        text="",
+        target_pid=123,
+    )
+
+    returned = listener._event_callback(None, event_type, native_event, None)
+
+    queued = listener._event_queue.get_nowait()
+    assert returned is native_event
+    assert queued.event_type == event_type
+    assert keyboard_listener.Quartz.posted_events == []
 
 
 def test_postsend_worker_creates_one_intent_after_chat_gates(monkeypatch):
@@ -2541,6 +2574,200 @@ class FakeDoubaoCandidateReader:
             return snapshot
         self.last_failure_reason = "candidate_ax_unavailable"
         return None
+
+
+def doubao_raw_event(
+    keyboard_listener,
+    event_type,
+    keycode,
+    text="",
+    *,
+    target_pid=123,
+    modifiers=None,
+    is_autorepeat=False,
+):
+    return keyboard_listener.RawKeyboardEvent(
+        event_type=event_type,
+        keycode=keycode,
+        text=text,
+        app_name="Kim",
+        bundle_id="Kem",
+        modifiers=modifiers
+        or {"shift": False, "ctrl": False, "alt": False, "cmd": False},
+        target_pid=target_pid,
+        is_autorepeat=is_autorepeat,
+    )
+
+
+def test_doubao_candidate_commit_becomes_postsend_validation(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    snapshot = CandidateSnapshot(("测试", "策士"), 123, time.monotonic())
+    reader = FakeDoubaoCandidateReader([snapshot])
+    coordinator = FakePostSendCoordinator()
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None,
+        candidate_reader=reader,
+        post_send_coordinator=coordinator,
+        baseline_sampler=FakeBaselineSampler(),
+    )
+    configure_listener_context(listener)
+    monkeypatch.setattr(keyboard_listener, "get_app_by_pid", lambda pid: ("Kim", "Kem"))
+
+    for raw_event in (
+        doubao_raw_event(keyboard_listener, keyboard_listener.kCGEventKeyDown, 8, "c"),
+        doubao_raw_event(keyboard_listener, keyboard_listener.kCGEventKeyDown, 49, " "),
+        doubao_raw_event(
+            keyboard_listener,
+            keyboard_listener.kCGEventKeyDown,
+            keyboard_listener.ENTER_KEYCODE,
+        ),
+    ):
+        listener._process_raw_event(raw_event)
+
+    assert reader.calls == [(123, "Kem")]
+    assert coordinator.submitted[0].validation_text == "测试"
+
+
+def test_doubao_number_commit_preserves_confirmed_prefix(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    reader = FakeDoubaoCandidateReader(
+        [
+            CandidateSnapshot(("测试", "策士"), 123, time.monotonic()),
+            CandidateSnapshot(("你好", "拟好"), 123, time.monotonic()),
+        ]
+    )
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None, candidate_reader=reader
+    )
+    listener._record_recent_text_snapshot = lambda *args, **kwargs: None
+    monkeypatch.setattr(keyboard_listener, "get_app_by_pid", lambda pid: ("Kim", "Kem"))
+
+    for raw_event in (
+        doubao_raw_event(keyboard_listener, keyboard_listener.kCGEventKeyDown, 8, "c"),
+        doubao_raw_event(keyboard_listener, keyboard_listener.kCGEventKeyDown, 49, " "),
+        doubao_raw_event(keyboard_listener, keyboard_listener.kCGEventKeyDown, 45, "n"),
+        doubao_raw_event(keyboard_listener, keyboard_listener.kCGEventKeyDown, 19, "2"),
+    ):
+        listener._process_raw_event(raw_event)
+
+    assert listener._doubao_states[("Kim", "Kem")].confirmed_text == "测试拟好"
+
+
+def test_doubao_arrow_autorepeat_uses_one_candidate_read(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    snapshot = CandidateSnapshot(("第一", "第二", "第三"), 123, time.monotonic())
+    reader = FakeDoubaoCandidateReader([snapshot])
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None, candidate_reader=reader
+    )
+    listener._record_recent_text_snapshot = lambda *args, **kwargs: None
+    monkeypatch.setattr(keyboard_listener, "get_app_by_pid", lambda pid: ("Kim", "Kem"))
+
+    listener._process_raw_event(
+        doubao_raw_event(keyboard_listener, keyboard_listener.kCGEventKeyDown, 8, "c")
+    )
+    listener._process_raw_event(
+        doubao_raw_event(keyboard_listener, keyboard_listener.kCGEventKeyDown, 124)
+    )
+    for _ in range(32):
+        listener._process_raw_event(
+            doubao_raw_event(
+                keyboard_listener,
+                keyboard_listener.kCGEventKeyDown,
+                124,
+                is_autorepeat=True,
+            )
+        )
+
+    assert reader.calls == [(123, "Kem")]
+    assert listener._doubao_states[("Kim", "Kem")].selected_index == 2
+
+
+@pytest.mark.parametrize("clear_kind", ("pid", "app", "shortcut", "mouse"))
+def test_doubao_composition_is_cleared_on_context_change(monkeypatch, clear_kind):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    snapshot = CandidateSnapshot(("测试",), 123, time.monotonic())
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None,
+        candidate_reader=FakeDoubaoCandidateReader([snapshot]),
+    )
+    listener._record_recent_text_snapshot = lambda *args, **kwargs: None
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_app_by_pid",
+        lambda pid: ("Kim", "Kem") if pid == 123 else ("Codex", "com.openai.codex"),
+    )
+    listener._process_raw_event(
+        doubao_raw_event(keyboard_listener, keyboard_listener.kCGEventKeyDown, 8, "c")
+    )
+    listener._process_raw_event(
+        doubao_raw_event(keyboard_listener, keyboard_listener.kCGEventKeyDown, 49, " ")
+    )
+    assert listener._doubao_states
+
+    if clear_kind == "pid":
+        event = doubao_raw_event(
+            keyboard_listener,
+            keyboard_listener.kCGEventKeyDown,
+            7,
+            "x",
+            target_pid=456,
+        )
+    elif clear_kind == "app":
+        event = keyboard_listener.RawKeyboardEvent(
+            event_type=keyboard_listener.kCGEventKeyDown,
+            keycode=0,
+            text="a",
+            app_name="Codex",
+            bundle_id="com.openai.codex",
+            modifiers={"shift": False, "ctrl": False, "alt": False, "cmd": False},
+            target_pid=999,
+        )
+    elif clear_kind == "shortcut":
+        event = doubao_raw_event(
+            keyboard_listener,
+            keyboard_listener.kCGEventKeyDown,
+            9,
+            "v",
+            modifiers={"shift": False, "ctrl": False, "alt": False, "cmd": True},
+        )
+    else:
+        event = doubao_raw_event(
+            keyboard_listener,
+            keyboard_listener.kCGEventLeftMouseDown,
+            0,
+        )
+
+    listener._process_raw_event(event)
+
+    assert listener._doubao_states == {}
+
+
+def test_doubao_secure_enter_discards_candidate(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    snapshot = CandidateSnapshot(("秘密",), 123, time.monotonic())
+    coordinator = FakePostSendCoordinator()
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None,
+        candidate_reader=FakeDoubaoCandidateReader([snapshot]),
+        post_send_coordinator=coordinator,
+        baseline_sampler=FakeBaselineSampler(),
+    )
+    configure_listener_context(listener, status="ok", secure=True)
+    monkeypatch.setattr(keyboard_listener, "get_app_by_pid", lambda pid: ("Kim", "Kem"))
+    for raw_event in (
+        doubao_raw_event(keyboard_listener, keyboard_listener.kCGEventKeyDown, 8, "m"),
+        doubao_raw_event(keyboard_listener, keyboard_listener.kCGEventKeyDown, 49, " "),
+        doubao_raw_event(
+            keyboard_listener,
+            keyboard_listener.kCGEventKeyDown,
+            keyboard_listener.ENTER_KEYCODE,
+        ),
+    ):
+        listener._process_raw_event(raw_event)
+
+    assert coordinator.submitted == []
+    assert listener._doubao_states == {}
 
 
 def test_non_ocr_keyup_keeps_snapshot_and_candidate_refresh(monkeypatch):

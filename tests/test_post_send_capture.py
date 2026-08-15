@@ -3,10 +3,13 @@ from datetime import datetime
 import gc
 import threading
 import time
+from types import SimpleNamespace
 import weakref
 
 import pytest
 
+from ominime.database import Database
+from ominime import submission_processor
 from ominime.post_send_capture import (
     MAX_TRUSTED_SUBMISSION_CHARS,
     CaptureOutcome,
@@ -360,18 +363,143 @@ def test_coordinator_allows_identical_text_with_distinct_structured_identities(
     ]
 
 
+def test_coordinator_orders_100_sends_through_fallback_queue_recovery_and_storage(
+    tmp_path,
+    monkeypatch,
+):
+    completed = []
+    diagnostics = []
+    rejected_submissions = 0
+    database = Database(tmp_path / "stress.db")
+    monkeypatch.setattr(
+        submission_processor.config,
+        "input_capture_mode",
+        "enter-text",
+        raising=False,
+    )
+
+    class StressAXSource:
+        def __init__(self):
+            self.calls = []
+
+        def read(self, intent):
+            self.calls.append(intent.intent_id)
+            time.sleep(0.001)
+            index = int(intent.intent_id.split("-")[-1])
+            if index % 2:
+                return SourceResult.unavailable("ax_tree_unavailable")
+            return SourceResult.success(
+                f"message-{index}",
+                (
+                    "kim_postsend_ax"
+                    if intent.bundle_id == "Kem"
+                    else "wechat_postsend_ax"
+                ),
+                f"ax-message-{index}",
+                target_pid=intent.target_pid,
+                observed_at=time.monotonic(),
+            )
+
+    class StressOCRSource:
+        def __init__(self):
+            self.calls = []
+
+        def read(self, intent):
+            self.calls.append(intent.intent_id)
+            index = int(intent.intent_id.split("-")[-1])
+            return SourceResult.success(
+                f"message-{index}",
+                (
+                    "kim_postsend_ocr"
+                    if intent.bundle_id == "Kem"
+                    else "wechat_postsend_ocr"
+                ),
+                f"ocr-observation-{index}-{len(self.calls)}",
+                target_pid=intent.target_pid,
+                observed_at=time.monotonic(),
+                stability_key=f"ocr-bounds-{index}",
+            )
+
+    def persist(outcome):
+        completed.append(outcome)
+        event = SimpleNamespace(
+            timestamp=datetime(2026, 8, 15, 12, 0),
+            app_name="Kim" if outcome.source.startswith("kim_") else "WeChat",
+            app_bundle_id=(
+                "Kem" if outcome.source.startswith("kim_") else "com.tencent.xinWeChat"
+            ),
+            modifiers={
+                "submission_id": outcome.intent_id,
+                "fallback_source": outcome.source,
+                "context": {},
+            },
+        )
+        submission_processor.save_submission_event(database, event, outcome.content)
+
+    ax_source = StressAXSource()
+    ocr_source = StressOCRSource()
+    coordinator = PostSendCaptureCoordinator(
+        MessageSourceChain([ax_source, ocr_source]),
+        on_success=persist,
+        on_diagnostic=diagnostics.append,
+        max_queue_size=4,
+        retry_delays=(0.0, 0.0, 1.0),
+    )
+
+    try:
+        for index in range(100):
+            while True:
+                intent = SendIntent(
+                    intent_id=f"stress-{index}",
+                    submitted_at=time.monotonic(),
+                    timestamp=datetime(2026, 8, 15, 12, 0),
+                    app_name="Kim" if index % 2 == 0 else "WeChat",
+                    bundle_id="Kem" if index % 2 == 0 else "com.tencent.xinWeChat",
+                    target_pid=123 if index % 2 == 0 else 456,
+                    modifiers={},
+                    physical_key_count=1,
+                    validation_text=f"message-{index}",
+                    baseline=None,
+                )
+                if coordinator.submit(intent):
+                    break
+                rejected_submissions += 1
+                time.sleep(0.0005)
+        _wait_until(lambda: len(completed) == 100, timeout=4.0)
+        assert coordinator.worker_alive
+    finally:
+        coordinator.stop()
+
+    assert rejected_submissions > 0
+    assert diagnostics
+    assert {outcome.failure_reason for outcome in diagnostics} == {
+        "post_send_queue_full"
+    }
+    assert [outcome.intent_id for outcome in completed] == [
+        f"stress-{index}" for index in range(100)
+    ]
+    assert len({outcome.message_identity for outcome in completed}) == 100
+    assert any(outcome.source.endswith("_ax") for outcome in completed)
+    assert any(outcome.source.endswith("_ocr") for outcome in completed)
+    records = sorted(
+        database.get_records_by_app("Kem")
+        + database.get_records_by_app("com.tencent.xinWeChat"),
+        key=lambda record: record.id,
+    )
+    assert len(records) == 100
+    assert [record.content for record in records] == [
+        f"message-{index}" for index in range(100)
+    ]
+
+
 def test_coordinator_requires_two_identical_ocr_results(intent):
     clock = FakeClock()
     completed = []
     source = SequenceSource(
         [
             _result("草稿", "kim_postsend_ocr", "bubble-1", 10.15),
-            _result(
-                "最终文本", "kim_postsend_ocr", "bubble-2", 10.35, "bounds-b"
-            ),
-            _result(
-                "最终文本", "kim_postsend_ocr", "bubble-3", 10.65, "bounds-b"
-            ),
+            _result("最终文本", "kim_postsend_ocr", "bubble-2", 10.35, "bounds-b"),
+            _result("最终文本", "kim_postsend_ocr", "bubble-3", 10.65, "bounds-b"),
         ]
     )
     coordinator = PostSendCaptureCoordinator(
@@ -424,9 +552,7 @@ def test_coordinator_ocr_requires_stable_geometry_as_well_as_text(intent):
 def test_coordinator_rejects_expired_task_without_reading_source(intent):
     clock = FakeClock(20.0)
     diagnostics = []
-    source = SequenceSource(
-        [_result("wrong", "kim_postsend_ax", "message-late", 20.0)]
-    )
+    source = SequenceSource([_result("wrong", "kim_postsend_ax", "message-late", 20.0)])
     coordinator = PostSendCaptureCoordinator(
         MessageSourceChain([source]),
         on_success=lambda outcome: None,
@@ -812,10 +938,10 @@ def test_coordinator_coalesces_queue_full_diagnostics(intent):
         release_source.set()
         coordinator.stop()
 
-    assert sum(
-        outcome.failure_reason == "post_send_queue_full"
-        for outcome in diagnostics
-    ) == 1
+    assert (
+        sum(outcome.failure_reason == "post_send_queue_full" for outcome in diagnostics)
+        == 1
+    )
 
 
 def test_coordinator_times_out_hung_source_and_releases_baseline(intent):
@@ -853,8 +979,7 @@ def test_coordinator_times_out_hung_source_and_releases_baseline(intent):
     _wait_until(lambda: not coordinator.worker_alive)
 
     assert any(
-        outcome.failure_reason == "source_read_timeout"
-        for outcome in diagnostics
+        outcome.failure_reason == "source_read_timeout" for outcome in diagnostics
     )
 
     second_diagnostics = []
@@ -887,17 +1012,20 @@ def test_coordinator_times_out_hung_source_and_releases_baseline(intent):
         assert second_coordinator.submit(second)
         _wait_until(lambda: len(second_diagnostics) == 1)
         assert second_diagnostics[0].failure_reason == "source_worker_unavailable"
-        assert sum(
-            thread.name == "ominime-post-send-source"
-            and thread.is_alive()
-            for thread in threading.enumerate()
-        ) == 1
+        assert (
+            sum(
+                thread.name == "ominime-post-send-source" and thread.is_alive()
+                for thread in threading.enumerate()
+            )
+            == 1
+        )
         never_release.set()
         _wait_until(
-            lambda: not any(
-                thread.name == "ominime-post-send-source"
-                and thread.is_alive()
-                for thread in threading.enumerate()
+            lambda: (
+                not any(
+                    thread.name == "ominime-post-send-source" and thread.is_alive()
+                    for thread in threading.enumerate()
+                )
             )
         )
         recovered = SendIntent(
@@ -914,10 +1042,11 @@ def test_coordinator_times_out_hung_source_and_releases_baseline(intent):
         second_coordinator.stop()
         never_release.set()
         _wait_until(
-            lambda: not any(
-                thread.name == "ominime-post-send-source"
-                and thread.is_alive()
-                for thread in threading.enumerate()
+            lambda: (
+                not any(
+                    thread.name == "ominime-post-send-source" and thread.is_alive()
+                    for thread in threading.enumerate()
+                )
             )
         )
 
