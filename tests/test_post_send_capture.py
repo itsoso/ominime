@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime
 import gc
 import threading
@@ -175,6 +176,19 @@ def test_source_exception_is_named_and_next_source_runs(intent):
     assert "private candidate text" not in repr(result)
 
 
+def test_source_cancellation_log_does_not_include_private_text(intent, caplog):
+    class FailingCancelSource:
+        def read(self, intent):
+            return SourceResult.unavailable("not_used")
+
+        def cancel(self):
+            raise RuntimeError("private source value")
+
+    MessageSourceChain([FailingCancelSource()]).cancel()
+
+    assert "private source value" not in caplog.text
+
+
 class SequenceSource:
     def __init__(self, results):
         self.results = iter(results)
@@ -279,6 +293,71 @@ def test_coordinator_structured_result_completes_immediately(intent):
     ]
     assert source.calls == 1
     assert clock.waits == pytest.approx([0.15])
+
+
+def test_coordinator_deduplicates_same_structured_message_identity(intent):
+    clock = FakeClock()
+    completed = []
+    diagnostics = []
+    source = SequenceSource(
+        [
+            _result("最终文本", "kim_postsend_ax", "ax-message-1", 10.15),
+            _result("最终文本", "kim_postsend_ax", "ax-message-1", 10.30),
+        ]
+    )
+    coordinator = PostSendCaptureCoordinator(
+        MessageSourceChain([source]),
+        on_success=completed.append,
+        on_diagnostic=diagnostics.append,
+        clock=clock,
+        wait=clock.wait,
+    )
+
+    try:
+        assert coordinator.submit(intent)
+        _wait_until(lambda: len(completed) == 1)
+        second = replace(intent, intent_id="send-2", submitted_at=clock.value)
+        assert coordinator.submit(second)
+        _wait_until(lambda: len(diagnostics) == 1)
+    finally:
+        coordinator.stop()
+
+    assert [outcome.intent_id for outcome in completed] == ["send-1"]
+    assert diagnostics[0].failure_reason == "duplicate_message_identity"
+
+
+def test_coordinator_allows_identical_text_with_distinct_structured_identities(
+    intent,
+):
+    clock = FakeClock()
+    completed = []
+    source = SequenceSource(
+        [
+            _result("相同文本", "kim_postsend_ax", "ax-message-1", 10.15),
+            _result("相同文本", "kim_postsend_ax", "ax-message-2", 10.30),
+        ]
+    )
+    coordinator = PostSendCaptureCoordinator(
+        MessageSourceChain([source]),
+        on_success=completed.append,
+        on_diagnostic=lambda outcome: None,
+        clock=clock,
+        wait=clock.wait,
+    )
+
+    try:
+        assert coordinator.submit(intent)
+        _wait_until(lambda: len(completed) == 1)
+        second = replace(intent, intent_id="send-2", submitted_at=clock.value)
+        assert coordinator.submit(second)
+        _wait_until(lambda: len(completed) == 2)
+    finally:
+        coordinator.stop()
+
+    assert [outcome.message_identity for outcome in completed] == [
+        "ax-message-1",
+        "ax-message-2",
+    ]
 
 
 def test_coordinator_requires_two_identical_ocr_results(intent):

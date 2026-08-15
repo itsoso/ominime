@@ -159,6 +159,8 @@ class PendingPostSendSubmission:
     key_modifiers: dict
     physical_key_count: int
     event_type: int
+    baseline_window_id: int | None
+    session_anchor: str | None
 
 
 # 键码映射
@@ -271,6 +273,7 @@ PRESUBMIT_OCR_METADATA = {
 POST_SEND_CHAT_BUNDLE_IDS = frozenset(
     {LEGACY_KIM_BUNDLE_ID, WECHAT_BUNDLE_ID}
 )
+POST_SEND_BASELINE_WAIT_SECONDS = 0.15
 
 
 def _clean_key_event_text(text: str) -> str:
@@ -686,6 +689,8 @@ class KeyboardListener:
         }
         self._post_send_coordinator = post_send_coordinator
         self._baseline_sampler = baseline_sampler
+        self._owns_post_send_coordinator = post_send_coordinator is None
+        self._owns_baseline_sampler = baseline_sampler is None
         self._post_send_pending: dict[str, PendingPostSendSubmission] = {}
         self._post_send_pending_lock = threading.Lock()
         self._target_app_identities: dict[int, tuple[str, str]] = {}
@@ -708,9 +713,13 @@ class KeyboardListener:
         self._dropped_event_count = 0
 
     def _ensure_post_send_services(self) -> None:
-        if self._baseline_sampler is None:
+        if self._baseline_sampler is None and self._owns_baseline_sampler:
             self._baseline_sampler = ChatWindowBaselineSampler()
-        if self._post_send_coordinator is None:
+        if (
+            self._post_send_coordinator is None
+            and self._owns_post_send_coordinator
+            and self._baseline_sampler is not None
+        ):
             source_chain = build_default_message_source_chain(
                 frame_provider=self._baseline_sampler.capture_current_frame,
             )
@@ -1264,6 +1273,8 @@ class KeyboardListener:
         app_name: str,
         bundle_id: str,
         current_field_id: str | None = None,
+        *,
+        allow_unscoped: bool = False,
     ) -> str:
         key = self._fallback_buffer_key(app_name, bundle_id)
         snapshot = self._recent_text_snapshots.pop(key, None)
@@ -1274,7 +1285,10 @@ class KeyboardListener:
             snapshot_field_id = None
         else:
             content, updated_at, snapshot_field_id = snapshot
-        if (
+        if current_field_id is None and snapshot_field_id is None:
+            if not allow_unscoped:
+                return ""
+        elif (
             current_field_id is None
             or snapshot_field_id is None
             or current_field_id != snapshot_field_id
@@ -1297,7 +1311,14 @@ class KeyboardListener:
         self._text_fallback_field_ids.pop(key, None)
         self._last_text_fallback_events.pop(key, None)
 
-    def _record_fallback_key(self, app_name: str, bundle_id: str, keycode: int, modifiers: dict):
+    def _record_fallback_key(
+        self,
+        app_name: str,
+        bundle_id: str,
+        keycode: int,
+        modifiers: dict,
+        event_text: str = "",
+    ):
         """Track typed key count for apps whose Accessibility value is unreadable."""
         if config.is_app_ignored(bundle_id):
             return
@@ -1315,6 +1336,8 @@ class KeyboardListener:
             return
         if keycode == 49:  # Space
             char = " "
+        elif event_text and all(character.isprintable() for character in event_text):
+            char = event_text
         elif keycode in KEYCODE_TO_CHAR:
             char = KEYCODE_TO_CHAR[keycode]
         else:
@@ -1324,6 +1347,13 @@ class KeyboardListener:
         self._fallback_field_ids[key] = self._active_field_ids.get(key)
         if len(buffer) > MAX_FALLBACK_BUFFER_CHARS:
             del buffer[: len(buffer) - MAX_FALLBACK_BUFFER_CHARS]
+        self._fallback_buffer_updated_at[key] = time.monotonic()
+
+    def _record_post_send_newline(self, app_name: str, bundle_id: str) -> None:
+        key = self._fallback_buffer_key(app_name, bundle_id)
+        buffer = self._fallback_buffers.setdefault(key, [])
+        buffer.append("\n")
+        self._fallback_field_ids[key] = self._active_field_ids.get(key)
         self._fallback_buffer_updated_at[key] = time.monotonic()
 
     def _pop_fallback_count(
@@ -1348,6 +1378,27 @@ class KeyboardListener:
         if self._is_fallback_buffer_expired(updated_at):
             return 0
         return len(buffer)
+
+    def _peek_fallback_content(
+        self,
+        app_name: str,
+        bundle_id: str,
+        current_field_id: str | None = None,
+    ) -> str:
+        key = self._fallback_buffer_key(app_name, bundle_id)
+        updated_at = self._fallback_buffer_updated_at.get(key)
+        buffer_field_id = self._fallback_field_ids.get(key)
+        if (
+            (current_field_id is None) != (buffer_field_id is None)
+            or (
+                current_field_id is not None
+                and buffer_field_id is not None
+                and current_field_id != buffer_field_id
+            )
+            or self._is_fallback_buffer_expired(updated_at)
+        ):
+            return ""
+        return "".join(self._fallback_buffers.get(key, ()))
 
     def _clear_fallback_buffer(self, app_name: str, bundle_id: str):
         key = self._fallback_buffer_key(app_name, bundle_id)
@@ -1526,24 +1577,39 @@ class KeyboardListener:
             )
             return
 
+        fallback_validation_text = self._peek_fallback_content(
+            app_name,
+            bundle_id,
+            current_field_id=current_field_id,
+        )
         physical_key_count = self._pop_fallback_count(
             app_name,
             bundle_id,
             current_field_id=current_field_id,
         )
         validation_text = normalize_submission_text(
-            self._pop_doubao_submission(app_name, bundle_id, target_pid)
+            self._pop_recent_text_snapshot_content(
+                app_name,
+                bundle_id,
+                current_field_id=current_field_id,
+                allow_unscoped=True,
+            )
+            or self._pop_doubao_submission(app_name, bundle_id, target_pid)
             or self._pop_text_fallback_content(
                 app_name,
                 bundle_id,
                 current_field_id=current_field_id,
                 allow_unscoped=True,
-            ),
+            )
+            or fallback_validation_text,
             app_name=app_name,
             bundle_id=bundle_id,
         )
         baseline = (
-            self._baseline_sampler.take_baseline(target_pid)
+            self._baseline_sampler.take_baseline(
+                target_pid,
+                wait_timeout=POST_SEND_BASELINE_WAIT_SECONDS,
+            )
             if self._baseline_sampler is not None
             else None
         )
@@ -1573,6 +1639,8 @@ class KeyboardListener:
             key_modifiers=dict(raw_event.modifiers),
             physical_key_count=physical_key_count,
             event_type=raw_event.event_type,
+            baseline_window_id=getattr(baseline, "window_id", None),
+            session_anchor=getattr(baseline, "session_anchor", None),
         )
         with self._post_send_pending_lock:
             self._post_send_pending[intent_id] = pending
@@ -1611,7 +1679,7 @@ class KeyboardListener:
                 "unknown",
                 -1,
             )
-        if current_pid > 0 and (
+        if current_pid <= 0 or (
             current_pid != pending.target_pid
             or current_bundle_id != pending.bundle_id
         ):
@@ -1621,6 +1689,35 @@ class KeyboardListener:
                 event_type=pending.event_type,
                 decision_action="skip",
                 decision_reason="post_send_target_changed",
+                physical_key_count=pending.physical_key_count,
+                diagnostics={"intent_id": pending.intent_id},
+            )
+            return
+        if (
+            pending.baseline_window_id is None
+            or outcome.window_id != pending.baseline_window_id
+        ):
+            self._emit_capture_diagnostic(
+                pending.app_name,
+                pending.bundle_id,
+                event_type=pending.event_type,
+                decision_action="skip",
+                decision_reason="post_send_window_changed",
+                physical_key_count=pending.physical_key_count,
+                diagnostics={"intent_id": pending.intent_id},
+            )
+            return
+        if (
+            not pending.session_anchor
+            or not outcome.session_anchor
+            or pending.session_anchor != outcome.session_anchor
+        ):
+            self._emit_capture_diagnostic(
+                pending.app_name,
+                pending.bundle_id,
+                event_type=pending.event_type,
+                decision_action="skip",
+                decision_reason="post_send_session_changed",
                 physical_key_count=pending.physical_key_count,
                 diagnostics={"intent_id": pending.intent_id},
             )
@@ -2153,11 +2250,29 @@ class KeyboardListener:
                 or keycode in (48, 53, 117)
             )
         ):
+            if (
+                bundle_id in POST_SEND_CHAT_BUNDLE_IDS
+                and keycode == 9
+                and modifiers.get("cmd")
+                and not modifiers.get("ctrl")
+                and not modifiers.get("alt")
+            ):
+                self._schedule_post_send_baseline(
+                    app_name,
+                    bundle_id,
+                    application_pid,
+                )
             self._clear_submission_buffers(app_name, bundle_id)
             return
 
         if event_type == kCGEventKeyUp and keycode != ENTER_KEYCODE:
-            if bundle_id not in PRESUBMIT_OCR_METADATA:
+            if bundle_id not in PRESUBMIT_OCR_METADATA or (
+                bundle_id in POST_SEND_CHAT_BUNDLE_IDS
+                and keycode == 9
+                and modifiers.get("cmd")
+                and not modifiers.get("ctrl")
+                and not modifiers.get("alt")
+            ):
                 self._record_recent_text_snapshot(
                     app_name,
                     bundle_id,
@@ -2187,7 +2302,13 @@ class KeyboardListener:
                 modifiers,
                 raw_event.text,
             )
-            self._record_fallback_key(app_name, bundle_id, keycode, modifiers)
+            self._record_fallback_key(
+                app_name,
+                bundle_id,
+                keycode,
+                modifiers,
+                raw_event.text,
+            )
             self._handle_doubao_keydown(
                 app_name,
                 bundle_id,
@@ -2220,6 +2341,8 @@ class KeyboardListener:
             if event_type != kCGEventKeyDown or raw_event.is_autorepeat:
                 return
             if modifiers.get("shift") or modifiers.get("alt"):
+                self._record_post_send_newline(app_name, bundle_id)
+                self._record_recent_text_snapshot(app_name, bundle_id)
                 self._emit_capture_diagnostic(
                     app_name,
                     bundle_id,
@@ -2706,10 +2829,17 @@ class KeyboardListener:
         with self._event_processing_lock:
             self._running = False
             self._event_worker_running = False
-        if self._post_send_coordinator is not None:
+        if (
+            self._owns_post_send_coordinator
+            and self._post_send_coordinator is not None
+        ):
             self._post_send_coordinator.stop()
-        if self._baseline_sampler is not None:
+            self._post_send_coordinator = None
+        if self._owns_baseline_sampler and self._baseline_sampler is not None:
             self._baseline_sampler.stop()
+            self._baseline_sampler = None
+        with self._post_send_pending_lock:
+            self._post_send_pending.clear()
         while True:
             try:
                 self._event_queue.get_nowait()

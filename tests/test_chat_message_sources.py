@@ -24,8 +24,10 @@ def _intent(*, bundle_id="Kem"):
         target_pid=123,
         modifiers={},
         physical_key_count=2,
-        validation_text="测试",
-        baseline=WindowFrame("before", 42, 123, 1000, 800, 9.9),
+        validation_text="最终文本",
+        baseline=WindowFrame(
+            "before", 42, 123, 1000, 800, 9.9, "session-a"
+        ),
     )
 
 
@@ -39,6 +41,8 @@ def _node(
     newly_observed=True,
     bounds=NormalizedRect(0.72, 0.36, 0.20, 0.04),
     secure=False,
+    session_anchor="session-a",
+    window_id=42,
     children=(),
 ):
     return AXMessageNode(
@@ -50,6 +54,8 @@ def _node(
         newly_observed=newly_observed,
         bounds=bounds,
         secure=secure,
+        session_anchor=session_anchor,
+        window_id=window_id,
         children=children,
     )
 
@@ -77,6 +83,9 @@ def test_accessibility_source_requires_complete_new_outgoing_identity():
             "ax_not_outgoing",
         ),
         (_node(identity=""), "ax_missing_identity"),
+        (_node(session_anchor="session-b"), "ax_session_anchor_mismatch"),
+        (_node(window_id=99), "ax_window_identity_mismatch"),
+        (_node(text="不匹配"), "ax_validation_mismatch"),
         (_node(secure=True), "ax_secure_element"),
         (_node(text="  "), "ax_empty_text"),
     ],
@@ -90,7 +99,9 @@ def test_accessibility_source_rejects_incomplete_evidence(node, failure):
     assert result.content == ""
 
 
-def test_accessibility_source_handles_unavailable_tree_and_native_exception():
+def test_accessibility_source_handles_unavailable_tree_and_native_exception(
+    caplog,
+):
     unavailable = AccessibilityBubbleSource(node_provider=lambda pid: ())
 
     def fail_native(pid):
@@ -102,6 +113,7 @@ def test_accessibility_source_handles_unavailable_tree_and_native_exception():
     result = failed.read(_intent())
     assert result.failure_reason == "ax_native_error"
     assert "private AX value" not in repr(result)
+    assert "private AX value" not in caplog.text
 
 
 def test_accessibility_source_traverses_children_but_is_bounded():

@@ -12,11 +12,27 @@ from ominime.kim_composer_capture import NormalizedRect, RecognizedLine
 from ominime.post_send_capture import MAX_TRUSTED_SUBMISSION_CHARS, SendIntent
 
 
-def _frame(image="current", *, window_id=42, width=1000, height=800):
-    return WindowFrame(image, window_id, 123, width, height, 10.2)
+def _frame(
+    image="current",
+    *,
+    window_id=42,
+    width=1000,
+    height=800,
+    session_anchor="session-a",
+):
+    return WindowFrame(
+        image, window_id, 123, width, height, 10.2, session_anchor
+    )
 
 
-def _intent(*, app_name="Kim", bundle_id="Kem", baseline=None, intent_id="send-1"):
+def _intent(
+    *,
+    app_name="Kim",
+    bundle_id="Kem",
+    baseline=None,
+    intent_id="send-1",
+    validation_text="",
+):
     return SendIntent(
         intent_id=intent_id,
         submitted_at=10.0,
@@ -26,7 +42,7 @@ def _intent(*, app_name="Kim", bundle_id="Kem", baseline=None, intent_id="send-1
         target_pid=123,
         modifiers={},
         physical_key_count=4,
-        validation_text="",
+        validation_text=validation_text,
         baseline=baseline or _frame("baseline"),
     )
 
@@ -84,7 +100,9 @@ def test_visual_source_preserves_wrapped_line_order_in_outgoing_bubble():
     )
     changed = (NormalizedRect(0.68, 0.46, 0.27, 0.14),)
 
-    result = _source(lines, changed).read(_intent())
+    result = _source(lines, changed).read(
+        _intent(validation_text="第一行\n第二行")
+    )
 
     assert result.content == "第一行\n第二行"
     assert result.source == "kim_postsend_ocr"
@@ -112,10 +130,60 @@ def test_visual_source_accepts_lowest_new_right_side_bubble():
     )
     changed = (NormalizedRect(0.70, 0.34, 0.24, 0.09),)
 
-    result = _source(lines, changed).read(_intent())
+    result = _source(lines, changed).read(
+        _intent(validation_text="最终文本")
+    )
 
     assert result.content == "最终文本"
     assert result.message_identity.startswith("send-1:123:42:")
+
+
+def test_visual_source_does_not_group_adjacent_unchanged_old_bubble():
+    lines = (
+        RecognizedLine("旧消息", 0.72, 0.42, 0.20, 0.04),
+        RecognizedLine("最终文本", 0.72, 0.36, 0.20, 0.04),
+    )
+    changed = (NormalizedRect(0.70, 0.34, 0.24, 0.07),)
+
+    result = _source(lines, changed).read(
+        _intent(validation_text="最终文本")
+    )
+
+    assert result.content == "最终文本"
+
+
+def test_visual_source_rejects_coarse_multiline_change_without_validation():
+    lines = (
+        RecognizedLine("旧消息", 0.72, 0.42, 0.20, 0.04),
+        RecognizedLine("最终文本", 0.72, 0.36, 0.20, 0.04),
+    )
+    changed = (NormalizedRect(0.70, 0.34, 0.24, 0.14),)
+
+    result = _source(lines, changed).read(_intent())
+
+    assert result.failure_reason == "ocr_validation_unavailable"
+
+
+def test_visual_source_rejects_validation_text_mismatch():
+    line = RecognizedLine("另一条消息", 0.72, 0.36, 0.20, 0.04)
+
+    result = _source(
+        (line,),
+        (NormalizedRect(0.70, 0.34, 0.24, 0.09),),
+    ).read(_intent(validation_text="完全不匹配"))
+
+    assert result.failure_reason == "ocr_validation_mismatch"
+
+
+def test_visual_source_rejects_long_incoming_line_reaching_right_edge():
+    incoming = RecognizedLine("很长的对方消息", 0.32, 0.36, 0.62, 0.04)
+
+    result = _source(
+        (incoming,),
+        (NormalizedRect(0.30, 0.34, 0.66, 0.09),),
+    ).read(_intent(validation_text="很长的对方消息"))
+
+    assert result.failure_reason == "ocr_no_outgoing_bubble"
 
 
 def test_identical_consecutive_messages_get_distinct_identities():
@@ -124,8 +192,12 @@ def test_identical_consecutive_messages_get_distinct_identities():
     observed = iter((10.25, 10.55))
     source = _source((line,), changed, clock=lambda: next(observed))
 
-    first = source.read(_intent(intent_id="send-1"))
-    second = source.read(_intent(intent_id="send-2"))
+    first = source.read(
+        _intent(intent_id="send-1", validation_text="相同文本")
+    )
+    second = source.read(
+        _intent(intent_id="send-2", validation_text="相同文本")
+    )
 
     assert first.content == second.content == "相同文本"
     assert first.message_identity != second.message_identity
@@ -173,9 +245,20 @@ def test_post_send_bubble_accepts_committed_latin_without_doubao_preedit_rules()
     result = _source(
         (line,),
         (NormalizedRect(0.70, 0.34, 0.24, 0.09),),
-    ).read(_intent())
+    ).read(_intent(validation_text="ceshi"))
 
     assert result.content == "ceshi"
+
+
+def test_visual_source_rejects_single_line_without_validation_summary():
+    line = RecognizedLine("可能是旧消息", 0.72, 0.36, 0.20, 0.04)
+
+    result = _source(
+        (line,),
+        (NormalizedRect(0.60, 0.25, 0.36, 0.30),),
+    ).read(_intent())
+
+    assert result.failure_reason == "ocr_validation_unavailable"
 
 
 def test_visual_failure_diagnostic_never_contains_raw_candidate_text():
@@ -191,6 +274,18 @@ def test_visual_failure_diagnostic_never_contains_raw_candidate_text():
     assert private_text not in repr(result)
 
 
+def test_visual_native_exception_log_does_not_include_private_text(caplog):
+    private_text = "private OCR value"
+
+    def fail_frame(pid):
+        raise RuntimeError(private_text)
+
+    result = VisualBubbleSource(frame_provider=fail_frame).read(_intent())
+
+    assert result.failure_reason == "ocr_native_error"
+    assert private_text not in caplog.text
+
+
 def test_visual_source_rejects_mismatched_current_window():
     source = _source(
         (RecognizedLine("错误窗口", 0.72, 0.36, 0.20, 0.04),),
@@ -201,6 +296,18 @@ def test_visual_source_rejects_mismatched_current_window():
     result = source.read(_intent())
 
     assert result.failure_reason == "window_identity_mismatch"
+
+
+def test_visual_source_rejects_same_window_conversation_switch():
+    source = _source(
+        (RecognizedLine("另一会话", 0.72, 0.36, 0.20, 0.04),),
+        (NormalizedRect(0.70, 0.34, 0.24, 0.09),),
+        current=_frame(session_anchor="session-b"),
+    )
+
+    result = source.read(_intent(validation_text="另一会话"))
+
+    assert result.failure_reason == "session_anchor_mismatch"
 
 
 def test_visual_source_propagates_cooperative_cancellation():

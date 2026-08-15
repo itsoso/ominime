@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import logging
 import queue
 import threading
@@ -34,6 +35,7 @@ class WindowFrame:
     width: float
     height: float
     captured_at: float
+    session_anchor: str | None = None
 
     def release(self) -> None:
         object.__setattr__(self, "image", None)
@@ -57,18 +59,22 @@ class ChatWindowBaselineSampler:
         clock: Callable[[], float] = time.monotonic,
         window_provider: Callable[[], Iterable[WindowInfo]] | None = None,
         image_provider: Callable[[int], object] | None = None,
+        anchor_provider: Callable[[object, float, float], str | None]
+        | None = None,
         on_diagnostic: Callable[[str], None] | None = None,
         min_interval: float = BASELINE_MIN_INTERVAL_SECONDS,
     ):
         self._clock = clock
         self._window_provider = window_provider or self._native_windows
         self._image_provider = image_provider or self._native_window_image
+        self._anchor_provider = anchor_provider or self._native_session_anchor
         self._on_diagnostic = on_diagnostic or (lambda reason: None)
         self._min_interval = min_interval
         self._queue: queue.Queue[_CaptureRequest | object] = queue.Queue(
             maxsize=1
         )
         self._lock = threading.Lock()
+        self._condition = threading.Condition(self._lock)
         self._accepting = True
         self._pending = False
         self._generation = 0
@@ -121,15 +127,23 @@ class ChatWindowBaselineSampler:
             self._pending = True
             return True
 
-    def take_baseline(self, target_pid: int) -> WindowFrame | None:
-        with self._lock:
+    def take_baseline(
+        self, target_pid: int, *, wait_timeout: float = 0.0
+    ) -> WindowFrame | None:
+        deadline = time.monotonic() + max(0.0, wait_timeout)
+        with self._condition:
+            while self._baseline is None and self._pending:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._condition.wait(remaining)
             baseline = self._baseline
             if baseline is None or baseline.target_pid != target_pid:
                 return None
         try:
             current_window = self._select_window(target_pid)
         except Exception:
-            logger.exception("chat window validation failed")
+            logger.error("chat window validation failed")
             current_window = None
         with self._lock:
             if (
@@ -177,32 +191,42 @@ class ChatWindowBaselineSampler:
                         self._baseline = None
                         self._pending = False
                         self._reschedule = None
+                        self._condition.notify_all()
                     return
                 request = item
                 while request is not None:
                     frame = self._capture(request.target_pid)
+                    frame_available = False
                     with self._lock:
                         next_request = self._reschedule
                         self._reschedule = None
                         if not self._accepting:
                             next_request = None
                         if next_request is None:
-                            self._baseline = frame if self._accepting else None
+                            if self._accepting:
+                                self._baseline = frame
+                                frame_available = frame is not None
+                            else:
+                                self._release_frame(frame)
+                                self._baseline = None
+                            frame = None
                             self._pending = False
+                            self._condition.notify_all()
                         else:
                             self._release_frame(frame)
                             frame = None
                     if next_request is None:
-                        if frame is None and self._accepting:
+                        if not frame_available and self._accepting:
                             self._safe_diagnostic("baseline_unavailable")
                         request = None
                     else:
                         request = next_request
             except Exception:
-                logger.exception("unexpected baseline sampler worker failure")
+                logger.error("unexpected baseline sampler worker failure")
                 with self._lock:
                     self._baseline = None
                     self._pending = False
+                    self._condition.notify_all()
                 self._safe_diagnostic("baseline_unavailable")
             finally:
                 self._queue.task_done()
@@ -222,6 +246,13 @@ class ChatWindowBaselineSampler:
             image = self._image_provider(window.window_id)
             if image is None:
                 return None
+            try:
+                session_anchor = self._anchor_provider(
+                    image, window.width, window.height
+                )
+            except Exception:
+                logger.error("chat window session anchor unavailable")
+                session_anchor = None
             return WindowFrame(
                 image=image,
                 window_id=window.window_id,
@@ -229,9 +260,10 @@ class ChatWindowBaselineSampler:
                 width=window.width,
                 height=window.height,
                 captured_at=self._clock(),
+                session_anchor=session_anchor,
             )
         except Exception:
-            logger.exception("native chat window baseline capture failed")
+            logger.error("native chat window baseline capture failed")
             return None
 
     def _select_window(self, target_pid: int) -> WindowInfo | None:
@@ -251,7 +283,7 @@ class ChatWindowBaselineSampler:
         try:
             self._on_diagnostic(reason)
         except Exception:
-            logger.exception("baseline diagnostic callback failed")
+            logger.error("baseline diagnostic callback failed")
 
     @staticmethod
     def _native_windows() -> tuple[WindowInfo, ...]:
@@ -288,3 +320,32 @@ class ChatWindowBaselineSampler:
             [window_id],
             Quartz.kCGWindowImageBoundsIgnoreFraming,
         )
+
+    @staticmethod
+    def _native_session_anchor(
+        image: object, window_width: float, window_height: float
+    ) -> str | None:
+        """Hash stable header pixels; never retain or serialize their contents."""
+        import Quartz
+
+        width = int(Quartz.CGImageGetWidth(image))
+        height = int(Quartz.CGImageGetHeight(image))
+        if width <= 0 or height <= 0 or window_width <= 0 or window_height <= 0:
+            return None
+        data = bytes(
+            Quartz.CGDataProviderCopyData(Quartz.CGImageGetDataProvider(image))
+        )
+        row_bytes = int(Quartz.CGImageGetBytesPerRow(image))
+        pixel_bytes = max(1, int(Quartz.CGImageGetBitsPerPixel(image)) // 8)
+        x0 = int(width * 0.32)
+        x1 = max(x0 + 1, int(width * 0.94))
+        y1 = max(1, int(height * 0.12))
+        x_step = max(1, (x1 - x0) // 48)
+        y_step = max(1, y1 // 12)
+        digest = hashlib.sha256()
+        for y in range(0, y1, y_step):
+            for x in range(x0, x1, x_step):
+                offset = y * row_bytes + x * pixel_bytes
+                pixel = data[offset : offset + min(3, pixel_bytes)]
+                digest.update(bytes(channel & 0xF0 for channel in pixel))
+        return digest.hexdigest()[:24]

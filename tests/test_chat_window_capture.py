@@ -181,6 +181,78 @@ def test_sampler_failure_is_named_without_image_and_worker_survives():
     assert "secret pixels" not in repr(diagnostics)
 
 
+def test_sampler_native_exception_log_does_not_include_private_text(caplog):
+    diagnostics = []
+    sampler = ChatWindowBaselineSampler(
+        window_provider=lambda: (WindowInfo(4, 123, 0, 900, 700),),
+        image_provider=lambda window_id: (_ for _ in ()).throw(
+            RuntimeError("private screenshot value")
+        ),
+        on_diagnostic=diagnostics.append,
+    )
+
+    try:
+        assert sampler.schedule(123)
+        _wait_until(lambda: diagnostics == ["baseline_unavailable"])
+    finally:
+        sampler.stop()
+
+    assert "private screenshot value" not in caplog.text
+
+
+def test_sampler_attaches_memory_only_session_anchor():
+    sampler = ChatWindowBaselineSampler(
+        window_provider=lambda: (WindowInfo(4, 123, 0, 900, 700),),
+        image_provider=lambda window_id: "memory-image",
+        anchor_provider=lambda image, width, height: "session-a",
+    )
+
+    try:
+        assert sampler.schedule(123)
+        _wait_until(lambda: sampler.has_baseline)
+        frame = sampler.take_baseline(123)
+    finally:
+        sampler.stop()
+
+    assert frame.session_anchor == "session-a"
+    assert frame.image == "memory-image"
+
+
+def test_take_baseline_can_wait_for_pending_capture():
+    entered = threading.Event()
+    release_capture = threading.Event()
+
+    def image_provider(window_id):
+        entered.set()
+        release_capture.wait(1)
+        return "memory-image"
+
+    sampler = ChatWindowBaselineSampler(
+        window_provider=lambda: (WindowInfo(4, 123, 0, 900, 700),),
+        image_provider=image_provider,
+        anchor_provider=lambda image, width, height: "session-a",
+    )
+    result = []
+
+    try:
+        assert sampler.schedule(123)
+        assert entered.wait(1)
+        taker = threading.Thread(
+            target=lambda: result.append(
+                sampler.take_baseline(123, wait_timeout=0.2)
+            )
+        )
+        taker.start()
+        time.sleep(0.02)
+        assert result == []
+        release_capture.set()
+        taker.join(timeout=1)
+    finally:
+        sampler.stop()
+
+    assert result[0].session_anchor == "session-a"
+
+
 def test_sampler_drops_worker_reference_after_baseline_transfer():
     class MemoryImage:
         pass

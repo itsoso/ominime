@@ -117,7 +117,10 @@ class VisualBubbleSource:
             try:
                 cancel()
             except Exception:
-                logger.exception("post-send visual provider cancellation failed")
+                logger.error(
+                    "post-send visual provider cancellation failed: %s",
+                    type(provider).__name__,
+                )
 
     def read(self, intent: SendIntent) -> SourceResult:
         baseline = intent.baseline
@@ -136,6 +139,12 @@ class VisualBubbleSource:
                 or baseline.height != current.height
             ):
                 return SourceResult.unavailable("window_identity_mismatch")
+            if (
+                not baseline.session_anchor
+                or not current.session_anchor
+                or baseline.session_anchor != current.session_anchor
+            ):
+                return SourceResult.unavailable("session_anchor_mismatch")
 
             profile = self._profile(intent)
             search_bounds = profile.search_bounds(current)
@@ -156,7 +165,7 @@ class VisualBubbleSource:
                 changed_regions,
             )
         except Exception:
-            logger.exception("post-send visual bubble capture failed")
+            logger.error("post-send visual bubble capture failed: ocr_native_error")
             return SourceResult.unavailable("ocr_native_error")
 
     @staticmethod
@@ -182,15 +191,19 @@ class VisualBubbleSource:
         outgoing_lines = tuple(
             line
             for line in content_lines
-            if _outgoing_score(line, search_bounds)
-            >= profile.outgoing_right_threshold
+            if _is_outgoing(line, search_bounds, profile)
         )
         if not outgoing_lines:
             return SourceResult.unavailable("ocr_no_outgoing_bubble")
 
+        changed_lines = tuple(
+            line
+            for line in outgoing_lines
+            if _line_changed_fraction(line, changed_regions) >= 0.20
+        )
         candidates = tuple(
             self._candidate(group, search_bounds, changed_regions)
-            for group in _group_lines(outgoing_lines)
+            for group in _group_lines(changed_lines)
         )
         changed_candidates = tuple(
             candidate for candidate in candidates if candidate.changed_fraction > 0
@@ -206,6 +219,12 @@ class VisualBubbleSource:
             return SourceResult.unavailable("ocr_repeated_text_untrusted")
         if len(candidate.text) > MAX_TRUSTED_SUBMISSION_CHARS:
             return SourceResult.unavailable("ocr_content_too_long")
+        validation_text = _normalized_validation_text(intent.validation_text)
+        candidate_text = _normalized_validation_text(candidate.text)
+        if not validation_text:
+            return SourceResult.unavailable("ocr_validation_unavailable")
+        if candidate_text != validation_text:
+            return SourceResult.unavailable("ocr_validation_mismatch")
 
         observed_at = self._clock()
         geometry = _geometry_fingerprint(frame.window_id, candidate.bounds)
@@ -221,6 +240,8 @@ class VisualBubbleSource:
             observed_at=observed_at,
             target_pid=intent.target_pid,
             stability_key=geometry,
+            session_anchor=frame.session_anchor,
+            window_id=frame.window_id,
         )
 
     @staticmethod
@@ -279,6 +300,39 @@ def _center_inside(line: RecognizedLine, bounds: NormalizedRect) -> bool:
 
 def _outgoing_score(line: RecognizedLine, bounds: NormalizedRect) -> float:
     return ((line.x + line.width) - bounds.x) / max(bounds.width, 0.000001)
+
+
+def _is_outgoing(
+    line: RecognizedLine,
+    bounds: NormalizedRect,
+    profile: BubbleProfile,
+) -> bool:
+    relative_center = (
+        (line.x + line.width / 2) - bounds.x
+    ) / max(bounds.width, 0.000001)
+    return (
+        _outgoing_score(line, bounds) >= profile.outgoing_right_threshold
+        and relative_center >= 0.60
+    )
+
+
+def _line_changed_fraction(
+    line: RecognizedLine,
+    changed_regions: tuple[NormalizedRect, ...],
+) -> float:
+    bounds = NormalizedRect(line.x, line.y, line.width, line.height)
+    area = max(line.width * line.height, 0.000001)
+    return min(
+        1.0,
+        sum(_intersection_area(bounds, region) for region in changed_regions)
+        / area,
+    )
+
+
+def _normalized_validation_text(text: str) -> str:
+    return "\n".join(
+        " ".join(line.split()) for line in text.strip().splitlines()
+    )
 
 
 def _union_line_bounds(lines: tuple[RecognizedLine, ...]) -> NormalizedRect:

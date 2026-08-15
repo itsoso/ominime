@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from datetime import datetime
+from collections import deque
 import logging
 import queue
 import threading
@@ -16,6 +17,7 @@ MAX_TRUSTED_SUBMISSION_CHARS = 4000
 DEFAULT_RETRY_DELAYS = (0.15, 0.35, 0.65, 1.0, 1.5, 2.0)
 TASK_EXPIRY_GRACE_SECONDS = 0.05
 DEFAULT_SOURCE_TIMEOUT_SECONDS = 0.2
+RECENT_MESSAGE_IDENTITY_LIMIT = 256
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +58,8 @@ class SourceResult:
     observed_at: float | None = None
     target_pid: int | None = None
     stability_key: str | None = None
+    session_anchor: str | None = None
+    window_id: int | None = None
     failure_reason: str | None = None
     diagnostics: tuple[str, ...] = ()
 
@@ -70,6 +74,8 @@ class SourceResult:
         observed_at: float | None = None,
         target_pid: int | None = None,
         stability_key: str | None = None,
+        session_anchor: str | None = None,
+        window_id: int | None = None,
     ) -> SourceResult:
         return cls(
             content=content,
@@ -79,6 +85,8 @@ class SourceResult:
             observed_at=observed_at,
             target_pid=target_pid,
             stability_key=stability_key,
+            session_anchor=session_anchor,
+            window_id=window_id,
         )
 
     @classmethod
@@ -137,7 +145,7 @@ class MessageSourceChain:
             try:
                 cancel()
             except Exception:
-                logger.exception(
+                logger.error(
                     "post-send source cancellation failed: %s",
                     type(source).__name__,
                 )
@@ -165,6 +173,8 @@ class CaptureOutcome:
     content: str = ""
     source: str | None = None
     message_identity: str | None = None
+    session_anchor: str | None = None
+    window_id: int | None = None
     failure_reason: str | None = None
     diagnostics: tuple[str, ...] = ()
 
@@ -257,8 +267,8 @@ class _BoundedSourceReader:
                     try:
                         item.result = self._source_chain.read(item.intent)
                     except Exception:
-                        logger.exception(
-                            "unexpected post-send source worker failure"
+                        logger.error(
+                            "unexpected post-send source worker failure: source_worker_exception"
                         )
                         item.result = SourceResult.unavailable(
                             "source_worker_exception"
@@ -310,6 +320,8 @@ class PostSendCaptureCoordinator:
         self._accepting = True
         self._stop_signaled = False
         self._state_lock = threading.Lock()
+        self._recent_message_identities: deque[str] = deque()
+        self._recent_message_identity_set: set[str] = set()
         self._worker = threading.Thread(
             target=self._run,
             name="ominime-post-send-capture",
@@ -361,7 +373,9 @@ class PostSendCaptureCoordinator:
                 self._capture(item)
             except Exception:
                 intent_id = getattr(item, "intent_id", "unknown")
-                logger.exception("unexpected post-send capture worker failure")
+                logger.error(
+                    "unexpected post-send capture worker failure: post_send_worker_exception"
+                )
                 self._safe_diagnostic(
                     CaptureOutcome(
                         intent_id=intent_id,
@@ -419,6 +433,15 @@ class PostSendCaptureCoordinator:
                 continue
 
             if not self._is_ocr(last_result):
+                if self._is_duplicate_message(last_result):
+                    self._safe_diagnostic(
+                        CaptureOutcome(
+                            intent_id=intent.intent_id,
+                            failure_reason="duplicate_message_identity",
+                        )
+                    )
+                    return
+                self._remember_message(last_result)
                 self._safe_success(self._success_outcome(intent, last_result))
                 return
 
@@ -450,6 +473,20 @@ class PostSendCaptureCoordinator:
             )
         )
 
+    def _is_duplicate_message(self, result: SourceResult) -> bool:
+        identity = result.message_identity
+        return bool(identity and identity in self._recent_message_identity_set)
+
+    def _remember_message(self, result: SourceResult) -> None:
+        identity = result.message_identity
+        if not identity:
+            return
+        if len(self._recent_message_identities) >= RECENT_MESSAGE_IDENTITY_LIMIT:
+            expired = self._recent_message_identities.popleft()
+            self._recent_message_identity_set.discard(expired)
+        self._recent_message_identities.append(identity)
+        self._recent_message_identity_set.add(identity)
+
     @staticmethod
     def _is_ocr(result: SourceResult) -> bool:
         return bool(result.source and result.source.endswith("_ocr"))
@@ -463,6 +500,8 @@ class PostSendCaptureCoordinator:
             content=result.content,
             source=result.source,
             message_identity=result.message_identity,
+            session_anchor=result.session_anchor,
+            window_id=result.window_id,
             diagnostics=result.diagnostics,
         )
 
@@ -470,13 +509,13 @@ class PostSendCaptureCoordinator:
         try:
             self._on_success(outcome)
         except Exception:
-            logger.exception("post-send success callback failed")
+            logger.error("post-send success callback failed")
 
     def _safe_diagnostic(self, outcome: CaptureOutcome) -> None:
         try:
             self._on_diagnostic(outcome)
         except Exception:
-            logger.exception("post-send diagnostic callback failed")
+            logger.error("post-send diagnostic callback failed")
 
     def _drain_deferred_diagnostics(self) -> None:
         while True:
@@ -520,7 +559,7 @@ class PostSendCaptureCoordinator:
         try:
             release()
         except Exception:
-            logger.exception("post-send baseline release failed")
+            logger.error("post-send baseline release failed")
             self._safe_diagnostic(
                 CaptureOutcome(
                     intent_id=intent.intent_id,

@@ -33,6 +33,8 @@ class AXMessageNode:
     newly_observed: bool
     bounds: NormalizedRect
     secure: bool = False
+    session_anchor: str | None = None
+    window_id: int | None = None
     children: tuple[AXMessageNode, ...] = ()
 
 
@@ -58,7 +60,7 @@ class AccessibilityBubbleSource:
         try:
             roots = tuple(self._node_provider(intent.target_pid))
         except Exception:
-            logger.exception("post-send AX tree read failed")
+            logger.error("post-send AX tree read failed: ax_native_error")
             return SourceResult.unavailable("ax_native_error")
         if not roots:
             return SourceResult.unavailable("ax_tree_unavailable")
@@ -101,6 +103,8 @@ class AccessibilityBubbleSource:
             observed_at=candidate.observed_at,
             target_pid=intent.target_pid,
             stability_key=candidate.identity,
+            session_anchor=candidate.session_anchor,
+            window_id=candidate.window_id,
         )
 
     def cancel(self) -> None:
@@ -116,6 +120,15 @@ class AccessibilityBubbleSource:
     ) -> str | None:
         if node.target_pid != intent.target_pid:
             return "ax_target_pid_mismatch"
+        baseline = intent.baseline
+        if (
+            not isinstance(baseline, WindowFrame)
+            or not baseline.session_anchor
+            or node.session_anchor != baseline.session_anchor
+        ):
+            return "ax_session_anchor_mismatch"
+        if node.window_id != baseline.window_id:
+            return "ax_window_identity_mismatch"
         if node.secure:
             return "ax_secure_element"
         if node.role != "AXStaticText":
@@ -132,6 +145,10 @@ class AccessibilityBubbleSource:
             return "ax_not_new"
         if node.bounds.x + node.bounds.width < 0.72:
             return "ax_not_outgoing"
+        if intent.validation_text and _normalized_text(node.text) != _normalized_text(
+            intent.validation_text
+        ):
+            return "ax_validation_mismatch"
         return None
 
 
@@ -178,6 +195,8 @@ class _NativeAXNodeProvider:
                     newly_observed=False,
                     bounds=NormalizedRect(0.0, 0.0, 0.0, 0.0),
                     secure=role == "AXSecureTextField",
+                    session_anchor=None,
+                    window_id=None,
                 )
             )
         return tuple(snapshots)
@@ -191,6 +210,12 @@ def _ax_value(ax_module, element, attribute):
             return None
         return value
     return result
+
+
+def _normalized_text(text: str) -> str:
+    return "\n".join(
+        " ".join(line.split()) for line in text.strip().splitlines()
+    )
 
 
 def default_message_sources(
