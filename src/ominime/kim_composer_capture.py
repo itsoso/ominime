@@ -26,6 +26,10 @@ MIN_KIM_WINDOW_WIDTH = 300
 MIN_KIM_WINDOW_HEIGHT = 200
 WINDOW_CACHE_TTL_SECONDS = 5.0
 MIN_WATERMARK_SLANT_RATIO = 0.5
+KIM_CHAT_SIDEBAR_FRACTION = 0.28
+KIM_CHAT_COMPOSER_FRACTION = 0.20
+KIM_CHAT_HEADER_FRACTION = 0.09
+KIM_CHAT_RIGHT_MARGIN_FRACTION = 0.02
 
 
 @dataclass(frozen=True)
@@ -375,6 +379,21 @@ class KimPreSubmitCapture:
         image,
         roi: NormalizedRect,
     ) -> Iterable[RecognizedLine]:
+        return VisionTextRecognizer()(image, roi)
+
+
+class VisionTextRecognizer:
+    """Callable Vision bridge with cooperative request cancellation."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._active_request = None
+
+    def __call__(
+        self,
+        image,
+        roi: NormalizedRect,
+    ) -> Iterable[RecognizedLine]:
         import Quartz
 
         request_class, handler_class = _vision_classes()
@@ -386,8 +405,14 @@ class KimPreSubmitCapture:
             Quartz.CGRectMake(roi.x, roi.y, roi.width, roi.height)
         )
         handler = handler_class.alloc().initWithCGImage_options_(image, {})
-        if not handler.performRequests_error_([request], None):
-            raise RuntimeError("Vision text recognition failed")
+        with self._lock:
+            self._active_request = request
+        try:
+            if not handler.performRequests_error_([request], None):
+                raise RuntimeError("Vision text recognition failed")
+        finally:
+            with self._lock:
+                self._active_request = None
 
         lines = []
         for observation in request.results() or ():
@@ -416,6 +441,12 @@ class KimPreSubmitCapture:
             )
         return tuple(lines)
 
+    def cancel(self) -> None:
+        with self._lock:
+            request = self._active_request
+        if request is not None:
+            request.cancel()
+
 
 @lru_cache(maxsize=1)
 def _vision_classes():
@@ -430,3 +461,11 @@ def _vision_classes():
         objc.lookUpClass("VNRecognizeTextRequest"),
         objc.lookUpClass("VNImageRequestHandler"),
     )
+
+
+def native_recognized_lines(
+    image,
+    roi: NormalizedRect,
+) -> Iterable[RecognizedLine]:
+    """Public generic Vision bridge used by post-send bubble capture."""
+    return VisionTextRecognizer()(image, roi)
