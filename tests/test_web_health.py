@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from ominime.database import CaptureDiagnosticRecord, Database, InputRecord
 from ominime import database as database_module
 from ominime import runtime_state
+from ominime import submission_processor
 from ominime.web import api as web_api
 
 
@@ -157,3 +158,53 @@ def test_context_api_and_health_flag_are_not_exposed(tmp_path, monkeypatch):
 
     assert client.get("/api/submissions").status_code == 404
     assert "capture_context_on_enter" not in client.get("/api/health").json()
+
+
+def test_web_stats_include_confirmed_postsend_text_but_not_failed_capture(
+    tmp_path,
+    monkeypatch,
+):
+    db = Database(tmp_path / "test.db")
+    install_test_api_state(monkeypatch, db, tmp_path)
+    monkeypatch.setattr(
+        submission_processor.config,
+        "input_capture_mode",
+        "enter-text",
+        raising=False,
+    )
+    timestamp = datetime(2026, 7, 5, 10, 0, 0)
+    event = SimpleNamespace(
+        timestamp=timestamp,
+        app_name="Kim",
+        app_bundle_id="Kem",
+        modifiers={
+            "submission_id": "postsend-web",
+            "context": {},
+            "fallback_source": "kim_postsend_ocr",
+        },
+    )
+    submission_processor.save_submission_event(db, event, "exact")
+    submission_processor.save_capture_diagnostic_event(
+        db,
+        {
+            "timestamp": timestamp + timedelta(seconds=1),
+            "app_name": "Kim",
+            "app_bundle_id": "Kem",
+            "event_type": "enter_keydown",
+            "decision_action": "skip",
+            "decision_reason": "capture_timeout",
+            "physical_key_count": 9,
+            "diagnostics": {"intent_id": "failed-send"},
+        },
+    )
+    client = TestClient(web_api.app)
+
+    apps = client.get(
+        "/api/stats/apps?target_date=2026-07-05"
+    ).json()
+    hourly = client.get(
+        "/api/stats/hourly?target_date=2026-07-05"
+    ).json()
+
+    assert sum(app["total_chars"] for app in apps) == len("exact")
+    assert sum(hour["chars"] for hour in hourly) == len("exact")

@@ -120,3 +120,30 @@ def test_save_capture_diagnostic_event_persists_listener_skip(tmp_path):
     assert rows[0]["focused_role"] is None
     assert rows[0]["focused_subrole"] is None
     assert rows[0]["diagnostics_json"] == '{"clipboard_copy_attempted": false}'
+
+
+def test_postsend_timeout_persists_only_content_free_diagnostic(tmp_path):
+    db = Database(tmp_path / "test.db")
+
+    submission_processor.save_capture_diagnostic_event(
+        db,
+        {
+            "timestamp": datetime(2026, 7, 5, 10, 1, 0),
+            "app_name": "Kim",
+            "app_bundle_id": "Kem",
+            "event_type": "enter_keydown",
+            "decision_action": "skip",
+            "decision_reason": "capture_timeout",
+            "selected_source": None,
+            "selected_confidence": None,
+            "physical_key_count": 4,
+            "capture_status": "ok",
+            "diagnostics": {"intent_id": "send-timeout"},
+        },
+    )
+
+    assert db.get_records_by_date(datetime(2026, 7, 5).date()) == []
+    row = db.get_recent_capture_diagnostics(limit=1)[0]
+    assert row["decision_reason"] == "capture_timeout"
+    assert row["diagnostics_json"] == '{"intent_id": "send-timeout"}'
+    assert "candidate" not in row["diagnostics_json"]

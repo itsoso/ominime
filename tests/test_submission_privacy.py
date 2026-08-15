@@ -117,3 +117,35 @@ def test_new_submission_does_not_persist_context_metadata(tmp_path, monkeypatch)
     diagnostic = db.get_recent_capture_diagnostics(limit=1)[0]
     assert diagnostic["focused_role"] is None
     assert diagnostic["focused_subrole"] is None
+
+
+def test_postsend_success_persists_exact_text_once_without_context_or_image(
+    tmp_path,
+    monkeypatch,
+):
+    db = Database(tmp_path / "test.db")
+    event = make_event(
+        {
+            "submission_id": "postsend-success",
+            "fallback_source": "kim_postsend_ocr",
+            "physical_key_count": 4,
+            "context": {},
+        }
+    )
+    monkeypatch.setattr(
+        submission_processor.config,
+        "input_capture_mode",
+        "enter-text",
+        raising=False,
+    )
+
+    submission_processor.save_submission_event(db, event, "最终文本")
+
+    records = db.get_records_by_date(datetime(2026, 6, 20).date())
+    assert len(records) == 1
+    assert records[0].content == "最终文本"
+    assert records[0].char_count == len("最终文本")
+    assert db.get_submission_context("postsend-success") is None
+    serialized = repr(records[0].__dict__)
+    assert "image" not in serialized
+    assert "screenshot" not in serialized
