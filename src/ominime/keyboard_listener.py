@@ -77,6 +77,13 @@ from .wechat_composer_capture import (
     WECHAT_BUNDLE_ID,
     WeChatPreSubmitCapture,
 )
+from .chat_window_capture import ChatWindowBaselineSampler
+from .post_send_capture import (
+    CaptureOutcome,
+    PostSendCaptureCoordinator,
+    SendIntent,
+    build_default_message_source_chain,
+)
 from .runtime_state import record_runtime_error, refresh_runtime_heartbeat, set_recording_status
 from .time_utils import storage_now
 
@@ -139,6 +146,19 @@ class RawKeyboardEvent:
     pre_submit_frame: object | None = None
     pre_submit_capture_failure: str | None = None
     pending_replay: PendingReplay | None = None
+    occurred_at: float = 0.0
+    timestamp: datetime | None = None
+
+
+@dataclass(frozen=True)
+class PendingPostSendSubmission:
+    intent_id: str
+    app_name: str
+    bundle_id: str
+    target_pid: int
+    key_modifiers: dict
+    physical_key_count: int
+    event_type: int
 
 
 # 键码映射
@@ -248,6 +268,9 @@ PRESUBMIT_OCR_METADATA = {
     LEGACY_KIM_BUNDLE_ID: ("kim_ocr", "kim_presubmit_ocr"),
     WECHAT_BUNDLE_ID: ("wechat_ocr", "wechat_presubmit_ocr"),
 }
+POST_SEND_CHAT_BUNDLE_IDS = frozenset(
+    {LEGACY_KIM_BUNDLE_ID, WECHAT_BUNDLE_ID}
+)
 
 
 def _clean_key_event_text(text: str) -> str:
@@ -629,6 +652,8 @@ class KeyboardListener:
         candidate_reader: DoubaoCandidateReader | None = None,
         kim_composer_capture: KimPreSubmitCapture | None = None,
         wechat_composer_capture: WeChatPreSubmitCapture | None = None,
+        post_send_coordinator: PostSendCaptureCoordinator | None = None,
+        baseline_sampler: ChatWindowBaselineSampler | None = None,
     ):
         self.callback = callback
         self.diagnostics_callback = diagnostics_callback
@@ -659,6 +684,10 @@ class KeyboardListener:
             LEGACY_KIM_BUNDLE_ID: kim_composer_capture or KimPreSubmitCapture(),
             WECHAT_BUNDLE_ID: wechat_composer_capture or WeChatPreSubmitCapture(),
         }
+        self._post_send_coordinator = post_send_coordinator
+        self._baseline_sampler = baseline_sampler
+        self._post_send_pending: dict[str, PendingPostSendSubmission] = {}
+        self._post_send_pending_lock = threading.Lock()
         self._target_app_identities: dict[int, tuple[str, str]] = {}
         self._suppressed_enter_keyups: dict[int, list[float]] = {}
         self._suppressed_enter_keyups_lock = threading.Lock()
@@ -678,6 +707,19 @@ class KeyboardListener:
         self._event_processing_lock = threading.Lock()
         self._dropped_event_count = 0
 
+    def _ensure_post_send_services(self) -> None:
+        if self._baseline_sampler is None:
+            self._baseline_sampler = ChatWindowBaselineSampler()
+        if self._post_send_coordinator is None:
+            source_chain = build_default_message_source_chain(
+                frame_provider=self._baseline_sampler.capture_current_frame,
+            )
+            self._post_send_coordinator = PostSendCaptureCoordinator(
+                source_chain,
+                on_success=self._handle_post_send_success,
+                on_diagnostic=self._handle_post_send_failure,
+            )
+
     def _prepare_activated_composer(
         self,
         app_name: str,
@@ -685,8 +727,13 @@ class KeyboardListener:
         target_pid: int,
     ) -> None:
         """Resolve composer window metadata outside the EventTap callback."""
+        if target_pid <= 0:
+            return
+        if bundle_id in POST_SEND_CHAT_BUNDLE_IDS:
+            self._target_app_identities[target_pid] = (app_name, bundle_id)
+            return
         composer_capture = self._presubmit_composer_captures.get(bundle_id)
-        if composer_capture is None or target_pid <= 0:
+        if composer_capture is None:
             return
         if composer_capture.prepare(target_pid):
             self._target_app_identities[target_pid] = (
@@ -1427,6 +1474,186 @@ class KeyboardListener:
         if self.callback:
             self.callback(key_event)
 
+    def _schedule_post_send_baseline(
+        self,
+        app_name: str,
+        bundle_id: str,
+        target_pid: int,
+    ) -> None:
+        if (
+            self._baseline_sampler is None
+            or target_pid <= 0
+            or config.input_capture_mode != "enter-text"
+        ):
+            return
+        context = self._capture_focused_context(
+            max_depth=0,
+            target_pid=target_pid,
+        )
+        if is_secure_text_entry_context(context):
+            return
+        self._baseline_sampler.schedule(target_pid)
+
+    def _process_post_send_chat_enter(
+        self,
+        raw_event: RawKeyboardEvent,
+        app_name: str,
+        bundle_id: str,
+        target_pid: int,
+    ) -> None:
+        if self._post_send_coordinator is None:
+            return
+        if config.input_capture_mode != "enter-text":
+            self._clear_submission_buffers(app_name, bundle_id)
+            return
+
+        context = self._capture_focused_context(target_pid=target_pid)
+        current_field_id = focused_field_identity(context)
+        if is_secure_text_entry_context(context):
+            physical_key_count = self._pop_fallback_count(
+                app_name,
+                bundle_id,
+                current_field_id=current_field_id,
+            )
+            self._clear_submission_buffers(app_name, bundle_id)
+            self._emit_capture_diagnostic(
+                app_name,
+                bundle_id,
+                event_type=raw_event.event_type,
+                decision_action="skip",
+                decision_reason="secure_text_input",
+                physical_key_count=physical_key_count,
+            )
+            return
+
+        physical_key_count = self._pop_fallback_count(
+            app_name,
+            bundle_id,
+            current_field_id=current_field_id,
+        )
+        validation_text = normalize_submission_text(
+            self._pop_doubao_submission(app_name, bundle_id, target_pid)
+            or self._pop_text_fallback_content(
+                app_name,
+                bundle_id,
+                current_field_id=current_field_id,
+                allow_unscoped=True,
+            ),
+            app_name=app_name,
+            bundle_id=bundle_id,
+        )
+        baseline = (
+            self._baseline_sampler.take_baseline(target_pid)
+            if self._baseline_sampler is not None
+            else None
+        )
+        self._clear_submission_buffers(app_name, bundle_id)
+        intent_id = uuid.uuid4().hex
+        intent = SendIntent(
+            intent_id=intent_id,
+            submitted_at=(
+                raw_event.occurred_at
+                if raw_event.occurred_at > 0
+                else time.monotonic()
+            ),
+            timestamp=raw_event.timestamp or storage_now(),
+            app_name=app_name,
+            bundle_id=bundle_id,
+            target_pid=target_pid,
+            modifiers=raw_event.modifiers,
+            physical_key_count=physical_key_count,
+            validation_text=validation_text,
+            baseline=baseline,
+        )
+        pending = PendingPostSendSubmission(
+            intent_id=intent_id,
+            app_name=app_name,
+            bundle_id=bundle_id,
+            target_pid=target_pid,
+            key_modifiers=dict(raw_event.modifiers),
+            physical_key_count=physical_key_count,
+            event_type=raw_event.event_type,
+        )
+        with self._post_send_pending_lock:
+            self._post_send_pending[intent_id] = pending
+        if self._post_send_coordinator.submit(intent):
+            return
+        with self._post_send_pending_lock:
+            self._post_send_pending.pop(intent_id, None)
+        self._emit_capture_diagnostic(
+            app_name,
+            bundle_id,
+            event_type=raw_event.event_type,
+            decision_action="skip",
+            decision_reason="post_send_queue_full",
+            physical_key_count=physical_key_count,
+            diagnostics={"intent_id": intent_id},
+        )
+
+    def _pop_post_send_pending(
+        self,
+        intent_id: str,
+    ) -> PendingPostSendSubmission | None:
+        with self._post_send_pending_lock:
+            return self._post_send_pending.pop(intent_id, None)
+
+    def _handle_post_send_success(self, outcome: CaptureOutcome) -> None:
+        pending = self._pop_post_send_pending(outcome.intent_id)
+        if pending is None:
+            return
+        try:
+            current_app_name, current_bundle_id, current_pid = (
+                get_current_app_target()
+            )
+        except Exception:
+            current_app_name, current_bundle_id, current_pid = (
+                "Unknown",
+                "unknown",
+                -1,
+            )
+        if current_pid > 0 and (
+            current_pid != pending.target_pid
+            or current_bundle_id != pending.bundle_id
+        ):
+            self._emit_capture_diagnostic(
+                pending.app_name,
+                pending.bundle_id,
+                event_type=pending.event_type,
+                decision_action="skip",
+                decision_reason="post_send_target_changed",
+                physical_key_count=pending.physical_key_count,
+                diagnostics={"intent_id": pending.intent_id},
+            )
+            return
+        self._emit_submission_event(
+            app_name=pending.app_name,
+            bundle_id=pending.bundle_id,
+            content=outcome.content,
+            key_modifiers=pending.key_modifiers,
+            context_data={},
+            fallback_source=outcome.source,
+            physical_key_count=pending.physical_key_count,
+        )
+
+    def _handle_post_send_failure(self, outcome: CaptureOutcome) -> None:
+        pending = self._pop_post_send_pending(outcome.intent_id)
+        if pending is None:
+            return
+        diagnostic_details = {"intent_id": pending.intent_id}
+        if outcome.diagnostics:
+            diagnostic_details["source_diagnostics"] = list(
+                outcome.diagnostics
+            )
+        self._emit_capture_diagnostic(
+            pending.app_name,
+            pending.bundle_id,
+            event_type=pending.event_type,
+            decision_action="skip",
+            decision_reason=outcome.failure_reason or "post_send_failed",
+            physical_key_count=pending.physical_key_count,
+            diagnostics=diagnostic_details,
+        )
+
     def _emit_submission_snapshot(
         self,
         event,
@@ -1885,6 +2112,13 @@ class KeyboardListener:
             composer_capture = self._presubmit_composer_captures.get(bundle_id)
             if (
                 composer_capture is not None
+                and not (
+                    bundle_id in POST_SEND_CHAT_BUNDLE_IDS
+                    and (
+                        self._post_send_coordinator is not None
+                        or self._baseline_sampler is not None
+                    )
+                )
                 and raw_event.event_type == kCGEventKeyDown
                 and raw_event.keycode != ENTER_KEYCODE
             ):
@@ -1964,7 +2198,61 @@ class KeyboardListener:
                 raw_event.is_autorepeat,
             )
 
+        if (
+            bundle_id in POST_SEND_CHAT_BUNDLE_IDS
+            and event_type == kCGEventKeyDown
+            and keycode != ENTER_KEYCODE
+            and not raw_event.is_autorepeat
+            and not any(modifiers.values())
+        ):
+            self._schedule_post_send_baseline(
+                app_name,
+                bundle_id,
+                application_pid,
+            )
+
         if keycode != ENTER_KEYCODE or event_type not in (kCGEventKeyDown, kCGEventKeyUp):
+            return
+        if (
+            bundle_id in POST_SEND_CHAT_BUNDLE_IDS
+            and self._post_send_coordinator is not None
+        ):
+            if event_type != kCGEventKeyDown or raw_event.is_autorepeat:
+                return
+            if modifiers.get("shift") or modifiers.get("alt"):
+                self._emit_capture_diagnostic(
+                    app_name,
+                    bundle_id,
+                    event_type=event_type,
+                    decision_action="skip",
+                    decision_reason="newline_modifier",
+                )
+                return
+            if modifiers.get("cmd") or modifiers.get("ctrl"):
+                self._emit_capture_diagnostic(
+                    app_name,
+                    bundle_id,
+                    event_type=event_type,
+                    decision_action="skip",
+                    decision_reason="shortcut_modifier",
+                )
+                return
+            if application_pid <= 0:
+                self._clear_submission_buffers(app_name, bundle_id)
+                self._emit_capture_diagnostic(
+                    app_name,
+                    bundle_id,
+                    event_type=event_type,
+                    decision_action="skip",
+                    decision_reason="post_send_target_unverified",
+                )
+                return
+            self._process_post_send_chat_enter(
+                raw_event,
+                app_name,
+                bundle_id,
+                application_pid,
+            )
             return
         attempt_key = self._fallback_buffer_key(app_name, bundle_id)
         if event_type == kCGEventKeyDown:
@@ -2150,6 +2438,7 @@ class KeyboardListener:
                     event_type == kCGEventKeyDown
                     and keycode == ENTER_KEYCODE
                     and composer_capture is not None
+                    and bundle_id not in POST_SEND_CHAT_BUNDLE_IDS
                     and target_pid > 0
                     and frontmost_pid == target_pid
                     and self._target_app_identities.get(target_pid)
@@ -2175,6 +2464,8 @@ class KeyboardListener:
                     frontmost_pid=frontmost_pid,
                     is_autorepeat=is_autorepeat,
                     pending_replay=pending_replay,
+                    occurred_at=time.monotonic(),
+                    timestamp=storage_now(),
                 )
                 if self._event_worker_running:
                     try:
@@ -2374,6 +2665,7 @@ class KeyboardListener:
         if self._event_worker_thread and self._event_worker_thread.is_alive():
             raise RuntimeError("previous keyboard event worker is still stopping")
         self._retry_count = 0
+        self._ensure_post_send_services()
 
         # 首次前台应用快照与窗口预备完成后，才开放键盘事件入口。
         _start_app_watcher(self._prepare_activated_composer)
@@ -2414,6 +2706,10 @@ class KeyboardListener:
         with self._event_processing_lock:
             self._running = False
             self._event_worker_running = False
+        if self._post_send_coordinator is not None:
+            self._post_send_coordinator.stop()
+        if self._baseline_sampler is not None:
+            self._baseline_sampler.stop()
         while True:
             try:
                 self._event_queue.get_nowait()

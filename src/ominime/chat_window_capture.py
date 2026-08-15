@@ -144,6 +144,10 @@ class ChatWindowBaselineSampler:
             self._baseline = None
             return baseline
 
+    def capture_current_frame(self, target_pid: int) -> WindowFrame | None:
+        """Synchronously capture a current frame from a non-EventTap worker."""
+        return self._capture(target_pid)
+
     def stop(self, timeout: float = 1.0) -> None:
         with self._lock:
             if not self._accepting:

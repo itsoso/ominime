@@ -209,7 +209,347 @@ class FakeKimComposerCapture:
         return self.recognize_result
 
 
-def test_event_tap_defers_verified_kim_capture_to_worker(monkeypatch):
+class FakePostSendCoordinator:
+    def __init__(self, *, accepts=True):
+        self.accepts = accepts
+        self.submitted = []
+        self.stop_calls = 0
+
+    def submit(self, intent):
+        self.submitted.append(intent)
+        if not self.accepts:
+            release = getattr(intent.baseline, "release", None)
+            if callable(release):
+                release()
+        return self.accepts
+
+    def stop(self):
+        self.stop_calls += 1
+
+
+class FakeBaselineSampler:
+    def __init__(self, baseline="baseline"):
+        self.baseline = baseline
+        self.scheduled = []
+        self.taken = []
+        self.stop_calls = 0
+
+    def schedule(self, target_pid):
+        self.scheduled.append(target_pid)
+        return True
+
+    def take_baseline(self, target_pid):
+        self.taken.append(target_pid)
+        baseline = self.baseline
+        self.baseline = None
+        return baseline
+
+    def stop(self):
+        self.stop_calls += 1
+
+
+@pytest.mark.parametrize(
+    ("app_name", "bundle_id", "target_pid"),
+    (("Kim", "Kem", 123), ("微信", "com.tencent.xinWeChat", 4318)),
+)
+def test_postsend_chat_enter_callback_returns_original_without_native_capture(
+    monkeypatch,
+    app_name,
+    bundle_id,
+    target_pid,
+):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    coordinator = FakePostSendCoordinator()
+    sampler = FakeBaselineSampler()
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None,
+        post_send_coordinator=coordinator,
+        baseline_sampler=sampler,
+    )
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_current_app_target",
+        lambda: (app_name, bundle_id, target_pid),
+    )
+    monkeypatch.setattr(
+        keyboard_listener.Quartz,
+        "CGEventCreateCopy",
+        lambda event: (_ for _ in ()).throw(
+            AssertionError("chat Enter must not be copied")
+        ),
+    )
+    listener._capture_focused_context = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("EventTap callback must not read AX")
+    )
+    listener._target_app_identities[target_pid] = (app_name, bundle_id)
+    listener._has_started = True
+    listener._event_worker_running = True
+    native_event = SimpleNamespace(
+        keycode=keyboard_listener.ENTER_KEYCODE,
+        text="",
+        target_pid=target_pid,
+    )
+
+    returned = listener._event_callback(
+        None,
+        keyboard_listener.kCGEventKeyDown,
+        native_event,
+        None,
+    )
+
+    queued = listener._event_queue.get_nowait()
+    assert returned is native_event
+    assert queued.pending_replay is None
+    assert keyboard_listener.Quartz.posted_events == []
+    assert coordinator.submitted == []
+    assert sampler.scheduled == []
+
+
+def test_postsend_worker_creates_one_intent_after_chat_gates(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    coordinator = FakePostSendCoordinator()
+    sampler = FakeBaselineSampler()
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None,
+        post_send_coordinator=coordinator,
+        baseline_sampler=sampler,
+    )
+    configure_listener_context(listener, status="degraded", secure=False)
+    monkeypatch.setattr(keyboard_listener, "get_app_by_pid", lambda pid: ("Kim", "Kem"))
+    listener._fallback_buffers[("Kim", "Kem")] = ["a", "b"]
+    listener._fallback_buffer_updated_at[("Kim", "Kem")] = time.monotonic()
+
+    listener._process_raw_event(
+        keyboard_listener.RawKeyboardEvent(
+            event_type=keyboard_listener.kCGEventKeyDown,
+            keycode=keyboard_listener.ENTER_KEYCODE,
+            text="",
+            app_name="Kim",
+            bundle_id="Kem",
+            modifiers={"shift": False, "ctrl": False, "alt": False, "cmd": False},
+            target_pid=123,
+            occurred_at=10.0,
+        )
+    )
+
+    assert len(coordinator.submitted) == 1
+    intent = coordinator.submitted[0]
+    assert intent.target_pid == 123
+    assert intent.app_name == "Kim"
+    assert intent.physical_key_count == 2
+    assert intent.baseline == "baseline"
+    assert sampler.taken == [123]
+
+
+@pytest.mark.parametrize("secure", (True, False))
+def test_postsend_secure_or_count_only_chat_never_captures(
+    monkeypatch,
+    secure,
+):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    coordinator = FakePostSendCoordinator()
+    sampler = FakeBaselineSampler()
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None,
+        post_send_coordinator=coordinator,
+        baseline_sampler=sampler,
+    )
+    configure_listener_context(listener, status="ok", secure=secure)
+    if not secure:
+        monkeypatch.setattr(keyboard_listener.config, "input_capture_mode", "count-only")
+    monkeypatch.setattr(keyboard_listener, "get_app_by_pid", lambda pid: ("Kim", "Kem"))
+
+    listener._process_raw_event(
+        keyboard_listener.RawKeyboardEvent(
+            event_type=keyboard_listener.kCGEventKeyDown,
+            keycode=keyboard_listener.ENTER_KEYCODE,
+            text="",
+            app_name="Kim",
+            bundle_id="Kem",
+            modifiers={"shift": False, "ctrl": False, "alt": False, "cmd": False},
+            target_pid=123,
+        )
+    )
+
+    assert coordinator.submitted == []
+    assert sampler.taken == []
+
+
+@pytest.mark.parametrize(
+    ("modifiers", "autorepeat"),
+    (
+        ({"shift": True, "ctrl": False, "alt": False, "cmd": False}, False),
+        ({"shift": False, "ctrl": False, "alt": False, "cmd": False}, True),
+    ),
+)
+def test_postsend_modifier_or_autorepeat_enter_does_not_create_intent(
+    monkeypatch,
+    modifiers,
+    autorepeat,
+):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    coordinator = FakePostSendCoordinator()
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None,
+        post_send_coordinator=coordinator,
+        baseline_sampler=FakeBaselineSampler(),
+    )
+    monkeypatch.setattr(keyboard_listener, "get_app_by_pid", lambda pid: ("Kim", "Kem"))
+
+    listener._process_raw_event(
+        keyboard_listener.RawKeyboardEvent(
+            event_type=keyboard_listener.kCGEventKeyDown,
+            keycode=keyboard_listener.ENTER_KEYCODE,
+            text="",
+            app_name="Kim",
+            bundle_id="Kem",
+            modifiers=modifiers,
+            target_pid=123,
+            is_autorepeat=autorepeat,
+        )
+    )
+
+    assert coordinator.submitted == []
+
+
+def test_postsend_queue_full_records_diagnostic_without_content(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    diagnostics = []
+    coordinator = FakePostSendCoordinator(accepts=False)
+    listener = keyboard_listener.KeyboardListener(
+        lambda event: None,
+        diagnostics_callback=diagnostics.append,
+        post_send_coordinator=coordinator,
+        baseline_sampler=FakeBaselineSampler(),
+    )
+    configure_listener_context(listener, status="degraded", secure=False)
+    monkeypatch.setattr(keyboard_listener, "get_app_by_pid", lambda pid: ("Kim", "Kem"))
+
+    listener._process_raw_event(
+        keyboard_listener.RawKeyboardEvent(
+            event_type=keyboard_listener.kCGEventKeyDown,
+            keycode=keyboard_listener.ENTER_KEYCODE,
+            text="",
+            app_name="Kim",
+            bundle_id="Kem",
+            modifiers={"shift": False, "ctrl": False, "alt": False, "cmd": False},
+            target_pid=123,
+        )
+    )
+
+    assert diagnostics[-1]["decision_reason"] == "post_send_queue_full"
+    assert "content" not in repr(diagnostics[-1])
+
+
+def test_postsend_success_uses_existing_submission_event_path(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    events = []
+    coordinator = FakePostSendCoordinator()
+    listener = keyboard_listener.KeyboardListener(
+        events.append,
+        post_send_coordinator=coordinator,
+        baseline_sampler=FakeBaselineSampler(),
+    )
+    configure_listener_context(listener, status="degraded", secure=False)
+    monkeypatch.setattr(keyboard_listener, "get_app_by_pid", lambda pid: ("Kim", "Kem"))
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_current_app_target",
+        lambda: ("Kim", "Kem", 123),
+    )
+    listener._process_raw_event(
+        keyboard_listener.RawKeyboardEvent(
+            event_type=keyboard_listener.kCGEventKeyDown,
+            keycode=keyboard_listener.ENTER_KEYCODE,
+            text="",
+            app_name="Kim",
+            bundle_id="Kem",
+            modifiers={"shift": False, "ctrl": False, "alt": False, "cmd": False},
+            target_pid=123,
+        )
+    )
+    intent = coordinator.submitted[0]
+
+    listener._handle_post_send_success(
+        keyboard_listener.CaptureOutcome(
+            intent_id=intent.intent_id,
+            content="最终文本",
+            source="kim_postsend_ocr",
+            message_identity="bubble-1",
+        )
+    )
+
+    assert len(events) == 1
+    assert events[0].character == "最终文本"
+    assert events[0].modifiers["submit_snapshot"] is True
+    assert events[0].modifiers["fallback_source"] == "kim_postsend_ocr"
+    assert events[0].modifiers["context"] == {}
+
+
+def test_postsend_failure_and_app_switch_emit_no_content(monkeypatch):
+    keyboard_listener, _ = import_keyboard_listener(monkeypatch)
+    events = []
+    diagnostics = []
+    coordinator = FakePostSendCoordinator()
+    listener = keyboard_listener.KeyboardListener(
+        events.append,
+        diagnostics_callback=diagnostics.append,
+        post_send_coordinator=coordinator,
+        baseline_sampler=FakeBaselineSampler(),
+    )
+    configure_listener_context(listener, status="degraded", secure=False)
+    monkeypatch.setattr(keyboard_listener, "get_app_by_pid", lambda pid: ("Kim", "Kem"))
+    listener._process_raw_event(
+        keyboard_listener.RawKeyboardEvent(
+            event_type=keyboard_listener.kCGEventKeyDown,
+            keycode=keyboard_listener.ENTER_KEYCODE,
+            text="",
+            app_name="Kim",
+            bundle_id="Kem",
+            modifiers={"shift": False, "ctrl": False, "alt": False, "cmd": False},
+            target_pid=123,
+        )
+    )
+    first = coordinator.submitted[0]
+    listener._handle_post_send_failure(
+        keyboard_listener.CaptureOutcome(
+            intent_id=first.intent_id,
+            failure_reason="capture_timeout",
+        )
+    )
+    assert events == []
+    assert diagnostics[-1]["decision_reason"] == "capture_timeout"
+
+    listener._process_raw_event(
+        keyboard_listener.RawKeyboardEvent(
+            event_type=keyboard_listener.kCGEventKeyDown,
+            keycode=keyboard_listener.ENTER_KEYCODE,
+            text="",
+            app_name="Kim",
+            bundle_id="Kem",
+            modifiers={"shift": False, "ctrl": False, "alt": False, "cmd": False},
+            target_pid=123,
+        )
+    )
+    second = coordinator.submitted[1]
+    monkeypatch.setattr(
+        keyboard_listener,
+        "get_current_app_target",
+        lambda: ("Notes", "com.apple.Notes", 999),
+    )
+    listener._handle_post_send_success(
+        keyboard_listener.CaptureOutcome(
+            intent_id=second.intent_id,
+            content="不能保存",
+            source="kim_postsend_ocr",
+            message_identity="bubble-2",
+        )
+    )
+    assert events == []
+    assert diagnostics[-1]["decision_reason"] == "post_send_target_changed"
+
+
+def test_event_tap_passes_verified_kim_enter_without_replay(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     capture = FakeKimComposerCapture()
     listener = keyboard_listener.KeyboardListener(
@@ -240,8 +580,8 @@ def test_event_tap_defers_verified_kim_capture_to_worker(monkeypatch):
     queued = listener._event_queue.get_nowait()
     assert capture.freeze_calls == []
     assert queued.pre_submit_frame is None
-    assert queued.pending_replay is not None
-    assert returned is None
+    assert queued.pending_replay is None
+    assert returned is native_event
 
     configure_listener_context(listener)
     monkeypatch.setattr(
@@ -251,9 +591,8 @@ def test_event_tap_defers_verified_kim_capture_to_worker(monkeypatch):
     )
     listener._process_raw_event(queued)
 
-    assert capture.freeze_calls == [123]
-    assert len(keyboard_listener.Quartz.posted_events) == 2
-    assert keyboard_listener.Quartz.posted_events[0][0] == 123
+    assert capture.freeze_calls == []
+    assert keyboard_listener.Quartz.posted_events == []
 
 
 @pytest.mark.parametrize(
@@ -324,7 +663,7 @@ def test_queued_event_keeps_native_and_frontmost_pids(monkeypatch):
     assert queued.bundle_id == "Kem"
 
 
-def test_kim_worker_capture_failure_replays_enter(monkeypatch):
+def test_kim_worker_capture_failure_cannot_affect_enter_delivery(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     capture = FakeKimComposerCapture(raises=True)
     listener = keyboard_listener.KeyboardListener(
@@ -356,7 +695,7 @@ def test_kim_worker_capture_failure_replays_enter(monkeypatch):
     assert capture.freeze_calls == []
     assert queued.pre_submit_frame is None
     assert queued.pre_submit_capture_failure is None
-    assert returned is None
+    assert returned is native_event
 
     configure_listener_context(listener)
     monkeypatch.setattr(
@@ -366,11 +705,11 @@ def test_kim_worker_capture_failure_replays_enter(monkeypatch):
     )
     listener._process_raw_event(queued)
 
-    assert capture.freeze_calls == [123]
-    assert len(keyboard_listener.Quartz.posted_events) == 2
+    assert capture.freeze_calls == []
+    assert keyboard_listener.Quartz.posted_events == []
 
 
-def test_kim_worker_missing_frame_replays_enter(monkeypatch):
+def test_kim_worker_missing_frame_cannot_affect_enter_delivery(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     capture = FakeKimComposerCapture(frame=None)
     listener = keyboard_listener.KeyboardListener(
@@ -410,8 +749,8 @@ def test_kim_worker_missing_frame_replays_enter(monkeypatch):
     )
     listener._process_raw_event(queued)
 
-    assert capture.freeze_calls == [123]
-    assert len(keyboard_listener.Quartz.posted_events) == 2
+    assert capture.freeze_calls == []
+    assert keyboard_listener.Quartz.posted_events == []
 
 
 def test_kim_presubmit_does_not_trust_stale_app_identity(monkeypatch):
@@ -602,7 +941,7 @@ def test_unsupported_app_uses_native_target(monkeypatch):
     assert ("Chrome", "com.google.Chrome") not in listener._fallback_buffers
 
 
-def test_event_tap_defers_verified_wechat_capture_to_worker(monkeypatch):
+def test_event_tap_passes_verified_wechat_enter_without_replay(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     capture = FakeKimComposerCapture(frame="wechat-frame")
     listener = keyboard_listener.KeyboardListener(
@@ -633,7 +972,7 @@ def test_event_tap_defers_verified_wechat_capture_to_worker(monkeypatch):
     queued = listener._event_queue.get_nowait()
     assert capture.freeze_calls == []
     assert queued.pre_submit_frame is None
-    assert queued.pending_replay is not None
+    assert queued.pending_replay is None
 
 
 def test_wechat_first_enter_after_restart_queues_worker_capture(
@@ -658,7 +997,7 @@ def test_wechat_first_enter_after_restart_queues_worker_capture(
     keyboard_listener._on_app_activated(*app, 4318)
     keyboard_listener._refresh_app_activation_callback()
 
-    assert capture.prepare_calls == [4318, 4318]
+    assert capture.prepare_calls == []
 
     listener._event_callback(
         None,
@@ -673,7 +1012,7 @@ def test_wechat_first_enter_after_restart_queues_worker_capture(
 
     queued = listener._event_queue.get_nowait()
     assert capture.freeze_calls == []
-    assert queued.pending_replay is not None
+    assert queued.pending_replay is None
 
 
 def test_app_switch_preserves_verified_kem_identity_for_immediate_enter(
@@ -715,9 +1054,9 @@ def test_app_switch_preserves_verified_kem_identity_for_immediate_enter(
     )
 
     queued = listener._event_queue.get_nowait()
-    assert capture.prepare_calls == [29805]
+    assert capture.prepare_calls == []
     assert capture.freeze_calls == []
-    assert queued.pending_replay is not None
+    assert queued.pending_replay is None
 
 
 def test_count_only_mode_never_intercepts_or_freezes_kim_enter(monkeypatch):
@@ -938,7 +1277,7 @@ def test_suppressed_enter_replays_marked_keydown_then_keyup(monkeypatch):
     )
 
 
-def test_pending_enter_watchdog_replays_when_worker_is_blocked(monkeypatch):
+def test_chat_enter_needs_no_watchdog_when_worker_is_blocked(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     listener = keyboard_listener.KeyboardListener(lambda event: None)
     monkeypatch.setattr(
@@ -955,26 +1294,23 @@ def test_pending_enter_watchdog_replays_when_worker_is_blocked(monkeypatch):
     listener._has_started = True
     listener._event_worker_running = True
 
+    native_event = SimpleNamespace(
+        keycode=keyboard_listener.ENTER_KEYCODE,
+        text="",
+        target_pid=123,
+    )
     returned = listener._event_callback(
         None,
         keyboard_listener.kCGEventKeyDown,
-        SimpleNamespace(
-            keycode=keyboard_listener.ENTER_KEYCODE,
-            text="",
-            target_pid=123,
-        ),
+        native_event,
         None,
     )
 
-    assert returned is None
-    deadline = time.monotonic() + 0.5
-    while len(keyboard_listener.Quartz.posted_events) < 2:
-        assert time.monotonic() < deadline
-        time.sleep(0.005)
-    assert len(keyboard_listener.Quartz.posted_events) == 2
+    assert returned is native_event
+    assert keyboard_listener.Quartz.posted_events == []
 
 
-def test_pending_enter_watchdog_uses_cold_capture_timeout(monkeypatch):
+def test_chat_enter_does_not_create_replay_timer(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     listener = keyboard_listener.KeyboardListener(lambda event: None)
     created_timers = []
@@ -1012,13 +1348,11 @@ def test_pending_enter_watchdog_uses_cold_capture_timeout(monkeypatch):
         None,
     )
 
-    assert returned is None
-    assert len(created_timers) == 1
-    assert created_timers[0].interval == 0.75
-    assert created_timers[0].started is True
+    assert returned is not None
+    assert created_timers == []
 
 
-def test_physical_keyup_is_suppressed_after_enter_pair_is_replayed(monkeypatch):
+def test_physical_chat_enter_keyup_is_passed_through_once(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     listener = keyboard_listener.KeyboardListener(lambda event: None)
     monkeypatch.setattr(
@@ -1055,12 +1389,12 @@ def test_physical_keyup_is_suppressed_after_enter_pair_is_replayed(monkeypatch):
         None,
     )
 
-    assert returned is None
-    assert listener._event_queue.empty()
-    assert len(keyboard_listener.Quartz.posted_events) == 2
+    assert returned is physical_keyup
+    assert listener._event_queue.qsize() == 1
+    assert keyboard_listener.Quartz.posted_events == []
 
 
-def test_autorepeat_keydown_is_suppressed_until_physical_enter_keyup(monkeypatch):
+def test_autorepeat_chat_keydown_is_passed_through_but_only_queued(monkeypatch):
     keyboard_listener, _ = import_keyboard_listener(monkeypatch)
     listener = keyboard_listener.KeyboardListener(lambda event: None)
     monkeypatch.setattr(
@@ -1096,8 +1430,8 @@ def test_autorepeat_keydown_is_suppressed_until_physical_enter_keyup(monkeypatch
         None,
     )
 
-    assert returned is None
-    assert listener._event_queue.qsize() == 1
+    assert returned is repeated_event
+    assert listener._event_queue.qsize() == 2
 
 
 def test_replayed_enter_bypasses_capture_and_queue(monkeypatch):

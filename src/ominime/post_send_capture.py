@@ -193,8 +193,6 @@ class _BoundedSourceReader:
         self._stopping = False
         self._owns_slot = False
         self._worker: threading.Thread | None = None
-        with self._lock:
-            self._ensure_worker_locked()
 
     def read(self, intent: SendIntent, timeout: float) -> SourceResult:
         with self._lock:
