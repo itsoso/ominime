@@ -298,6 +298,27 @@ def test_visual_source_rejects_mismatched_current_window():
     assert result.failure_reason == "window_identity_mismatch"
 
 
+def test_wechat_visual_source_accepts_window_recreation_with_same_session_anchor():
+    line = RecognizedLine("T", 0.82, 0.36, 0.08, 0.04)
+    source = _source(
+        (line,),
+        (NormalizedRect(0.80, 0.34, 0.12, 0.09),),
+        current=_frame(window_id=99),
+    )
+
+    result = source.read(
+        _intent(
+            app_name="微信",
+            bundle_id="com.tencent.xinWeChat",
+            validation_text="T",
+        )
+    )
+
+    assert result.content == "T"
+    assert result.source == "wechat_postsend_ocr"
+    assert result.window_id == 42
+
+
 def test_visual_source_rejects_same_window_conversation_switch():
     source = _source(
         (RecognizedLine("另一会话", 0.72, 0.36, 0.20, 0.04),),

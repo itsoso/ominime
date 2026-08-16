@@ -205,7 +205,7 @@ ominime obsidian -p /path/to/your/vault --no-raw --no-ai
 
 新提交只保存输入记录和不含窗口、控件层级的捕获诊断，不再保存提交上下文元数据。历史版本创建的 `submission_contexts` 表和既有数据会原样保留，但 Web 不再提供读取入口。
 
-Kim 与微信使用独立的发送后链路：EventTap 只把原始 keyDown/keyUp 放行并投递一个小型事件样本，不复制、抑制或重放 Enter，也不在回调中读取 AX、剪贴板、截图或 OCR。后台 worker 对两类来源分别验证：AX 必须在本次发送的时间范围内提供我方方向、唯一消息 ID，并匹配目标 PID、窗口 ID 与会话指纹；Vision 必须匹配相同的 PID、窗口与会话锚点，并额外满足发送前内存基线变化、非空本地 validation 摘要精确一致，以及连续两次文本与几何位置稳定。任一来源自身所需证据缺失都只产生不含正文的失败诊断。粘贴时，事件 worker 在 Cmd-V keyUp 后优先读取一次当前 composer AX 值；若 Kim/微信未暴露该值，只记录不含正文的 pasteboard changeCount，等 Enter 通过 secure 检查且剪贴板仍未变化时才瞬时读取本次字符串作为 validation。任何前后混合输入、超时、剪贴板变化、上下文清理或停止都会使该 fallback 失效，不写数据库或日志。
+Kim 与微信使用独立的发送后链路：EventTap 只把原始 keyDown/keyUp 放行并投递一个小型事件样本，不复制、抑制或重放 Enter，也不在回调中读取 AX、剪贴板、截图或 OCR。后台 worker 对两类来源分别验证：AX 必须在本次发送的时间范围内提供我方方向、唯一消息 ID，并匹配目标 PID、窗口 ID 与会话指纹；Vision 必须匹配相同的 PID、窗口与会话锚点，并额外满足发送前内存基线变化、非空本地 validation 摘要精确一致，以及连续两次文本与几何位置稳定。微信发送时会重建原生窗口；仅当 PID、窗口尺寸和会话指纹仍一致时，Vision 才把新原生窗口视为同一逻辑窗口，Kim 仍要求原生窗口 ID 严格一致。任一来源自身所需证据缺失都只产生不含正文的失败诊断。粘贴时，事件 worker 在 Cmd-V keyUp 后优先读取一次当前 composer AX 值；若 Kim/微信未暴露该值，只记录不含正文的 pasteboard changeCount，等 Enter 通过 secure 检查且剪贴板仍未变化时才瞬时读取本次字符串作为 validation。任何前后混合输入、超时、剪贴板变化、上下文清理或停止都会使该 fallback 失效，不写数据库或日志。
 
 ## 数据与隐私
 

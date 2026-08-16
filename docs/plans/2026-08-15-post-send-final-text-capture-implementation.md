@@ -266,7 +266,7 @@ class BubbleCandidate:
     outgoing_score: float
 ```
 
-Return success only when the candidate intersects the baseline-to-current changed region and satisfies the outgoing threshold. Build `message_identity` from intent ID, window ID, quantized bounds and observation time, not text alone.
+Return success only when the candidate intersects the baseline-to-current changed region and satisfies the outgoing threshold. Build `message_identity` from intent ID, window ID, quantized bounds and observation time, not text alone. Keep Kim's native window ID strict. WeChat may recreate its native window on send; accept that migration only when PID, dimensions, and session anchor still match, and return the baseline logical window ID to the completion gate.
 
 **Step 4: Run bubble and legacy OCR tests**
 

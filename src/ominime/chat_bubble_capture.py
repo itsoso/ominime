@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import logging
 import time
@@ -132,11 +132,12 @@ class VisualBubbleSource:
                 return SourceResult.unavailable("post_send_frame_unavailable")
             if current.target_pid != intent.target_pid:
                 return SourceResult.unavailable("target_pid_mismatch")
+            window_recreated = baseline.window_id != current.window_id
             if (
                 baseline.target_pid != intent.target_pid
-                or baseline.window_id != current.window_id
                 or baseline.width != current.width
                 or baseline.height != current.height
+                or (window_recreated and intent.bundle_id != WECHAT_BUNDLE_ID)
             ):
                 return SourceResult.unavailable("window_identity_mismatch")
             if (
@@ -157,7 +158,7 @@ class VisualBubbleSource:
                 )
             )
             lines = tuple(self._ocr_provider(current.image, search_bounds))
-            return self._result_for_lines(
+            result = self._result_for_lines(
                 intent,
                 current,
                 profile,
@@ -165,6 +166,9 @@ class VisualBubbleSource:
                 lines,
                 changed_regions,
             )
+            if window_recreated and not result.failure_reason:
+                return replace(result, window_id=baseline.window_id)
+            return result
         except Exception:
             logger.error("post-send visual bubble capture failed: ocr_native_error")
             return SourceResult.unavailable("ocr_native_error")
