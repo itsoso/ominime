@@ -92,6 +92,9 @@ cat > "$PLIST_PATH" << EOF
     
     <key>KeepAlive</key>
     <true/>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
     
     <key>StandardOutPath</key>
     <string>${LOG_DIR}/app.log</string>

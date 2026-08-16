@@ -52,6 +52,13 @@ def test_launchagent_path_prefers_apple_silicon_homebrew():
     assert "/opt/homebrew/bin:/usr/local/bin" in _read("src/ominime/scripts/install_web.sh")
 
 
+def test_app_launchagent_requests_interactive_process_scheduling():
+    script = _read("src/ominime/scripts/install_app.sh")
+
+    assert "<key>ProcessType</key>" in script
+    assert "<string>Interactive</string>" in script
+
+
 def test_root_installer_does_not_start_a_second_app_instance():
     script = _read("scripts/install_app.sh")
 
