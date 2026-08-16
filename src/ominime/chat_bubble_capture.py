@@ -8,7 +8,7 @@ import logging
 import time
 from typing import Callable, Iterable
 
-from .chat_window_capture import WindowFrame
+from .chat_window_capture import WindowFrame, session_anchors_match
 from .kim_composer_capture import (
     KIM_CHAT_COMPOSER_FRACTION,
     KIM_CHAT_HEADER_FRACTION,
@@ -140,9 +140,10 @@ class VisualBubbleSource:
             ):
                 return SourceResult.unavailable("window_identity_mismatch")
             if (
-                not baseline.session_anchor
-                or not current.session_anchor
-                or baseline.session_anchor != current.session_anchor
+                not session_anchors_match(
+                    baseline.session_anchor,
+                    current.session_anchor,
+                )
             ):
                 return SourceResult.unavailable("session_anchor_mismatch")
 

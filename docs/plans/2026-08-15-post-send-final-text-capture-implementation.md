@@ -514,7 +514,7 @@ git add README.md docs/plans/2026-08-15-post-send-final-text-capture-design.md d
 git commit -m "docs: describe post-send final text capture"
 ```
 
-**Implementation note:** Tasks 1–8 were completed in the isolated feature worktree with strict local TDD and batch review. The final implementation requires non-empty validation for every Visual success, binds AX/Visual results to PID + window + session anchors, uses bounded structured identity deduplication, waits only on the non-EventTap worker for a pending baseline, and has removed the Kim/微信 pre-submit freeze/replay/fixed-ROI production path. Task 10 remains gated on automated verification, independent review and real Kim/微信 smoke tests; no merge, push or deployment is authorized before all three pass.
+**Implementation note:** Tasks 1–8 were completed in the isolated feature worktree with strict local TDD and batch review. The final implementation requires non-empty validation for every Visual success, binds AX/Visual results to PID + window + a brightness-tolerant title-region perceptual session anchor, uses bounded structured identity deduplication, waits only on the non-EventTap worker for a pending baseline, and has removed the Kim/微信 pre-submit freeze/replay/fixed-ROI production path. Vision is warmed only with a synthetic in-memory image. Cmd-V validation prefers the one-time composer AX snapshot and otherwise stores only pasteboard changeCount metadata; clipboard text is read transiently after the Enter secure gate and only for an unchanged, standalone paste. Task 10 remains gated on automated verification, independent review and real Kim/微信 smoke tests; no merge, push or deployment is authorized before all three pass.
 
 ### Task 10: Run real acceptance, then integrate and deploy
 

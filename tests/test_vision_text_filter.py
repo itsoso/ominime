@@ -1,4 +1,64 @@
-from ominime.kim_composer_capture import RecognizedLine, recognized_content_lines
+import sys
+from types import SimpleNamespace
+
+from ominime import kim_composer_capture
+from ominime.kim_composer_capture import RecognizedLine, VisionTextRecognizer, recognized_content_lines
+
+
+def test_vision_prepare_warms_with_only_a_synthetic_memory_image(monkeypatch):
+    handled_images = []
+
+    class FakeRequest:
+        @classmethod
+        def alloc(cls):
+            return cls()
+
+        def init(self):
+            return self
+
+        def setRecognitionLevel_(self, level):
+            pass
+
+        def setRecognitionLanguages_(self, languages):
+            pass
+
+        def setUsesLanguageCorrection_(self, enabled):
+            pass
+
+        def setRegionOfInterest_(self, bounds):
+            pass
+
+        def results(self):
+            return ()
+
+    class FakeHandler:
+        @classmethod
+        def alloc(cls):
+            return cls()
+
+        def initWithCGImage_options_(self, image, options):
+            handled_images.append(image)
+            return self
+
+        def performRequests_error_(self, requests, error):
+            return True
+
+    fake_quartz = SimpleNamespace(
+        kCGImageAlphaPremultipliedLast=1,
+        CGColorSpaceCreateDeviceRGB=lambda: "rgb",
+        CGBitmapContextCreate=lambda *args: "memory-context",
+        CGBitmapContextCreateImage=lambda context: "synthetic-memory-image",
+        CGRectMake=lambda *values: values,
+    )
+    monkeypatch.setattr(
+        kim_composer_capture,
+        "_vision_classes",
+        lambda: (FakeRequest, FakeHandler),
+    )
+    monkeypatch.setitem(sys.modules, "Quartz", fake_quartz)
+
+    assert VisionTextRecognizer().prepare()
+    assert handled_images == ["synthetic-memory-image"]
 
 
 def test_recognized_content_lines_removes_tiled_slanted_watermark_variants():

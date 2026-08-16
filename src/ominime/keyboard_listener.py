@@ -74,7 +74,7 @@ from .ime_candidate_capture import (
 )
 from .kim_composer_capture import LEGACY_KIM_BUNDLE_ID
 from .wechat_composer_capture import WECHAT_BUNDLE_ID
-from .chat_window_capture import ChatWindowBaselineSampler
+from .chat_window_capture import ChatWindowBaselineSampler, session_anchors_match
 from .post_send_capture import (
     CaptureOutcome,
     PostSendCaptureCoordinator,
@@ -246,6 +246,7 @@ MAX_FALLBACK_BUFFER_CHARS = 4000
 MAX_TEXT_FALLBACK_BUFFER_CHARS = 2000
 MAX_KEY_EVENT_TEXT_CHARS = 64
 MAX_RECENT_TEXT_SNAPSHOT_AGE_SECONDS = 60
+MAX_POST_SEND_PASTE_VALIDATION_AGE_SECONDS = 5.0
 TEXT_FALLBACK_EVENT_DEDUP_SECONDS = 0.2
 MAX_TRUSTED_SUBMISSION_CHARS = 4000
 DOUBAO_CANDIDATE_TIMEOUT_SECONDS = 5.0
@@ -295,7 +296,7 @@ BROWSER_BUNDLE_HINTS = (
     "vivaldi",
 )
 POST_SEND_CHAT_BUNDLE_IDS = frozenset({LEGACY_KIM_BUNDLE_ID, WECHAT_BUNDLE_ID})
-POST_SEND_BASELINE_WAIT_SECONDS = 0.15
+POST_SEND_BASELINE_WAIT_SECONDS = 0.5
 
 
 def _clean_key_event_text(text: str) -> str:
@@ -707,6 +708,12 @@ class KeyboardListener:
         self._recent_text_snapshots: dict[
             tuple[str, str], tuple[str, float, str | None]
         ] = {}
+        self._recent_paste_validations: dict[
+            tuple[str, str], tuple[int, float]
+        ] = {}
+        self._pending_post_send_paste_keys: set[tuple[str, str]] = set()
+        self._post_send_paste_snapshot_keys: set[tuple[str, str]] = set()
+        self._tainted_post_send_validation_keys: set[tuple[str, str]] = set()
         self._active_field_ids: dict[tuple[str, str], str | None] = {}
         self._text_fallback_field_ids: dict[tuple[str, str], str | None] = {}
         self._fallback_field_ids: dict[tuple[str, str], str | None] = {}
@@ -722,6 +729,7 @@ class KeyboardListener:
         self._post_send_pending: dict[str, PendingPostSendSubmission] = {}
         self._post_send_pending_lock = threading.Lock()
         self._target_app_identities: dict[int, tuple[str, str]] = {}
+        self._last_warmed_post_send_target: tuple[str, str, int] | None = None
         self._doubao_states: dict[tuple[str, str], DoubaoCompositionState] = {}
         self._doubao_failure_reasons: dict[tuple[str, str], str] = {}
         self._doubao_arrow_read_attempts: set[tuple[str, str]] = set()
@@ -762,8 +770,17 @@ class KeyboardListener:
         """Resolve composer window metadata outside the EventTap callback."""
         if target_pid <= 0:
             return
+        warmed_target = (
+            (app_name, bundle_id, target_pid)
+            if bundle_id in POST_SEND_CHAT_BUNDLE_IDS
+            else None
+        )
+        previous_warmed_target = self._last_warmed_post_send_target
+        self._last_warmed_post_send_target = warmed_target
         if bundle_id in POST_SEND_CHAT_BUNDLE_IDS:
             self._target_app_identities[target_pid] = (app_name, bundle_id)
+            if warmed_target != previous_warmed_target:
+                self._schedule_post_send_baseline(app_name, bundle_id, target_pid)
 
     def _on_rime_input(
         self, text: str, timestamp: datetime, app_name: str, bundle_id: str
@@ -1167,6 +1184,82 @@ class KeyboardListener:
         elif clear_on_empty:
             self._recent_text_snapshots.pop(key, None)
 
+    @staticmethod
+    def _read_post_send_paste_text() -> str:
+        try:
+            from AppKit import NSPasteboard, NSPasteboardTypeString
+
+            value = NSPasteboard.generalPasteboard().stringForType_(
+                NSPasteboardTypeString
+            )
+        except Exception:
+            return ""
+        return value if isinstance(value, str) else ""
+
+    @staticmethod
+    def _get_post_send_paste_change_count() -> int:
+        try:
+            from AppKit import NSPasteboard
+
+            return int(NSPasteboard.generalPasteboard().changeCount())
+        except Exception:
+            return -1
+
+    def _tracked_post_send_composer_is_empty(
+        self,
+        app_name: str,
+        bundle_id: str,
+    ) -> bool:
+        key = self._fallback_buffer_key(app_name, bundle_id)
+        return not (
+            self._recent_text_snapshots.get(key)
+            or self._recent_paste_validations.get(key)
+            or self._fallback_buffers.get(key)
+            or self._text_fallback_buffers.get(key)
+            or self._doubao_states.get(key)
+        )
+
+    def _record_post_send_paste_validation(
+        self,
+        app_name: str,
+        bundle_id: str,
+    ) -> None:
+        key = self._fallback_buffer_key(app_name, bundle_id)
+        if key not in self._pending_post_send_paste_keys:
+            self._recent_paste_validations.pop(key, None)
+            return
+        self._pending_post_send_paste_keys.discard(key)
+        change_count = self._get_post_send_paste_change_count()
+        if change_count < 0:
+            self._recent_paste_validations.pop(key, None)
+            return
+        self._recent_paste_validations[key] = (change_count, time.monotonic())
+
+    def _pop_post_send_paste_validation(
+        self,
+        app_name: str,
+        bundle_id: str,
+    ) -> str:
+        snapshot = self._recent_paste_validations.pop(
+            self._fallback_buffer_key(app_name, bundle_id),
+            None,
+        )
+        if snapshot is None:
+            return ""
+        change_count, updated_at = snapshot
+        if time.monotonic() - updated_at > MAX_POST_SEND_PASTE_VALIDATION_AGE_SECONDS:
+            return ""
+        if self._get_post_send_paste_change_count() != change_count:
+            return ""
+        content = normalize_submission_text(
+            self._read_post_send_paste_text(),
+            app_name=app_name,
+            bundle_id=bundle_id,
+        )
+        if len(content) > MAX_TRUSTED_SUBMISSION_CHARS:
+            return ""
+        return content
+
     def _pop_recent_text_snapshot_content(
         self,
         app_name: str,
@@ -1305,6 +1398,11 @@ class KeyboardListener:
         self._fallback_field_ids.pop(key, None)
 
     def _clear_submission_buffers(self, app_name: str, bundle_id: str):
+        key = self._fallback_buffer_key(app_name, bundle_id)
+        self._recent_paste_validations.pop(key, None)
+        self._pending_post_send_paste_keys.discard(key)
+        self._post_send_paste_snapshot_keys.discard(key)
+        self._tainted_post_send_validation_keys.discard(key)
         self._clear_recent_text_snapshot(app_name, bundle_id)
         self._clear_text_fallback_buffer(app_name, bundle_id)
         self._clear_fallback_buffer(app_name, bundle_id)
@@ -1477,33 +1575,47 @@ class KeyboardListener:
             )
             return
 
-        fallback_validation_text = self._peek_fallback_content(
-            app_name,
-            bundle_id,
-            current_field_id=current_field_id,
+        validation_key = self._fallback_buffer_key(app_name, bundle_id)
+        validation_tainted = validation_key in self._tainted_post_send_validation_keys
+        if validation_tainted:
+            self._clear_recent_text_snapshot(app_name, bundle_id)
+            self._recent_paste_validations.pop(validation_key, None)
+        fallback_validation_text = (
+            ""
+            if validation_tainted
+            else self._peek_fallback_content(
+                app_name,
+                bundle_id,
+                current_field_id=current_field_id,
+            )
         )
         physical_key_count = self._pop_fallback_count(
             app_name,
             bundle_id,
             current_field_id=current_field_id,
         )
-        validation_text = normalize_submission_text(
-            self._pop_recent_text_snapshot_content(
-                app_name,
-                bundle_id,
-                current_field_id=current_field_id,
-                allow_unscoped=True,
+        validation_text = (
+            ""
+            if validation_tainted
+            else normalize_submission_text(
+                self._pop_recent_text_snapshot_content(
+                    app_name,
+                    bundle_id,
+                    current_field_id=current_field_id,
+                    allow_unscoped=True,
+                )
+                or self._pop_post_send_paste_validation(app_name, bundle_id)
+                or self._pop_doubao_submission(app_name, bundle_id, target_pid)
+                or self._pop_text_fallback_content(
+                    app_name,
+                    bundle_id,
+                    current_field_id=current_field_id,
+                    allow_unscoped=True,
+                )
+                or fallback_validation_text,
+                app_name=app_name,
+                bundle_id=bundle_id,
             )
-            or self._pop_doubao_submission(app_name, bundle_id, target_pid)
-            or self._pop_text_fallback_content(
-                app_name,
-                bundle_id,
-                current_field_id=current_field_id,
-                allow_unscoped=True,
-            )
-            or fallback_validation_text,
-            app_name=app_name,
-            bundle_id=bundle_id,
         )
         baseline = (
             self._baseline_sampler.take_baseline(
@@ -1603,9 +1715,10 @@ class KeyboardListener:
             )
             return
         if (
-            not pending.session_anchor
-            or not outcome.session_anchor
-            or pending.session_anchor != outcome.session_anchor
+            not session_anchors_match(
+                pending.session_anchor,
+                outcome.session_anchor,
+            )
         ):
             self._emit_capture_diagnostic(
                 pending.app_name,
@@ -1948,11 +2061,21 @@ class KeyboardListener:
                 and not modifiers.get("ctrl")
                 and not modifiers.get("alt")
             ):
+                paste_is_standalone = self._tracked_post_send_composer_is_empty(
+                    app_name,
+                    bundle_id,
+                )
                 self._schedule_post_send_baseline(
                     app_name,
                     bundle_id,
                     application_pid,
                 )
+                self._clear_submission_buffers(app_name, bundle_id)
+                paste_key = self._fallback_buffer_key(app_name, bundle_id)
+                self._post_send_paste_snapshot_keys.add(paste_key)
+                if paste_is_standalone:
+                    self._pending_post_send_paste_keys.add(paste_key)
+                return
             self._clear_submission_buffers(app_name, bundle_id)
             return
 
@@ -1969,6 +2092,8 @@ class KeyboardListener:
                     bundle_id,
                     clear_on_empty=keycode in (51, 117),
                 )
+                if bundle_id in POST_SEND_CHAT_BUNDLE_IDS and keycode == 9:
+                    self._record_post_send_paste_validation(app_name, bundle_id)
             self._record_text_fallback_key(
                 app_name,
                 bundle_id,
@@ -1986,6 +2111,13 @@ class KeyboardListener:
                     modifiers,
                 )
         if event_type == kCGEventKeyDown and keycode != ENTER_KEYCODE:
+            if bundle_id in POST_SEND_CHAT_BUNDLE_IDS:
+                key = self._fallback_buffer_key(app_name, bundle_id)
+                if key in self._post_send_paste_snapshot_keys:
+                    self._tainted_post_send_validation_keys.add(key)
+                    self._clear_recent_text_snapshot(app_name, bundle_id)
+                self._recent_paste_validations.pop(key, None)
+                self._pending_post_send_paste_keys.discard(key)
             self._record_text_fallback_key(
                 app_name,
                 bundle_id,
@@ -2408,6 +2540,7 @@ class KeyboardListener:
             raise RuntimeError("previous keyboard event worker is still stopping")
         self._retry_count = 0
         self._ensure_post_send_services()
+        self._last_warmed_post_send_target = None
 
         # 首次前台应用快照与窗口预备完成后，才开放键盘事件入口。
         _start_app_watcher(self._prepare_activated_composer)
@@ -2460,6 +2593,10 @@ class KeyboardListener:
             self._baseline_sampler = None
         with self._post_send_pending_lock:
             self._post_send_pending.clear()
+        self._recent_paste_validations.clear()
+        self._pending_post_send_paste_keys.clear()
+        self._post_send_paste_snapshot_keys.clear()
+        self._tainted_post_send_validation_keys.clear()
         while True:
             try:
                 self._event_queue.get_nowait()

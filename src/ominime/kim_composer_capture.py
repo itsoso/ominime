@@ -1,11 +1,15 @@
 """Local pre-submit text recovery for the legacy Kim desktop client."""
 
 import re
+import logging
 import threading
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Iterable
+
+
+logger = logging.getLogger(__name__)
 
 
 LEGACY_KIM_BUNDLE_ID = "Kem"
@@ -96,6 +100,31 @@ class VisionTextRecognizer:
     def __init__(self):
         self._lock = threading.Lock()
         self._active_request = None
+
+    def prepare(self) -> bool:
+        """Warm local Vision with a synthetic in-memory image."""
+        try:
+            _vision_classes()
+            import Quartz
+
+            color_space = Quartz.CGColorSpaceCreateDeviceRGB()
+            context = Quartz.CGBitmapContextCreate(
+                None,
+                32,
+                32,
+                8,
+                32 * 4,
+                color_space,
+                Quartz.kCGImageAlphaPremultipliedLast,
+            )
+            image = Quartz.CGBitmapContextCreateImage(context)
+            if image is None:
+                raise RuntimeError("synthetic Vision warmup image unavailable")
+            tuple(self(image, NormalizedRect(0.0, 0.0, 1.0, 1.0)))
+        except Exception:
+            logger.error("local Vision preload failed: vision_preload_error")
+            return False
+        return True
 
     def __call__(
         self,

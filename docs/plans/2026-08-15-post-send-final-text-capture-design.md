@@ -157,7 +157,7 @@ worker 完成安全输入检查后创建不可变发送任务，字段包括：
 
 ## 已实现的信任边界
 
-实现采用发送前内存窗口帧与发送后当前帧的不可逆会话指纹，同时校验 PID、窗口 ID 和前台应用。Visual 来源只有在本地 validation 摘要存在且与完整候选精确一致时才允许成功；空摘要即使只有一个右侧 OCR 行也会失败，避免滚动产生的粗变化区域把旧消息误判为新增消息。Latin/数字来自本地按键缓冲，Shift/Option+Enter 保留换行，粘贴在 Cmd-V keyUp 后由事件 worker 读取一次当前 composer 值作为校验摘要。
+实现采用发送前内存窗口帧与发送后当前帧的不可逆标题区域感知指纹，同时校验 PID、窗口 ID 和前台应用。该指纹容忍激活态亮度与少量抗锯齿漂移，但不同真实会话必须超过严格汉明距离阈值并失败关闭。Visual 来源只有在本地 validation 摘要存在且与完整候选精确一致时才允许成功；空摘要即使只有一个右侧 OCR 行也会失败，避免滚动产生的粗变化区域把旧消息误判为新增消息。Latin/数字来自本地按键缓冲，Shift/Option+Enter 保留换行；粘贴在 Cmd-V keyUp 后由事件 worker 优先读取一次当前 composer AX 值，AX 不可用时只记录不含正文的 pasteboard changeCount。Enter 通过 secure 检查、确认剪贴板未变化且没有前后混合输入后才瞬时读取字符串作为 validation；其余情况一律失败关闭。
 
 基线采样、AX 与 Vision 均不在 EventTap callback 内执行。Enter worker 最多有界等待正在生成的基线，EventTap 始终直接返回原事件。图片只在 `WindowFrame` 与来源调用栈中短暂持有，发布或任务结束时显式转移/释放；诊断只包含命名失败码和非内容标识。
 

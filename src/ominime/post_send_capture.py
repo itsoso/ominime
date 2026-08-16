@@ -7,6 +7,7 @@ from datetime import datetime
 from collections import deque
 import logging
 import queue
+import re
 import threading
 import time
 from types import MappingProxyType
@@ -16,7 +17,7 @@ from typing import Callable, Mapping, Protocol, Sequence
 MAX_TRUSTED_SUBMISSION_CHARS = 4000
 DEFAULT_RETRY_DELAYS = (0.15, 0.35, 0.65, 1.0, 1.5, 2.0)
 TASK_EXPIRY_GRACE_SECONDS = 0.05
-DEFAULT_SOURCE_TIMEOUT_SECONDS = 0.2
+DEFAULT_SOURCE_TIMEOUT_SECONDS = 1.75
 RECENT_MESSAGE_IDENTITY_LIMIT = 256
 
 logger = logging.getLogger(__name__)
@@ -400,13 +401,13 @@ class PostSendCaptureCoordinator:
 
         for relative_delay in self._retry_delays:
             if self._clock() > deadline:
-                self._report_expired(intent)
+                self._report_expired(intent, last_result)
                 return
             remaining = intent.submitted_at + relative_delay - self._clock()
             if remaining > 0:
                 self._wait(remaining)
             if self._clock() > deadline:
-                self._report_expired(intent)
+                self._report_expired(intent, last_result)
                 return
 
             read_timeout = min(
@@ -414,11 +415,11 @@ class PostSendCaptureCoordinator:
                 max(0.0, deadline - self._clock()),
             )
             if read_timeout <= 0:
-                self._report_expired(intent)
+                self._report_expired(intent, last_result)
                 return
             last_result = self._source_reader.read(intent, read_timeout)
             if self._clock() > deadline:
-                self._report_expired(intent)
+                self._report_expired(intent, last_result)
                 return
             if last_result.failure_reason == "source_read_timeout":
                 self._safe_diagnostic(
@@ -465,11 +466,24 @@ class PostSendCaptureCoordinator:
             )
         )
 
-    def _report_expired(self, intent: SendIntent) -> None:
+    def _report_expired(
+        self,
+        intent: SendIntent,
+        last_result: SourceResult | None = None,
+    ) -> None:
+        named_failure = (
+            last_result.failure_reason
+            if last_result is not None
+            and last_result.failure_reason not in (None, "capture_timeout")
+            else None
+        )
+        if named_failure and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", named_failure) is None:
+            named_failure = "source_failure_unavailable"
         self._safe_diagnostic(
             CaptureOutcome(
                 intent_id=intent.intent_id,
                 failure_reason="capture_expired",
+                diagnostics=(named_failure,) if named_failure else (),
             )
         )
 

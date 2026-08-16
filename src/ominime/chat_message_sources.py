@@ -10,8 +10,12 @@ import time
 from typing import Callable, Iterable
 
 from .chat_bubble_capture import VisualBubbleSource
-from .chat_window_capture import WindowFrame
-from .kim_composer_capture import NormalizedRect, RecognizedLine
+from .chat_window_capture import WindowFrame, session_anchors_match
+from .kim_composer_capture import (
+    NormalizedRect,
+    RecognizedLine,
+    VisionTextRecognizer,
+)
 from .post_send_capture import (
     MAX_TRUSTED_SUBMISSION_CHARS,
     SendIntent,
@@ -50,7 +54,7 @@ class AccessibilityBubbleSource:
         self._clock = clock
         self._max_nodes = max_nodes
         self._traversal_timeout = traversal_timeout
-        self._native_provider = _NativeAXNodeProvider(clock=clock)
+        self._native_provider = _NativeAXNodeProvider(clock=clock, max_nodes=16)
         self._node_provider = node_provider or self._native_provider
         self._cancelled = threading.Event()
 
@@ -123,8 +127,10 @@ class AccessibilityBubbleSource:
         baseline = intent.baseline
         if (
             not isinstance(baseline, WindowFrame)
-            or not baseline.session_anchor
-            or node.session_anchor != baseline.session_anchor
+            or not session_anchors_match(
+                baseline.session_anchor,
+                node.session_anchor,
+            )
         ):
             return "ax_session_anchor_mismatch"
         if node.window_id != baseline.window_id:
@@ -153,7 +159,7 @@ class AccessibilityBubbleSource:
 
 
 class _NativeAXNodeProvider:
-    """Bounded local AX snapshotter; native nodes are never guessed as new."""
+    """Fail closed until native AX can supply complete trust evidence."""
 
     def __init__(self, *, clock: Callable[[], float], max_nodes: int = 128):
         self._clock = clock
@@ -165,51 +171,11 @@ class _NativeAXNodeProvider:
 
     def __call__(self, target_pid: int) -> tuple[AXMessageNode, ...]:
         self._cancelled.clear()
-        import ApplicationServices as AX
-
-        application = AX.AXUIElementCreateApplication(target_pid)
-        pending = deque([application])
-        snapshots: list[AXMessageNode] = []
-        visited = 0
-        while pending and visited < self._max_nodes:
-            if self._cancelled.is_set():
-                break
-            element = pending.popleft()
-            visited += 1
-            role = str(_ax_value(AX, element, "AXRole") or "")
-            text = str(
-                _ax_value(AX, element, "AXValue")
-                or _ax_value(AX, element, "AXTitle")
-                or ""
-            )
-            identity = str(_ax_value(AX, element, "AXIdentifier") or "")
-            children = tuple(_ax_value(AX, element, "AXChildren") or ())
-            pending.extend(children)
-            snapshots.append(
-                AXMessageNode(
-                    target_pid=target_pid,
-                    role=role,
-                    text=text,
-                    identity=identity,
-                    observed_at=self._clock(),
-                    newly_observed=False,
-                    bounds=NormalizedRect(0.0, 0.0, 0.0, 0.0),
-                    secure=role == "AXSecureTextField",
-                    session_anchor=None,
-                    window_id=None,
-                )
-            )
-        return tuple(snapshots)
-
-
-def _ax_value(ax_module, element, attribute):
-    result = ax_module.AXUIElementCopyAttributeValue(element, attribute, None)
-    if isinstance(result, tuple) and len(result) == 2:
-        error, value = result
-        if error != 0:
-            return None
-        return value
-    return result
+        # Generic macOS AX does not identify a message as newly observed, bind
+        # it to our window/session anchor, or expose trustworthy bubble bounds.
+        # Reading text without those signals cannot produce a success, so the
+        # default provider avoids traversing the private UI tree at all.
+        return ()
 
 
 def _normalized_text(text: str) -> str:
@@ -231,6 +197,10 @@ def default_message_sources(
     ]
     | None = None,
 ) -> tuple[AccessibilityBubbleSource, VisualBubbleSource]:
+    if ocr_provider is None:
+        native_ocr = VisionTextRecognizer()
+        native_ocr.prepare()
+        ocr_provider = native_ocr
     return (
         AccessibilityBubbleSource(node_provider=ax_node_provider),
         VisualBubbleSource(

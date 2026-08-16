@@ -3,11 +3,55 @@ import threading
 import time
 import weakref
 
+from ominime import chat_window_capture
 from ominime.chat_window_capture import (
     ChatWindowBaselineSampler,
     WindowFrame,
     WindowInfo,
 )
+
+
+def test_session_anchor_matching_tolerates_small_perceptual_drift_only():
+    baseline = "v1:" + "0" * 64
+    nearby = "v1:" + "0" * 62 + "03"
+    different = "v1:" + "f" * 64
+
+    assert chat_window_capture.session_anchors_match(baseline, nearby)
+    assert not chat_window_capture.session_anchors_match(baseline, different)
+    assert chat_window_capture.session_anchors_match("legacy-a", "legacy-a")
+    assert not chat_window_capture.session_anchors_match("legacy-a", "legacy-b")
+    assert not chat_window_capture.session_anchors_match("v1:0", "v1:0")
+
+
+def test_perceptual_session_anchor_ignores_uniform_brightness_shift():
+    width = 100
+    height = 100
+    row_bytes = width * 4
+
+    def image_bytes(offset, *, invert=False):
+        pixels = bytearray(row_bytes * height)
+        for y in range(height):
+            for x in range(width):
+                value = 40 + offset
+                if 34 <= x < 68 and 4 <= y < 10:
+                    stripe = ((x - 34) // 3) % 2 == 0
+                    value = (190 if stripe ^ invert else 70) + offset
+                start = y * row_bytes + x * 4
+                pixels[start : start + 4] = bytes((value, value, value, 255))
+        return bytes(pixels)
+
+    baseline = chat_window_capture._perceptual_session_anchor(
+        image_bytes(0), width, height, row_bytes, 4
+    )
+    brighter = chat_window_capture._perceptual_session_anchor(
+        image_bytes(20), width, height, row_bytes, 4
+    )
+    other_title = chat_window_capture._perceptual_session_anchor(
+        image_bytes(0, invert=True), width, height, row_bytes, 4
+    )
+
+    assert chat_window_capture.session_anchors_match(baseline, brighter)
+    assert not chat_window_capture.session_anchors_match(baseline, other_title)
 
 
 def _wait_until(predicate, timeout=1.0):

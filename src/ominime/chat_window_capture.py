@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import hashlib
 import logging
 import queue
 import threading
@@ -16,6 +15,70 @@ MIN_CHAT_WINDOW_HEIGHT = 200
 BASELINE_MIN_INTERVAL_SECONDS = 0.25
 
 logger = logging.getLogger(__name__)
+
+SESSION_ANCHOR_PREFIX = "v1:"
+SESSION_ANCHOR_MAX_HAMMING_DISTANCE = 12
+
+
+def session_anchors_match(first: str | None, second: str | None) -> bool:
+    if not first or not second:
+        return False
+    if not (
+        first.startswith(SESSION_ANCHOR_PREFIX)
+        and second.startswith(SESSION_ANCHOR_PREFIX)
+    ):
+        return first == second
+    expected_length = len(SESSION_ANCHOR_PREFIX) + 64
+    if len(first) != expected_length or len(second) != expected_length:
+        return False
+    try:
+        left = int(first[len(SESSION_ANCHOR_PREFIX) :], 16)
+        right = int(second[len(SESSION_ANCHOR_PREFIX) :], 16)
+    except ValueError:
+        return False
+    return (left ^ right).bit_count() <= SESSION_ANCHOR_MAX_HAMMING_DISTANCE
+
+
+def _perceptual_session_anchor(
+    data: bytes,
+    width: int,
+    height: int,
+    row_bytes: int,
+    pixel_bytes: int,
+) -> str:
+    """Hash title-region edge directions, ignoring uniform color shifts."""
+    x0 = int(width * 0.34)
+    x1 = max(x0 + 2, int(width * 0.68))
+    y0 = int(height * 0.04)
+    y1 = max(y0 + 1, int(height * 0.10))
+    columns = 33
+    rows = 8
+
+    def gray(x: int, y: int) -> int:
+        offset = y * row_bytes + x * pixel_bytes
+        pixel = data[offset : offset + min(3, pixel_bytes)]
+        return sum(pixel) // max(1, len(pixel))
+
+    samples: list[list[int]] = []
+    for row in range(rows):
+        y = min(height - 1, y0 + ((y1 - y0 - 1) * row // max(1, rows - 1)))
+        samples.append(
+            [
+                gray(
+                    min(
+                        width - 1,
+                        x0 + ((x1 - x0 - 1) * column // (columns - 1)),
+                    ),
+                    y,
+                )
+                for column in range(columns)
+            ]
+        )
+    signature = 0
+    for row in samples:
+        for left, right in zip(row, row[1:]):
+            signature = (signature << 1) | int(left > right)
+    return f"{SESSION_ANCHOR_PREFIX}{signature:064x}"
 
 
 @dataclass(frozen=True)
@@ -337,15 +400,10 @@ class ChatWindowBaselineSampler:
         )
         row_bytes = int(Quartz.CGImageGetBytesPerRow(image))
         pixel_bytes = max(1, int(Quartz.CGImageGetBitsPerPixel(image)) // 8)
-        x0 = int(width * 0.32)
-        x1 = max(x0 + 1, int(width * 0.94))
-        y1 = max(1, int(height * 0.12))
-        x_step = max(1, (x1 - x0) // 48)
-        y_step = max(1, y1 // 12)
-        digest = hashlib.sha256()
-        for y in range(0, y1, y_step):
-            for x in range(x0, x1, x_step):
-                offset = y * row_bytes + x * pixel_bytes
-                pixel = data[offset : offset + min(3, pixel_bytes)]
-                digest.update(bytes(channel & 0xF0 for channel in pixel))
-        return digest.hexdigest()[:24]
+        return _perceptual_session_anchor(
+            data,
+            width,
+            height,
+            row_bytes,
+            pixel_bytes,
+        )

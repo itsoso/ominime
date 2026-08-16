@@ -298,6 +298,155 @@ def test_coordinator_structured_result_completes_immediately(intent):
     assert clock.waits == pytest.approx([0.15])
 
 
+def test_coordinator_default_timeout_allows_cold_local_source():
+    completed = []
+    diagnostics = []
+
+    class ColdLocalSource:
+        def read(self, intent):
+            time.sleep(0.3)
+            return SourceResult.success(
+                "cold-success",
+                "kim_postsend_ax",
+                "cold-node-1",
+                target_pid=intent.target_pid,
+                observed_at=time.monotonic(),
+            )
+
+    submitted_at = time.monotonic()
+    cold_intent = SendIntent(
+        intent_id="cold-local-source",
+        submitted_at=submitted_at,
+        timestamp=datetime(2026, 8, 15, 12, 0),
+        app_name="Kim",
+        bundle_id="Kem",
+        target_pid=123,
+        modifiers={},
+        physical_key_count=1,
+        validation_text="cold-success",
+        baseline=None,
+    )
+    coordinator = PostSendCaptureCoordinator(
+        MessageSourceChain([ColdLocalSource()]),
+        on_success=completed.append,
+        on_diagnostic=diagnostics.append,
+    )
+
+    try:
+        assert coordinator.submit(cold_intent)
+        _wait_until(lambda: completed or diagnostics, timeout=1.0)
+    finally:
+        coordinator.stop()
+
+    assert [outcome.content for outcome in completed] == ["cold-success"]
+    assert diagnostics == []
+
+
+def test_coordinator_default_timeout_allows_measured_local_vision_budget():
+    completed = []
+    diagnostics = []
+
+    class MeasuredLocalVisionSource:
+        def read(self, intent):
+            time.sleep(1.4)
+            return SourceResult.success(
+                "measured-success",
+                "kim_postsend_ax",
+                "measured-node-1",
+                target_pid=intent.target_pid,
+                observed_at=time.monotonic(),
+            )
+
+    measured_intent = SendIntent(
+        intent_id="measured-local-vision",
+        submitted_at=time.monotonic(),
+        timestamp=datetime(2026, 8, 15, 12, 0),
+        app_name="Kim",
+        bundle_id="Kem",
+        target_pid=123,
+        modifiers={},
+        physical_key_count=1,
+        validation_text="measured-success",
+        baseline=None,
+    )
+    coordinator = PostSendCaptureCoordinator(
+        MessageSourceChain([MeasuredLocalVisionSource()]),
+        on_success=completed.append,
+        on_diagnostic=diagnostics.append,
+    )
+
+    try:
+        assert coordinator.submit(measured_intent)
+        _wait_until(lambda: completed or diagnostics, timeout=2.0)
+    finally:
+        coordinator.stop()
+
+    assert [outcome.content for outcome in completed] == ["measured-success"]
+    assert diagnostics == []
+
+
+def test_coordinator_cold_ocr_stability_fits_after_baseline_wait():
+    completed = []
+    diagnostics = []
+
+    class BoundedAXProbe:
+        def __init__(self):
+            self.calls = 0
+
+        def read(self, intent):
+            self.calls += 1
+            time.sleep(0.1)
+            return SourceResult.unavailable("ax_tree_unavailable")
+
+    class ColdThenWarmOCR:
+        def __init__(self):
+            self.calls = 0
+
+        def read(self, intent):
+            self.calls += 1
+            time.sleep(0.85 if self.calls == 1 else 0.15)
+            return SourceResult.success(
+                "stable-ocr",
+                "kim_postsend_ocr",
+                f"ocr-observation-{self.calls}",
+                target_pid=intent.target_pid,
+                observed_at=time.monotonic(),
+                stability_key="stable-bounds",
+            )
+
+    ax_source = BoundedAXProbe()
+    ocr_source = ColdThenWarmOCR()
+    submitted_at = time.monotonic() - 0.5
+    cold_intent = SendIntent(
+        intent_id="cold-stable-ocr",
+        submitted_at=submitted_at,
+        timestamp=datetime(2026, 8, 15, 12, 0),
+        app_name="Kim",
+        bundle_id="Kem",
+        target_pid=123,
+        modifiers={},
+        physical_key_count=1,
+        validation_text="stable-ocr",
+        baseline=None,
+    )
+    coordinator = PostSendCaptureCoordinator(
+        MessageSourceChain([ax_source, ocr_source]),
+        on_success=completed.append,
+        on_diagnostic=diagnostics.append,
+    )
+
+    try:
+        assert coordinator.submit(cold_intent)
+        _wait_until(lambda: completed or diagnostics, timeout=2.0)
+    finally:
+        coordinator.stop()
+
+    assert [outcome.content for outcome in completed] == ["stable-ocr"]
+    assert diagnostics == []
+    assert ax_source.calls == 2
+    assert ocr_source.calls == 2
+
+
 def test_coordinator_deduplicates_same_structured_message_identity(intent):
     clock = FakeClock()
     completed = []
@@ -595,6 +744,60 @@ def test_coordinator_rejects_result_that_finishes_after_deadline(intent):
         coordinator.stop()
 
     assert diagnostics[0].failure_reason == "capture_expired"
+
+
+def test_expiry_reports_only_the_last_named_source_failure(intent):
+    clock = FakeClock(11.9)
+    diagnostics = []
+
+    class SlowFailureSource:
+        def read(self, current):
+            clock.value = 12.1
+            return SourceResult.unavailable("ocr_validation_mismatch")
+
+    coordinator = PostSendCaptureCoordinator(
+        MessageSourceChain([SlowFailureSource()]),
+        on_success=lambda outcome: None,
+        on_diagnostic=diagnostics.append,
+        clock=clock,
+        wait=clock.wait,
+    )
+
+    try:
+        assert coordinator.submit(intent)
+        _wait_until(lambda: len(diagnostics) == 1)
+    finally:
+        coordinator.stop()
+
+    assert diagnostics[0].failure_reason == "capture_expired"
+    assert diagnostics[0].diagnostics == ("ocr_validation_mismatch",)
+
+
+def test_expiry_never_persists_unnamed_source_failure_text(intent):
+    clock = FakeClock(11.9)
+    diagnostics = []
+
+    class UnsafeFailureSource:
+        def read(self, current):
+            clock.value = 12.1
+            return SourceResult.unavailable("private pasted message")
+
+    coordinator = PostSendCaptureCoordinator(
+        MessageSourceChain([UnsafeFailureSource()]),
+        on_success=lambda outcome: None,
+        on_diagnostic=diagnostics.append,
+        clock=clock,
+        wait=clock.wait,
+    )
+
+    try:
+        assert coordinator.submit(intent)
+        _wait_until(lambda: len(diagnostics) == 1)
+    finally:
+        coordinator.stop()
+
+    assert diagnostics[0].diagnostics == ("source_failure_unavailable",)
+    assert "private pasted message" not in repr(diagnostics[0])
 
 
 def test_coordinator_preserves_submit_order_for_one_pid(intent):

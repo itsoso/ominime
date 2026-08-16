@@ -1,8 +1,11 @@
 from datetime import datetime
+import sys
 import threading
+from types import SimpleNamespace
 
 import pytest
 
+from ominime import chat_message_sources
 from ominime.chat_bubble_capture import VisualBubbleSource
 from ominime.chat_message_sources import (
     AXMessageNode,
@@ -180,6 +183,50 @@ def test_default_sources_are_ax_then_vision_without_network_probe(monkeypatch):
     assert isinstance(sources[0], AccessibilityBubbleSource)
     assert isinstance(sources[1], VisualBubbleSource)
     assert network_calls == []
+
+
+def test_default_sources_preload_vision_without_reading_an_image(monkeypatch):
+    prepared = []
+    image_reads = []
+
+    class FakeNativeRecognizer:
+        def prepare(self):
+            prepared.append(True)
+
+        def __call__(self, image, bounds):
+            image_reads.append(image)
+            return ()
+
+    monkeypatch.setattr(
+        chat_message_sources,
+        "VisionTextRecognizer",
+        FakeNativeRecognizer,
+        raising=False,
+    )
+
+    sources = default_message_sources(
+        frame_provider=lambda pid: None,
+        difference_provider=lambda before, after, bounds: (),
+    )
+
+    assert prepared == [True]
+    assert image_reads == []
+    assert isinstance(sources[1], VisualBubbleSource)
+
+
+def test_default_native_ax_probe_fails_closed_without_reading_tree(monkeypatch):
+    ax_reads = []
+    fake_ax = SimpleNamespace(
+        AXUIElementCreateApplication=lambda pid: ax_reads.append(("app", pid)),
+        AXUIElementCopyAttributeValue=lambda *args: ax_reads.append(("value", args)),
+    )
+    monkeypatch.setitem(sys.modules, "ApplicationServices", fake_ax)
+    source = AccessibilityBubbleSource()
+
+    snapshots = source._native_provider(123)
+
+    assert snapshots == ()
+    assert ax_reads == []
 
 
 def test_default_chain_prefers_ax_before_visual_fallback():
