@@ -388,6 +388,215 @@ def test_sampler_does_not_transfer_stale_same_pid_frame_during_refresh():
         sampler.stop()
 
 
+def test_sampler_keeps_previous_same_window_frame_until_refresh_finishes():
+    clock = MutableClock()
+    capture_started = threading.Event()
+    release_capture = threading.Event()
+    image_number = [0]
+
+    def image_provider(selected):
+        image_number[0] += 1
+        if image_number[0] == 2:
+            capture_started.set()
+            release_capture.wait(1)
+        return f"image-{image_number[0]}"
+
+    sampler = ChatWindowBaselineSampler(
+        window_provider=lambda: (WindowInfo(4, 123, 0, 900, 700),),
+        image_provider=image_provider,
+        clock=clock,
+    )
+
+    try:
+        assert sampler.schedule(123)
+        _wait_until(lambda: sampler.has_baseline)
+        clock.value = 0.3
+        assert sampler.schedule(123)
+        assert capture_started.wait(1)
+
+        frame = sampler.take_baseline(123)
+        assert frame is not None
+        assert frame.image == "image-1"
+        frame.release()
+    finally:
+        release_capture.set()
+        sampler.stop()
+
+
+def test_sampler_waits_for_new_pid_frame_instead_of_returning_old_frame():
+    clock = MutableClock()
+    capture_started = threading.Event()
+    release_capture = threading.Event()
+    active_pid = [123]
+
+    def image_provider(selected):
+        if active_pid[0] == 456:
+            capture_started.set()
+            release_capture.wait(1)
+        return f"image-{active_pid[0]}"
+
+    sampler = ChatWindowBaselineSampler(
+        window_provider=lambda: (
+            WindowInfo(4 if active_pid[0] == 123 else 8, active_pid[0], 0, 900, 700),
+        ),
+        image_provider=image_provider,
+        clock=clock,
+    )
+
+    try:
+        assert sampler.schedule(123)
+        _wait_until(lambda: sampler.has_baseline)
+        active_pid[0] = 456
+        clock.value = 0.3
+        assert sampler.schedule(456)
+        assert capture_started.wait(1)
+
+        result = []
+        taker = threading.Thread(
+            target=lambda: result.append(
+                sampler.take_baseline(456, wait_timeout=0.2)
+            )
+        )
+        taker.start()
+        time.sleep(0.02)
+        assert result == []
+        release_capture.set()
+        taker.join(timeout=1)
+        assert result[0].image == "image-456"
+    finally:
+        release_capture.set()
+        sampler.stop()
+
+
+def test_sampler_does_not_transfer_old_pid_frame_during_refresh():
+    clock = MutableClock()
+    capture_started = threading.Event()
+    release_capture = threading.Event()
+    active_pid = [123]
+
+    def image_provider(selected):
+        if active_pid[0] == 456:
+            capture_started.set()
+            release_capture.wait(1)
+        return f"image-{active_pid[0]}"
+
+    sampler = ChatWindowBaselineSampler(
+        window_provider=lambda: (
+            WindowInfo(4 if active_pid[0] == 123 else 8, active_pid[0], 0, 900, 700),
+        ),
+        image_provider=image_provider,
+        clock=clock,
+    )
+
+    try:
+        assert sampler.schedule(123)
+        _wait_until(lambda: sampler.has_baseline)
+        active_pid[0] = 456
+        clock.value = 0.3
+        assert sampler.schedule(456)
+        assert capture_started.wait(1)
+        assert sampler.take_baseline(123) is None
+        release_capture.set()
+    finally:
+        release_capture.set()
+        sampler.stop()
+
+
+def test_sampler_rechecks_target_before_transferring_frame_after_window_lookup():
+    clock = MutableClock()
+    lookup_started = threading.Event()
+    release_lookup = threading.Event()
+    capture_started = threading.Event()
+    release_capture = threading.Event()
+    active_pid = [123]
+    lookup_count = [0]
+
+    def window_provider():
+        lookup_count[0] += 1
+        if lookup_count[0] == 2:
+            lookup_started.set()
+            release_lookup.wait(1)
+        return (
+            WindowInfo(4, 123, 0, 900, 700),
+            WindowInfo(8, 456, 0, 900, 700),
+        )
+
+    def image_provider(selected):
+        if selected == 8:
+            capture_started.set()
+            release_capture.wait(1)
+        return f"image-{selected}"
+
+    sampler = ChatWindowBaselineSampler(
+        window_provider=window_provider,
+        image_provider=image_provider,
+        clock=clock,
+    )
+
+    try:
+        assert sampler.schedule(123)
+        _wait_until(lambda: sampler.has_baseline)
+        result = []
+        taker = threading.Thread(
+            target=lambda: result.append(sampler.take_baseline(123))
+        )
+        taker.start()
+        assert lookup_started.wait(1)
+        active_pid[0] = 456
+        clock.value = 0.3
+        assert sampler.schedule(456)
+        assert capture_started.wait(1)
+        release_lookup.set()
+        taker.join(timeout=1)
+        assert result == [None]
+    finally:
+        release_lookup.set()
+        release_capture.set()
+        sampler.stop()
+
+
+def test_sampler_waits_for_same_pid_window_refresh_before_transfer():
+    clock = MutableClock()
+    capture_started = threading.Event()
+    release_capture = threading.Event()
+    window_id = [4]
+
+    def image_provider(selected):
+        if selected == 8:
+            capture_started.set()
+            release_capture.wait(1)
+        return f"image-{selected}"
+
+    sampler = ChatWindowBaselineSampler(
+        window_provider=lambda: (WindowInfo(window_id[0], 123, 0, 900, 700),),
+        image_provider=image_provider,
+        clock=clock,
+    )
+
+    try:
+        assert sampler.schedule(123)
+        _wait_until(lambda: sampler.has_baseline)
+        window_id[0] = 8
+        clock.value = 0.3
+        assert sampler.schedule(123)
+        assert capture_started.wait(1)
+        result = []
+        taker = threading.Thread(
+            target=lambda: result.append(
+                sampler.take_baseline(123, wait_timeout=0.2)
+            )
+        )
+        taker.start()
+        time.sleep(0.02)
+        assert result == []
+        release_capture.set()
+        taker.join(timeout=1)
+        assert result[0].image == "image-8"
+    finally:
+        release_capture.set()
+        sampler.stop()
+
+
 def test_sampler_take_rejects_throttled_same_pid_window_switch():
     clock = MutableClock()
     window_id = [4]

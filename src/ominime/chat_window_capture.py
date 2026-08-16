@@ -176,8 +176,6 @@ class ChatWindowBaselineSampler:
                 return False
             self._generation += 1
             request = _CaptureRequest(target_pid, self._generation)
-            self._release_frame(self._baseline)
-            self._baseline = None
             self._last_scheduled_pid = target_pid
             self._last_scheduled_at = now
             if self._pending:
@@ -194,32 +192,53 @@ class ChatWindowBaselineSampler:
         self, target_pid: int, *, wait_timeout: float = 0.0
     ) -> WindowFrame | None:
         deadline = time.monotonic() + max(0.0, wait_timeout)
-        with self._condition:
-            while self._baseline is None and self._pending:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                self._condition.wait(remaining)
-            baseline = self._baseline
-            if baseline is None or baseline.target_pid != target_pid:
-                return None
-        try:
-            current_window = self._select_window(target_pid)
-        except Exception:
-            logger.error("chat window validation failed")
-            current_window = None
-        with self._lock:
-            if (
-                self._baseline is not baseline
-                or current_window is None
-                or baseline.window_id != current_window.window_id
-            ):
-                if self._baseline is baseline:
+        while True:
+            with self._condition:
+                baseline = self._baseline
+                pending = self._pending
+                scheduled_pid = self._last_scheduled_pid
+                if baseline is None:
+                    if not pending:
+                        return None
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        return None
+                    self._condition.wait(remaining)
+                    continue
+                if baseline.target_pid != target_pid:
+                    if pending and scheduled_pid == target_pid:
+                        remaining = deadline - time.monotonic()
+                        if remaining > 0:
+                            self._condition.wait(remaining)
+                            continue
+                    return None
+
+            try:
+                current_window = self._select_window(target_pid)
+            except Exception:
+                logger.error("chat window validation failed")
+                current_window = None
+            with self._condition:
+                if self._baseline is not baseline:
+                    continue
+                if self._pending and self._last_scheduled_pid != target_pid:
                     self._release_frame(baseline)
                     self._baseline = None
-                return None
-            self._baseline = None
-            return baseline
+                    return None
+                if (
+                    current_window is None
+                    or baseline.window_id != current_window.window_id
+                ):
+                    if self._pending and scheduled_pid == target_pid:
+                        remaining = deadline - time.monotonic()
+                        if remaining > 0:
+                            self._condition.wait(remaining)
+                            continue
+                    self._release_frame(baseline)
+                    self._baseline = None
+                    return None
+                self._baseline = None
+                return baseline
 
     def capture_current_frame(self, target_pid: int) -> WindowFrame | None:
         """Synchronously capture a current frame from a non-EventTap worker."""
@@ -267,6 +286,7 @@ class ChatWindowBaselineSampler:
                             next_request = None
                         if next_request is None:
                             if self._accepting:
+                                self._release_frame(self._baseline)
                                 self._baseline = frame
                                 frame_available = frame is not None
                             else:
