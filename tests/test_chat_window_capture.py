@@ -306,6 +306,7 @@ def test_sampler_drops_worker_reference_after_baseline_transfer():
     sampler = ChatWindowBaselineSampler(
         window_provider=lambda: (WindowInfo(4, 123, 0, 900, 700),),
         image_provider=lambda window_id: image,
+        anchor_provider=lambda current_image, width, height: None,
     )
 
     try:
