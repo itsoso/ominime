@@ -105,9 +105,12 @@ agent loop or modify DSH upstream code.
 
 ### 4.2 Runtime profile
 
-A local headless DSH profile runs continuously and performs synchronization
-without requiring the Web UI to be open. The Web profile exposes the same
-Personal Context service and GUI when the user opens DSH Web.
+A single local DSH Web profile runs continuously as a background launchd
+service, binds only to the loopback interface, and owns synchronization and the
+GUI. The browser does not need to be open for background jobs to run. DSH's
+shipped `headless` profile is a one-shot runner, so it is not used as a second
+polling daemon. This avoids duplicate schedulers and concurrent ownership of the
+same connector cursors.
 
 ## 5. Source connector contract
 
@@ -476,4 +479,3 @@ rejection of an incorrect chat association.
   reversible merges and evidence-preserving derivation are required.
 - Local semantic extraction may lag if a local model is unavailable. Raw
   ingestion and full-text retrieval must remain functional without it.
-
