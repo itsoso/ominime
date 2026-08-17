@@ -1,6 +1,14 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
@@ -135,6 +143,122 @@ describe('DSH bundle contract', () => {
   it('provides a real pinned ToolRuntime health-dispatch proof', async () => {
     const proof = await import('../scripts/health-dispatch-pinned.mjs')
     expect(proof.dispatchHealthPinned).toBeTypeOf('function')
+  })
+
+  it('collects every supported production TypeScript source with strict tree boundaries', async () => {
+    const { collectTypecheckFiles } = await import('../scripts/typecheck-pinned.mjs')
+    const temporaryRoot = mkdtempSync(resolve(tmpdir(), 'ominime-typecheck-collector-test-'))
+    const sourceRoot = join(temporaryRoot, 'src')
+    const clientRoot = join(sourceRoot, 'client')
+    const hostFiles = [
+      'src/host.ts',
+      'src/host.tsx',
+      'src/host.mts',
+      'src/host.cts',
+      'src/nested/future.mts',
+    ]
+    const clientFiles = [
+      'src/client/browser.ts',
+      'src/client/browser.tsx',
+      'src/client/browser.mts',
+      'src/client/browser.cts',
+      'src/client/nested/future.tsx',
+    ]
+    try {
+      for (const relativePath of [
+        ...hostFiles,
+        ...clientFiles,
+        'tests/ignored.ts',
+        'lib/ignored.tsx',
+      ]) {
+        const target = join(temporaryRoot, relativePath)
+        mkdirSync(dirname(target), { recursive: true })
+        writeFileSync(target, 'export {}\n')
+      }
+
+      const projects = collectTypecheckFiles(temporaryRoot)
+      const relativePaths = (files: readonly string[]) => files.map(file => relative(temporaryRoot, file))
+      expect(relativePaths(projects.host)).toEqual(hostFiles.sort())
+      expect(relativePaths(projects.client)).toEqual(clientFiles.sort())
+
+      const symlink = join(sourceRoot, 'linked.ts')
+      symlinkSync(join(sourceRoot, 'host.ts'), symlink)
+      expect(() => collectTypecheckFiles(temporaryRoot)).toThrow(/symbolic link/i)
+      rmSync(symlink)
+
+      const unsupportedHost = join(sourceRoot, 'future.mtsx')
+      writeFileSync(unsupportedHost, 'export {}\n')
+      expect(() => collectTypecheckFiles(temporaryRoot)).toThrow(/unsupported TypeScript-like extension/i)
+      rmSync(unsupportedHost)
+
+      const unsupportedClient = join(clientRoot, 'future.ctsx')
+      writeFileSync(unsupportedClient, 'export {}\n')
+      expect(() => collectTypecheckFiles(temporaryRoot)).toThrow(/unsupported TypeScript-like extension/i)
+    } finally {
+      rmSync(temporaryRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a symlinked source root without following it outside the project', async () => {
+    const { collectTypecheckFiles } = await import('../scripts/typecheck-pinned.mjs')
+    const temporaryRoot = mkdtempSync(resolve(tmpdir(), 'ominime-typecheck-root-test-'))
+    const projectRoot = join(temporaryRoot, 'project')
+    const outsideRoot = join(temporaryRoot, 'outside', 'tree')
+    try {
+      mkdirSync(projectRoot, { recursive: true })
+      mkdirSync(outsideRoot, { recursive: true })
+      writeFileSync(join(outsideRoot, 'escaped.ts'), 'export {}\n')
+      symlinkSync(outsideRoot, join(projectRoot, 'src'))
+
+      let error: unknown
+      try {
+        collectTypecheckFiles(projectRoot)
+      } catch (candidate) {
+        error = candidate
+      }
+      expect(error).toMatchObject({
+        name: 'TypecheckSourceTreeError',
+        code: 'TYPECHECK_SOURCE_TREE_INVALID',
+        metadata: { reason: 'ROOT_NOT_DIRECTORY' },
+      })
+      expect(String(error)).not.toContain(temporaryRoot)
+      expect(JSON.stringify(error)).not.toContain(temporaryRoot)
+    } finally {
+      rmSync(temporaryRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('uses fixed path-free diagnostics for a missing or non-directory source root', async () => {
+    const { collectTypecheckFiles } = await import('../scripts/typecheck-pinned.mjs')
+    const temporaryRoot = mkdtempSync(resolve(tmpdir(), 'ominime-typecheck-root-test-'))
+    const missingProject = join(temporaryRoot, 'missing-project')
+    const fileProject = join(temporaryRoot, 'file-project')
+    try {
+      mkdirSync(missingProject)
+      mkdirSync(fileProject)
+      writeFileSync(join(fileProject, 'src'), 'not a directory\n')
+
+      for (const [projectRoot, reason] of [
+        [missingProject, 'ROOT_MISSING'],
+        [fileProject, 'ROOT_NOT_DIRECTORY'],
+      ] as const) {
+        let error: unknown
+        try {
+          collectTypecheckFiles(projectRoot)
+        } catch (candidate) {
+          error = candidate
+        }
+        expect(error).toMatchObject({
+          name: 'TypecheckSourceTreeError',
+          code: 'TYPECHECK_SOURCE_TREE_INVALID',
+          metadata: { reason },
+        })
+        expect(String(error)).not.toContain(temporaryRoot)
+        expect(JSON.stringify(error)).not.toContain(temporaryRoot)
+      }
+    } finally {
+      rmSync(temporaryRoot, { recursive: true, force: true })
+    }
   })
 
   it('registers a health tool with the exact scaffold result', async () => {
