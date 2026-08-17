@@ -1,0 +1,3 @@
+- insert:
+    - id: personal-context
+      name: '@ominime/dsh-personal-context'
