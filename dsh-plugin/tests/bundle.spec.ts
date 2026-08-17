@@ -7,6 +7,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -24,7 +25,10 @@ describe('DSH bundle contract', () => {
     expect(manifest.scripts['typecheck:pinned']).toBe('node scripts/typecheck-pinned.mjs')
     expect(manifest.scripts['smoke:pinned']).toBe('node scripts/smoke-install.mjs')
     expect(manifest.scripts['check:node']).toBe('node scripts/check-node.mjs')
+    expect(manifest.scripts['probe:wechat']).toBe('node lib/probe-wechat.js')
     expect(manifest.scripts['test:g1']).toBe('pnpm run check:node && pnpm test && node scripts/g1-pinned.mjs')
+    expect(manifest.files).toContain('lib/probe-wechat.js')
+    expect(manifest.exports['./probe-wechat']).toBeUndefined()
     expect(manifest.packageManager).toBe('pnpm@11.7.0')
   })
 
@@ -37,6 +41,32 @@ describe('DSH bundle contract', () => {
   it('builds the Host and browser artifacts at the exported paths', () => {
     expect(existsSync(resolve(root, 'lib/index.js'))).toBe(true)
     expect(existsSync(resolve(root, 'lib/client.js'))).toBe(true)
+    expect(existsSync(resolve(root, 'lib/probe-wechat.js'))).toBe(true)
+  })
+
+  it('isolates the built probe artifact to the CLI entry point', async () => {
+    const artifact = resolve(root, 'lib/probe-wechat.js')
+    const exported = await import(`${pathToFileURL(artifact).href}?cli-isolation`)
+    expect(Object.keys(exported).sort()).toEqual(['runWechatProbeCli'])
+
+    const built = readFileSync(artifact, 'utf8')
+    expect(built).not.toMatch(/synthetic|testonly|snapshotprovider|withtestonly|discovertestonly/i)
+  })
+
+  it('runs the built redacted probe through an installed-package symlink', () => {
+    const temporaryRoot = mkdtempSync(resolve(tmpdir(), 'ominime-probe-link-test-'))
+    try {
+      const installedProbe = join(temporaryRoot, 'probe-wechat.js')
+      symlinkSync(resolve(root, 'lib/probe-wechat.js'), installedProbe)
+      const result = spawnSync(process.execPath, [installedProbe, '--redact'], {
+        encoding: 'utf8',
+        env: { ...process.env, HOME: temporaryRoot },
+      })
+      expect(result.status).toBe(2)
+      expect(JSON.parse(result.stdout).failureCodes).toEqual(['WECHAT_ATOMIC_OPEN_UNAVAILABLE'])
+    } finally {
+      rmSync(temporaryRoot, { recursive: true, force: true })
+    }
   })
 
   it('ignores generated dependency and build trees', () => {

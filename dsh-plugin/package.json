@@ -13,6 +13,7 @@
     "lib/index.js",
     "lib/client.js",
     "lib/client.js.map",
+    "lib/probe-wechat.js",
     "cordis.patch.yml",
     "DSH_COMPATIBILITY.md"
   ],
@@ -24,6 +25,7 @@
     "pretest": "pnpm run build",
     "test": "vitest run",
     "check:node": "node scripts/check-node.mjs",
+    "probe:wechat": "node lib/probe-wechat.js",
     "typecheck:pinned": "node scripts/typecheck-pinned.mjs",
     "smoke:pinned": "node scripts/smoke-install.mjs",
     "test:g1": "pnpm run check:node && pnpm test && node scripts/g1-pinned.mjs"

@@ -1,0 +1,18 @@
+{
+  "adapterVersion": "wechat-synthetic-fixture-v1",
+  "databaseRelativePath": "db_storage/message/message_0.db",
+  "tables": {
+    "accounts": ["self_participant_id"],
+    "participants": ["conversation_id", "participant_id"],
+    "messages": [
+      "conversation_id",
+      "message_id",
+      "final_text",
+      "direction",
+      "source_timestamp",
+      "source_order",
+      "change_sequence"
+    ]
+  },
+  "dataClassification": "invented-only"
+}

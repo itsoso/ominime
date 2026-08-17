@@ -118,7 +118,11 @@ export function typecheckPinned({
       {
         name: 'host',
         config: {
-          compilerOptions: shared,
+          compilerOptions: {
+            ...shared,
+            types: ['node'],
+            typeRoots: [join(pluginRoot, 'node_modules/@types')],
+          },
           files: files.host,
         },
       },

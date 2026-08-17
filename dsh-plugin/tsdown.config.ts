@@ -18,6 +18,17 @@ export default defineConfig([
     },
   },
   {
+    name: `${packageName}/probe-wechat`,
+    entry: { 'probe-wechat': 'src/connectors/wechat/cli.ts' },
+    outDir: 'lib',
+    format: 'esm',
+    platform: 'node',
+    target: 'es2024',
+    fixedExtension: false,
+    clean: false,
+    dts: false,
+  },
+  {
     name: `${packageName}/client`,
     entry: { client: 'src/client/index.tsx' },
     outDir: 'lib',
