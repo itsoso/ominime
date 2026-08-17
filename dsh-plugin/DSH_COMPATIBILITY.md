@@ -33,8 +33,36 @@ The unit behavior test calls the captured raw definition's `execute` function. T
 
 Therefore G1 is **PASS for the local pinned RC5 runtime**: fresh source-derived build, type compatibility, install, Host tool registration/behavior, client wiring, and GUI rendering have all been observed. All profiles and sessions used for this proof lived under temporary paths and were removed after the process stopped.
 
+## Source feasibility gate
+
+G2 is currently **BLOCKED** for both chat sources:
+
+- WeChat reports only `WECHAT_ATOMIC_OPEN_UNAVAILABLE`.
+- Kim reports only `KIM_ATOMIC_OPEN_UNAVAILABLE`.
+
+For both sources, every required live capability remains unproven and every
+field mapping remains unavailable. This does not establish that the underlying
+applications lack suitable business data. It establishes that the current
+adapters cannot safely evaluate or use the live stores without an atomic
+directory-descriptor/`openat` path helper or a source-owned read-only structured
+interface.
+
+Both production connectors remain disabled. Storage, migration, and other
+downstream source implementation must not proceed while G2 is blocked. The
+existing legacy keyboard/OCR capture remains active and unchanged.
+
+An atomic helper or source-owned interface is only the next prerequisite. Each
+source must then pass a new live redacted probe with authoritative, stable
+evidence for all required capabilities before its G2 decision can change to
+`PASS`. See [`chat-source-gate.md`](../docs/verification/chat-source-gate.md)
+for the capability-level decision and reproduction commands.
+
 ## Distribution constraint
 
 As verified on 2026-08-17, npm publishes DSH `0.1.0-rc.2`, `0.1.0-rc.3`, and `0.1.0-rc.6`, but not `0.1.0-rc.5`. The original scaffold plan requested exact RC5 peer and development dependencies. The manifest records all directly named RC5 runtime packages as exact optional peers, but deliberately does not repeat unavailable RC5 packages as registry-resolved development dependencies or commit a machine-specific `file:`/`link:` path. Build-time DSH imports remain type-only and runtime dependencies remain external.
 
 Portable npm distribution is therefore **BLOCKED** until RC5 is published or the compatibility baseline is deliberately moved. The PASS above is intentionally limited to the clean local checkout at the exact pinned commit; it is not a claim that a third party can reproduce the install from the public registry alone.
+
+This portable distribution block is independent of G2. A local pinned G1
+`PASS` does not prove source feasibility, and resolving npm distribution would
+not resolve the WeChat or Kim source blocks.

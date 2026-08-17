@@ -1,0 +1,138 @@
+# DSH Personal Context Dossier
+
+## Current status
+
+- Current stage: S3 feasibility and risk review.
+- Current decision: **BLOCKED at G2**.
+- Delivery guard: Task 7 and all downstream implementation are prohibited until
+  G2 passes for both required chat sources.
+- Runtime guard: the existing legacy keyboard/OCR capture remains active and
+  unchanged. No real service or deployment was modified.
+- Resume point: read this dossier, then the
+  [source gate](../verification/chat-source-gate.md) and
+  [implementation plan](../plans/2026-08-17-dsh-personal-context-hub-implementation.md).
+
+## S0 Intake
+
+### User request, verbatim
+
+> “可以定时拉取kim和微信的聊天记录，这样应该是最好的，获取kim和微信，有发言的上下文，组织起来，区分哪些是我的，哪些是我回复的，形成针对kim和微信以及其他app的聊天记录，这样沉淀到自己的知识库，是一个比较靠谱的做法，结合自己的录音之后的asr，如果这样做，那应该重新设计，比如基于DSH，引入不同的上下文的来源，将自己在不同的app下的输入，作为一个上下文，存入到个人知识库。或者给出更好的设计。”
+
+### User clarifications, verbatim
+
+> “思考其他的解决方案 不走OCR”
+
+> “要业务无感 对我无感”
+
+> “DeepSeek Harness”
+
+> “前者”
+
+> “B是不是更好？”
+
+> “可以 另外也需要一个GUI页面”
+
+The intended user is the local device owner. The requested outcome is a
+source-aware personal knowledge base combining qualifying Kim and WeChat
+history, recording ASR, retrieval, and a GUI without visible interaction with
+the chat applications. The current workaround is the legacy capture path; it is
+preserved because the replacement has not passed feasibility.
+
+## S1 Current-system survey
+
+- The [baseline report](../verification/dsh-personal-context-baseline.md)
+  records the existing OmniMe state, test baseline, pinned DSH release, and the
+  requirement to preserve the legacy database and capture path.
+- [DSH compatibility](../../dsh-plugin/DSH_COMPATIBILITY.md) records the local
+  pinned-runtime evidence and the independent portable distribution constraint.
+- The [WeChat report](../verification/wechat-source-feasibility.md) and
+  [Kim report](../verification/kim-source-feasibility.md) contain redacted source
+  evidence only.
+- No generated system map exists for this repository, so this dossier does not
+  restate architecture totals.
+
+## S2 Requirement definition
+
+The approved [design](../plans/2026-08-17-dsh-personal-context-hub-design.md)
+defines the DSH-native B+ architecture, local data boundary, source-neutral
+connector contract, participation semantics, ASR integration, retrieval, GUI,
+and privacy constraints. It explicitly excludes OCR fallback, UI automation,
+event interception, clipboard modification, network capture, process injection,
+and guessed source facts.
+
+## S3 Plan and feasibility evidence
+
+The [implementation plan](../plans/2026-08-17-dsh-personal-context-hub-implementation.md)
+binds the work to test-first delivery and named gates. Evidence completed before
+this decision includes:
+
+- `docs: record personal context baseline`
+- `feat: scaffold DSH personal context bundle`
+- `feat: define personal context connector contract`
+- `spike: verify structured WeChat source`
+- `spike: verify structured Kim source`
+- `docs: decide chat source feasibility gate`
+
+These are commit subjects in repository history, avoiding environment-specific
+references in the dossier. The authoritative feasibility decision is the
+[source gate](../verification/chat-source-gate.md).
+
+## S4 Requirement breakdown
+
+The implementation plan decomposes the approved design into an isolated bundle,
+source-neutral contract, source probes, gate decision, storage, normalization,
+retrieval, GUI, ASR, shadow synchronization, service cutover, and acceptance.
+Only the baseline, bundle scaffold, neutral contract, read-only feasibility
+spikes, and G2 decision have been executed. No downstream production connector,
+storage, migration, cutover, or deployment work was executed.
+
+## S5 Implementation state
+
+The branch contains only the pre-G2 scaffold, source-neutral interfaces,
+fail-closed source probes, synthetic fixtures, and verification documents. The
+production WeChat and Kim connectors remain disabled. Synthetic tests establish
+parser and safety behavior only; they do not prove live source schemas,
+semantics, stability, or business capability.
+
+## Gate record
+
+| Gate or constraint | Decision | Evidence and consequence |
+|---|---|---|
+| G1 local pinned DSH compatibility | `PASS` | [Compatibility report](../../dsh-plugin/DSH_COMPATIBILITY.md); limited to the pinned local runtime. |
+| Portable npm RC5 distribution | `BLOCK` | Independent distribution constraint in the compatibility report; it neither changes nor resolves G2. |
+| G2 source feasibility | **`BLOCKED at G2`** | [Source gate](../verification/chat-source-gate.md); both required sources lack safe live evidence. Stop before Task 7. |
+| G3 data and privacy | `NOT STARTED` | Storage, participation filtering, normalization, and privacy implementation were not started. |
+| G4 feature review | `NOT STARTED` | No downstream feature implementation exists to review. |
+| G5 deployment health | `NOT STARTED` | No deployment was attempted. |
+| G6 live acceptance | `NOT STARTED` | No production or live acceptance path was attempted. |
+
+## G2 risk decision
+
+The current adapters fail closed because they do not have an approved atomic
+directory-descriptor/`openat` path helper or a source-owned read-only structured
+interface. This does not prove that either application's business data lacks the
+required capabilities. It means the capabilities cannot currently be evaluated
+or used within the approved safety boundary.
+
+Continuing would require unsafe or guessed source behavior and would violate the
+design. Therefore no work may pass G2 with partial or synthetic-only evidence.
+
+## Exact unblock conditions
+
+1. Provide a reviewed atomic directory-FD/`openat` helper, or a source-owned
+   read-only structured interface. Either is only a prerequisite, not a PASS.
+2. Re-run both live redacted probes through the reviewed path.
+3. Produce authoritative and stable live evidence for every required capability
+   for both sources. Partial evidence remains `BLOCK`.
+
+## Pending user decision
+
+The user must choose whether to keep the feature paused at G2 until a safe
+source-owned interface appears, or separately authorize a reviewed atomic-helper
+effort as a new feasibility scope. Continuing Task 7 or disabling the legacy
+capture path is not an available branch while G2 remains blocked.
+
+## Deployment and acceptance
+
+No deployment occurred. G5 and G6 were not entered, no rollback point was
+needed, and no production acceptance claim is made.
