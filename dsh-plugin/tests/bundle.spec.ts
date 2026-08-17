@@ -26,9 +26,12 @@ describe('DSH bundle contract', () => {
     expect(manifest.scripts['smoke:pinned']).toBe('node scripts/smoke-install.mjs')
     expect(manifest.scripts['check:node']).toBe('node scripts/check-node.mjs')
     expect(manifest.scripts['probe:wechat']).toBe('node lib/probe-wechat.js')
+    expect(manifest.scripts['probe:kim']).toBe('node lib/probe-kim.js')
     expect(manifest.scripts['test:g1']).toBe('pnpm run check:node && pnpm test && node scripts/g1-pinned.mjs')
     expect(manifest.files).toContain('lib/probe-wechat.js')
+    expect(manifest.files).toContain('lib/probe-kim.js')
     expect(manifest.exports['./probe-wechat']).toBeUndefined()
+    expect(manifest.exports['./probe-kim']).toBeUndefined()
     expect(manifest.packageManager).toBe('pnpm@11.7.0')
   })
 
@@ -42,6 +45,25 @@ describe('DSH bundle contract', () => {
     expect(existsSync(resolve(root, 'lib/index.js'))).toBe(true)
     expect(existsSync(resolve(root, 'lib/client.js'))).toBe(true)
     expect(existsSync(resolve(root, 'lib/probe-wechat.js'))).toBe(true)
+    expect(existsSync(resolve(root, 'lib/probe-kim.js'))).toBe(true)
+  })
+
+  it('isolates the built Kim probe artifact to the CLI entry point', async () => {
+    const artifact = resolve(root, 'lib/probe-kim.js')
+    const exported = await import(`${pathToFileURL(artifact).href}?kim-cli-isolation`)
+    expect(Object.keys(exported).sort()).toEqual(['runKimProbeCli'])
+
+    const built = readFileSync(artifact, 'utf8')
+    expect(built).not.toMatch(
+      /synthetic|testonly|seam|rangereader|kimstorereader|snapshotprovider|withtestonly|discovertestonly/i,
+    )
+  })
+
+  it('verifies the installed Kim probe artifact in the pinned smoke', () => {
+    const smoke = readFileSync(resolve(root, 'scripts/smoke-install.mjs'), 'utf8')
+    expect(smoke).toContain('lib/probe-kim.js')
+    expect(smoke).toContain('KIM_ATOMIC_OPEN_UNAVAILABLE')
+    expect(smoke).toContain('runKimProbeCli')
   })
 
   it('isolates the built probe artifact to the CLI entry point', async () => {

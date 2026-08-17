@@ -14,6 +14,65 @@ import {
 const scriptDir = dirname(fileURLToPath(import.meta.url))
 const pluginRoot = resolve(scriptDir, '..')
 
+function verifyInstalledProbe({
+  installedRoot,
+  artifactName,
+  expectedExport,
+  expectedFailureCode,
+  sourceName,
+  environment,
+}) {
+  const installedProbe = join(installedRoot, `lib/${artifactName}`)
+  if (!existsSync(installedProbe)) {
+    throw new Error(`installed Personal Context package has no ${sourceName} probe artifact`)
+  }
+  const imported = spawnSync(process.execPath, [
+    '--input-type=module',
+    '--eval',
+    `const loaded = await import(${JSON.stringify(pathToFileURL(installedProbe).href)}); process.stdout.write(JSON.stringify(Object.keys(loaded).sort()))`,
+  ], {
+    cwd: installedRoot,
+    encoding: 'utf8',
+    env: environment,
+  })
+  if (imported.status !== 0 || imported.signal !== null || imported.error !== undefined) {
+    throw new Error(`installed ${sourceName} probe artifact could not be imported in isolation`)
+  }
+  let exports
+  try {
+    exports = JSON.parse(imported.stdout)
+  } catch {
+    throw new Error(`installed ${sourceName} probe artifact did not expose parseable exports`)
+  }
+  if (!Array.isArray(exports) || JSON.stringify(exports) !== JSON.stringify([expectedExport])) {
+    throw new Error(`installed ${sourceName} probe artifact exposes non-CLI APIs`)
+  }
+  const forbiddenExport = exports.find(name => (
+    /Synthetic|TestOnly|Snapshot|Provider|resolve|discover|probe(?:Wechat|Kim)Source/.test(name)
+  ))
+  if (forbiddenExport !== undefined) {
+    throw new Error(`installed ${sourceName} probe artifact exposes non-CLI APIs`)
+  }
+  const probe = spawnSync(process.execPath, [installedProbe, '--redact'], {
+    cwd: installedRoot,
+    encoding: 'utf8',
+    env: environment,
+  })
+  if (probe.status !== 2 || probe.signal !== null || probe.error !== undefined) {
+    throw new Error(`installed ${sourceName} probe did not fail closed`)
+  }
+  let report
+  try {
+    report = JSON.parse(probe.stdout)
+  } catch {
+    throw new Error(`installed ${sourceName} probe did not return redacted JSON`)
+  }
+  if (report.failureCodes?.length !== 1 || report.failureCodes[0] !== expectedFailureCode) {
+    throw new Error(`installed ${sourceName} probe did not report atomic-open unavailability`)
+  }
+  return installedProbe
+}
+
 export function smokeInstall({
   dshSource,
   runner,
@@ -59,8 +118,11 @@ export function smokeInstall({
     if (installedManifest.dsh?.client?.platform !== 'web') {
       throw new Error('installed package is missing the Personal Context browser row declaration')
     }
-    if (installedManifest.exports?.['./probe-wechat'] !== undefined) {
-      throw new Error('installed package exposes the internal WeChat probe as a library API')
+    if (
+      installedManifest.exports?.['./probe-wechat'] !== undefined
+      || installedManifest.exports?.['./probe-kim'] !== undefined
+    ) {
+      throw new Error('installed package exposes an internal source probe as a library API')
     }
     if (!existsSync(join(installedRoot, 'lib/client.js'))) {
       throw new Error('installed Personal Context package has no browser artifact')
@@ -68,63 +130,32 @@ export function smokeInstall({
     if (!existsSync(join(installedRoot, 'lib/index.js'))) {
       throw new Error('installed Personal Context package has no Host artifact')
     }
-    const installedProbe = join(installedRoot, 'lib/probe-wechat.js')
-    if (!existsSync(installedProbe)) {
-      throw new Error('installed Personal Context package has no WeChat probe artifact')
-    }
     const {
       OMINIME_WECHAT_CONTAINER_ROOT: _containerRoot,
       OMINIME_WECHAT_ACCOUNT_DIRECTORY: _accountDirectory,
       OMINIME_WECHAT_ADAPTER_VERSION: _adapterVersion,
+      OMINIME_KIM_ROOT: _kimRoot,
+      OMINIME_KIM_PROFILE: _kimProfile,
+      OMINIME_KIM_ADAPTER_VERSION: _kimAdapter,
       ...probeEnvironment
     } = process.env
     const isolatedProbeEnvironment = { ...probeEnvironment, HOME: dshHome }
-    const importProbe = spawnSync(process.execPath, [
-      '--input-type=module',
-      '--eval',
-      `const loaded = await import(${JSON.stringify(pathToFileURL(installedProbe).href)}); process.stdout.write(JSON.stringify(Object.keys(loaded).sort()))`,
-    ], {
-      cwd: installedRoot,
-      encoding: 'utf8',
-      env: isolatedProbeEnvironment,
+    verifyInstalledProbe({
+      installedRoot,
+      artifactName: 'probe-wechat.js',
+      expectedExport: 'runWechatProbeCli',
+      expectedFailureCode: 'WECHAT_ATOMIC_OPEN_UNAVAILABLE',
+      sourceName: 'WeChat',
+      environment: isolatedProbeEnvironment,
     })
-    if (importProbe.status !== 0 || importProbe.signal !== null || importProbe.error !== undefined) {
-      throw new Error('installed WeChat probe artifact could not be imported in isolation')
-    }
-    let probeExports
-    try {
-      probeExports = JSON.parse(importProbe.stdout)
-    } catch {
-      throw new Error('installed WeChat probe artifact did not expose parseable exports')
-    }
-    if (!Array.isArray(probeExports)) {
-      throw new Error('installed WeChat probe artifact exports are not an array')
-    }
-    const forbiddenExport = probeExports.find(name =>
-      /Synthetic|TestOnly|Snapshot|Provider|resolve|discover|probeWechatSource/.test(name))
-    if (forbiddenExport !== undefined || JSON.stringify(probeExports) !== '["runWechatProbeCli"]') {
-      throw new Error('installed WeChat probe artifact exposes non-CLI APIs')
-    }
-    const probe = spawnSync(process.execPath, [installedProbe, '--redact'], {
-      cwd: installedRoot,
-      encoding: 'utf8',
-      env: isolatedProbeEnvironment,
+    verifyInstalledProbe({
+      installedRoot,
+      artifactName: 'probe-kim.js',
+      expectedExport: 'runKimProbeCli',
+      expectedFailureCode: 'KIM_ATOMIC_OPEN_UNAVAILABLE',
+      sourceName: 'Kim',
+      environment: isolatedProbeEnvironment,
     })
-    if (probe.status !== 2 || probe.signal !== null || probe.error !== undefined) {
-      throw new Error('installed WeChat probe did not fail closed')
-    }
-    let probeReport
-    try {
-      probeReport = JSON.parse(probe.stdout)
-    } catch {
-      throw new Error('installed WeChat probe did not return redacted JSON')
-    }
-    if (
-      probeReport.failureCodes?.length !== 1
-      || probeReport.failureCodes[0] !== 'WECHAT_ATOMIC_OPEN_UNAVAILABLE'
-    ) {
-      throw new Error('installed WeChat probe did not report atomic-open unavailability')
-    }
 
     const result = {
       status: 'ok',
@@ -135,7 +166,9 @@ export function smokeInstall({
       installedHostArtifact: 'lib/index.js',
       installedClientArtifact: 'lib/client.js',
       installedProbeArtifact: 'lib/probe-wechat.js',
+      installedKimProbeArtifact: 'lib/probe-kim.js',
       wechatProbeFailureCode: 'WECHAT_ATOMIC_OPEN_UNAVAILABLE',
+      kimProbeFailureCode: 'KIM_ATOMIC_OPEN_UNAVAILABLE',
     }
     process.stdout.write(`${JSON.stringify(result)}\n`)
     return result

@@ -29,6 +29,17 @@ export default defineConfig([
     dts: false,
   },
   {
+    name: `${packageName}/probe-kim`,
+    entry: { 'probe-kim': 'src/connectors/kim/cli.ts' },
+    outDir: 'lib',
+    format: 'esm',
+    platform: 'node',
+    target: 'es2024',
+    fixedExtension: false,
+    clean: false,
+    dts: false,
+  },
+  {
     name: `${packageName}/client`,
     entry: { client: 'src/client/index.tsx' },
     outDir: 'lib',

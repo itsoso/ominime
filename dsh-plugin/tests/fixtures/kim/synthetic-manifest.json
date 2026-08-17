@@ -1,0 +1,22 @@
+{
+  "adapterVersion": "kim-synthetic-structured-v1",
+  "appVersion": "0.0.0-synthetic",
+  "storeRelativePath": "storage/chat/records.kimstore",
+  "header": {
+    "magic": "OMKIMDB1",
+    "version": 1,
+    "metadataEncoding": "canonical-json-field-names-only"
+  },
+  "fields": [
+    "profile.selfMemberId",
+    "threads.threadId",
+    "members.memberId",
+    "messages.messageId",
+    "messages.finalText",
+    "messages.senderMemberId",
+    "messages.sentAt",
+    "messages.sequence",
+    "changes.changeToken"
+  ],
+  "dataClassification": "invented-only"
+}
