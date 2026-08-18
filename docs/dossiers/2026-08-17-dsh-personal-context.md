@@ -11,6 +11,7 @@
 - Resume point: read this dossier, then the
   [source gate](../verification/chat-source-gate.md) and
   [source-owned interface reframe](../plans/2026-08-18-source-owned-chat-interface-reframe-design.md), then the
+  [source-owned interface investigation plan](../plans/2026-08-18-source-owned-chat-interface-investigation.md), then the
   [implementation plan](../plans/2026-08-17-dsh-personal-context-hub-implementation.md).
 
 ## S0 Intake
