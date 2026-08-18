@@ -1,0 +1,11 @@
+# Kim Source-Owned Catalog Gate
+- Status: `BLOCK`
+- Authorization class: `NOT PROVEN`
+- Historical participation scope: `NOT PROVEN`
+- Self identity: `NOT PROVEN`
+- Conversation identity: `NOT PROVEN`
+- Stable message identity: `NOT PROVEN`
+- Timestamp or order: `NOT PROVEN`
+- Edit and retraction events: `NOT PROVEN`
+- Incremental cursor or event stream: `NOT PROVEN`
+- Failure codes: `KIM_CATALOG_ACCESS_NOT_APPROVED`

@@ -8,6 +8,25 @@ G2 is **BLOCKED** overall. WeChat and Kim are each **BLOCKED** because the
 approved safe probe cannot obtain an atomic, read-only source snapshot. The
 reports therefore do not prove any of the required source capabilities.
 
+## User-authorized Kim local adapter evidence path
+
+The user has approved a separately installed, audited local-database reader as
+a new Kim-only evidence path. The [Kim Chat Skill
+design](../plans/2026-08-18-kim-chat-skill-design.md) restricts that reader behind
+four bounded DSH tools and a packaged Skill; it does not authorize a production
+connector, background synchronization, persistence, or legacy cutover.
+
+- On-demand Kim Skill: `NOT YET PROVEN`
+- Kim production connector: `DISABLED`
+- Durable Kim incremental synchronization: `NOT PROVEN / BLOCK`
+- WeChat production connector: `DISABLED`
+
+This authorization changes which Kim prerequisite may be investigated; it does
+not pass G2. The on-demand Skill requires its own redacted live proof, and the
+production connector still requires durable incremental semantics and every
+capability in the Kim table below. G2 remains blocked overall while either
+required source remains blocked.
+
 This is a safety and evidence decision, not a claim that either application's
 business data is incapable of providing these capabilities. Without an atomic
 directory-descriptor/`openat` path helper or a source-owned read-only structured
@@ -169,6 +188,11 @@ To re-open this gate for either source:
 2. Re-run that source's live redacted probe through the reviewed path.
 3. Produce authoritative and stable live evidence for every capability in its
    table. All requirements must pass; partial evidence remains `BLOCK`.
+
+For Kim only, the user-authorized local adapter is now an additional acceptable
+prerequisite when its executable provenance, read-only behavior, bounded output,
+and redacted live evidence pass the approved Skill design. It remains evidence,
+not an automatic production-connector approval.
 
 The local pinned DSH RC5 G1 result and this source G2 result are independent:
 G1 is `PASS` for the pinned local runtime, while portable npm RC5 distribution

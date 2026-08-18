@@ -3,13 +3,14 @@
 ## Current status
 
 - Current stage: S3 feasibility and risk review, source-owned interface reframe.
-- Current decision: **G2 reframe approved; still BLOCKED at G2**.
+- Current decision: **Kim local-adapter reframe approved; still BLOCKED at G2**.
 - Delivery guard: Task 7 and all downstream implementation are prohibited until
   G2 passes for both required chat sources.
 - Runtime guard: the existing legacy keyboard/OCR capture remains active and
   unchanged. No real service or deployment was modified.
 - Resume point: read this dossier, then the
   [source gate](../verification/chat-source-gate.md) and
+  [Kim Chat Skill design](../plans/2026-08-18-kim-chat-skill-design.md), then the
   [source-owned interface reframe](../plans/2026-08-18-source-owned-chat-interface-reframe-design.md), then the
   [source-owned interface investigation plan](../plans/2026-08-18-source-owned-chat-interface-investigation.md), then the
   [implementation plan](../plans/2026-08-17-dsh-personal-context-hub-implementation.md).
@@ -68,6 +69,13 @@ adds a feasibility-only investigation of the Kim internal open platform and
 WeChat-owned loopback listeners. It does not weaken the original exclusions or
 authorize downstream implementation.
 
+The user subsequently approved the
+[Kim Chat Skill design](../plans/2026-08-18-kim-chat-skill-design.md), which adds
+a user-authorized local-database adapter as a Kim-only evidence path. It permits
+an on-demand restricted Skill implementation and redacted proof, but it does not
+enable the production Kim connector, storage, background synchronization,
+WeChat ingestion, or legacy cutover.
+
 ## S3 Plan and feasibility evidence
 
 The [implementation plan](../plans/2026-08-17-dsh-personal-context-hub-implementation.md)
@@ -85,6 +93,9 @@ These are commit subjects in repository history, avoiding environment-specific
 references in the dossier. The authoritative feasibility decision is the
 [source gate](../verification/chat-source-gate.md).
 
+The superseded internal-platform branch remains explicit evidence rather than
+being erased: [Kim source-owned catalog gate](../verification/kim-source-owned-catalog.md) `BLOCK`.
+
 ## S4 Requirement breakdown
 
 The implementation plan decomposes the approved design into an isolated bundle,
@@ -101,6 +112,11 @@ fail-closed source probes, synthetic fixtures, and verification documents. The
 production WeChat and Kim connectors remain disabled. Synthetic tests establish
 parser and safety behavior only; they do not prove live source schemas,
 semantics, stability, or business capability.
+
+The newly approved work may add an on-demand Skill, restricted DSH tools, and a
+locally verified child-process adapter. Until its redacted proof passes, the
+Skill remains unproven. Even after an on-demand proof, durable incremental sync
+and the production connector remain separately gated.
 
 ## Gate record
 
