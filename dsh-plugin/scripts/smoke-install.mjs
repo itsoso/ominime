@@ -130,6 +130,16 @@ export function smokeInstall({
     if (!existsSync(join(installedRoot, 'lib/index.js'))) {
       throw new Error('installed Personal Context package has no Host artifact')
     }
+    const installedSkill = join(installedRoot, 'skills/kim-chat-history/SKILL.md')
+    if (!existsSync(installedSkill)) {
+      throw new Error('installed Personal Context package has no Kim chat skill')
+    }
+    const installedSkillSource = readFileSync(installedSkill, 'utf8')
+    if (!installedSkillSource.includes('name: kim-chat-history')
+      || !installedSkillSource.includes('kim_chat_status')
+      || !installedSkillSource.includes('kim_chat_messages')) {
+      throw new Error('installed Kim chat skill does not match the approved contract')
+    }
     const {
       OMINIME_WECHAT_CONTAINER_ROOT: _containerRoot,
       OMINIME_WECHAT_ACCOUNT_DIRECTORY: _accountDirectory,
@@ -167,6 +177,7 @@ export function smokeInstall({
       installedClientArtifact: 'lib/client.js',
       installedProbeArtifact: 'lib/probe-wechat.js',
       installedKimProbeArtifact: 'lib/probe-kim.js',
+      installedKimChatSkill: 'skills/kim-chat-history/SKILL.md',
       wechatProbeFailureCode: 'WECHAT_ATOMIC_OPEN_UNAVAILABLE',
       kimProbeFailureCode: 'KIM_ATOMIC_OPEN_UNAVAILABLE',
     }

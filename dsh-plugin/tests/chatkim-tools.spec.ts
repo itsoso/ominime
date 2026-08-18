@@ -129,11 +129,18 @@ function definitions(source: KimChatGateway = gateway()) {
 describe('restricted Kim chat DSH tools', () => {
   it('wires the four tools and one lifecycle cleanup into the Host plugin', async () => {
     const names: string[] = []
+    const skillNames: string[] = []
     const cleanups: Array<() => void | Promise<void>> = []
     apply({
       tools: {
         register(definition: { name: string }) {
           names.push(definition.name)
+          return () => {}
+        },
+      },
+      skills: {
+        register(definition: { name: string }) {
+          skillNames.push(definition.name)
           return () => {}
         },
       },
@@ -150,6 +157,7 @@ describe('restricted Kim chat DSH tools', () => {
       'kim_chat_status',
       'personal_context_health',
     ])
+    expect(skillNames).toEqual(['kim-chat-history'])
     expect(cleanups).toHaveLength(1)
     await cleanups[0]!()
   })

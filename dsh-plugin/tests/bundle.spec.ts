@@ -33,6 +33,8 @@ describe('DSH bundle contract', () => {
     expect(manifest.scripts['test:g1']).toBe('pnpm run check:node && pnpm test && node scripts/g1-pinned.mjs')
     expect(manifest.files).toContain('lib/probe-wechat.js')
     expect(manifest.files).toContain('lib/probe-kim.js')
+    expect(manifest.files).toContain('skills/kim-chat-history/SKILL.md')
+    expect(manifest.peerDependencies['@deepseek-ai/dsh-skill']).toBe('0.1.0-rc.5')
     expect(manifest.files).not.toContain('scripts/source-owned')
     expect(manifest.files.some((entry: string) => entry.startsWith('scripts/source-owned/'))).toBe(false)
     expect(manifest.exports['./probe-wechat']).toBeUndefined()
@@ -70,6 +72,7 @@ describe('DSH bundle contract', () => {
     expect(paths).toContain('lib/client.js')
     expect(paths).toContain('lib/probe-wechat.js')
     expect(paths).toContain('lib/probe-kim.js')
+    expect(paths).toContain('skills/kim-chat-history/SKILL.md')
   })
 
   it('does not copy the source-owned investigation into build or installed-smoke artifacts', () => {
@@ -353,22 +356,36 @@ describe('DSH bundle contract', () => {
   })
 
   it('registers a health tool with the exact scaffold result', async () => {
-    let definition: {
+    type Definition = {
       name: string
       parameters: unknown
       output: { schema: { required?: string[]; properties: Record<string, { required?: boolean }> } }
       execute: (args: unknown) => Promise<unknown>
-    } | undefined
+    }
+    const definitions = new Map<string, Definition>()
+    const skills: string[] = []
     const plugin = await import(pathToFileURL(resolve(root, 'lib/index.js')).href)
     plugin.apply({
       tools: {
-        register(candidate: typeof definition) {
-          definition = candidate
+        register(candidate: Definition) {
+          definitions.set(candidate.name, candidate)
+          return () => {}
         },
+      },
+      skills: {
+        register(candidate: { name: string }) {
+          skills.push(candidate.name)
+          return () => {}
+        },
+      },
+      effect(factory: () => unknown) {
+        return factory()
       },
     })
 
+    const definition = definitions.get('personal_context_health')
     expect(definition?.name).toBe('personal_context_health')
+    expect(skills).toEqual(['kim-chat-history'])
     expect(definition?.parameters).toEqual({
       type: 'object',
       properties: {},

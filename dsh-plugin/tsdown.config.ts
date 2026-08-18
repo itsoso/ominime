@@ -14,7 +14,7 @@ export default defineConfig([
     clean: true,
     dts: false,
     deps: {
-      neverBundle: ['@deepseek-ai/cordis', '@deepseek-ai/dsh-tools'],
+      neverBundle: ['@deepseek-ai/cordis', '@deepseek-ai/dsh-skill', '@deepseek-ai/dsh-tools'],
     },
   },
   {

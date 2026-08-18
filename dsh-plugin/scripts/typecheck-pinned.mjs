@@ -28,6 +28,7 @@ function compilerOptions(dshSource) {
     allowImportingTsExtensions: true,
     paths: {
       '@deepseek-ai/cordis': [declaration(dshSource, 'vendor/cordis/lib/types/index.d.ts')],
+      '@deepseek-ai/dsh-skill': [declaration(dshSource, 'packages/skill/skill/lib/types/index.d.ts')],
       '@deepseek-ai/dsh-tools': [declaration(dshSource, 'packages/core/tools/lib/types/index.d.ts')],
       '@deepseek-ai/dsh-client-ui-conversation/client': [
         declaration(dshSource, 'packages/client/ui-conversation/lib/types/client/index.d.ts'),

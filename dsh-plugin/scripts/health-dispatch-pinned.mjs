@@ -14,9 +14,10 @@ export async function dispatchHealthPinned({ dshSource } = {}) {
   const pluginArtifact = join(pluginRoot, 'lib/index.js')
   if (!existsSync(pluginArtifact)) throw new Error(`built Personal Context Host not found: ${pluginArtifact}`)
 
-  const [cordis, tools, systemPrompt, llm, plugin] = await Promise.all([
+  const [cordis, tools, skills, systemPrompt, llm, plugin] = await Promise.all([
     asModule(join(dshSource, 'vendor/cordis/lib/index.js')),
     asModule(join(dshSource, 'packages/core/tools/lib/index.js')),
+    asModule(join(dshSource, 'packages/skill/skill/lib/index.js')),
     asModule(join(dshSource, 'packages/core/system-prompt/lib/index.js')),
     asModule(join(dshSource, 'packages/llm/llm/lib/index.js')),
     asModule(pluginArtifact),
@@ -25,7 +26,14 @@ export async function dispatchHealthPinned({ dshSource } = {}) {
   try {
     await ctx.plugin(systemPrompt.default)
     await ctx.plugin(tools.default)
+    await ctx.plugin(skills.default)
     plugin.apply(ctx)
+    const kimSkill = await ctx.skills.get('kim-chat-history')
+    assert.equal(kimSkill?.source, 'runtime')
+    assert.equal(kimSkill?.provider, 'personal-context')
+    assert.equal(kimSkill?.invocation.modelInvocable, true)
+    assert.equal(kimSkill?.invocation.userInvocable, true)
+    assert.match(kimSkill?.content ?? '', /kim_chat_messages/)
     const signal = new AbortController().signal
     let call = 0
     const execute = argumentsValue => ctx.tools.execute({
@@ -60,6 +68,7 @@ export async function dispatchHealthPinned({ dshSource } = {}) {
       tool: 'personal_context_health',
       dispatch: 'rc5 ToolRuntime',
       invalidErrorInfo: 'absent',
+      runtimeSkill: 'kim-chat-history',
     }
     process.stdout.write(`${JSON.stringify(result)}\n`)
     return result

@@ -1,13 +1,15 @@
 import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-skill'
 import type {} from '@deepseek-ai/dsh-tools'
 
+import { registerKimChatSkill } from './chatkim/skill.ts'
 import {
   createEnvironmentKimChatGateway,
   registerKimChatTools,
 } from './chatkim/tools.ts'
 
 export const name = 'personal-context'
-export const inject = ['tools']
+export const inject = ['tools', 'skills']
 
 /** Plugin-owned error for invalid arguments to the raw health definition. */
 class InvalidHealthArgsError extends Error {
@@ -37,6 +39,11 @@ function assertEmptyObject(args: unknown): asserts args is Record<string, never>
 
 /** Register the read-only Personal Context scaffold health tool. */
 export function apply(ctx: Context): void {
+  registerKimChatSkill(
+    ctx,
+    new URL('../skills/kim-chat-history/SKILL.md', import.meta.url),
+  )
+
   ctx.tools.register({
     name: 'personal_context_health',
     description: 'Report the local Personal Context scaffold status.',
