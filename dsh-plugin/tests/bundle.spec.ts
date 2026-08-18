@@ -27,9 +27,14 @@ describe('DSH bundle contract', () => {
     expect(manifest.scripts['check:node']).toBe('node scripts/check-node.mjs')
     expect(manifest.scripts['probe:wechat']).toBe('node lib/probe-wechat.js')
     expect(manifest.scripts['probe:kim']).toBe('node lib/probe-kim.js')
+    expect(manifest.scripts['probe:wechat-owned']).toBe(
+      'node scripts/source-owned/probe-wechat-owned.mjs',
+    )
     expect(manifest.scripts['test:g1']).toBe('pnpm run check:node && pnpm test && node scripts/g1-pinned.mjs')
     expect(manifest.files).toContain('lib/probe-wechat.js')
     expect(manifest.files).toContain('lib/probe-kim.js')
+    expect(manifest.files).not.toContain('scripts/source-owned')
+    expect(manifest.files.some((entry: string) => entry.startsWith('scripts/source-owned/'))).toBe(false)
     expect(manifest.exports['./probe-wechat']).toBeUndefined()
     expect(manifest.exports['./probe-kim']).toBeUndefined()
     expect(manifest.packageManager).toBe('pnpm@11.7.0')
@@ -46,6 +51,40 @@ describe('DSH bundle contract', () => {
     expect(existsSync(resolve(root, 'lib/client.js'))).toBe(true)
     expect(existsSync(resolve(root, 'lib/probe-wechat.js'))).toBe(true)
     expect(existsSync(resolve(root, 'lib/probe-kim.js'))).toBe(true)
+  })
+
+  it('keeps source-owned investigation scripts out of the npm tarball', () => {
+    const packed = spawnSync('pnpm', ['pack', '--dry-run', '--json'], {
+      cwd: root,
+      encoding: 'utf8',
+      env: process.env,
+    })
+    expect(packed.status).toBe(0)
+    expect(packed.signal).toBeNull()
+    expect(packed.stderr).toBe('')
+    const manifest = JSON.parse(packed.stdout)
+    const paths = manifest.files.map((file: { path: string }) => file.path)
+    expect(paths).not.toContain('scripts/source-owned/probe-wechat-owned.mjs')
+    expect(paths.some((path: string) => path.startsWith('scripts/source-owned/'))).toBe(false)
+    expect(paths).toContain('lib/index.js')
+    expect(paths).toContain('lib/client.js')
+    expect(paths).toContain('lib/probe-wechat.js')
+    expect(paths).toContain('lib/probe-kim.js')
+  })
+
+  it('does not copy the source-owned investigation into build or installed-smoke artifacts', () => {
+    for (const relativePath of [
+      'lib/index.js',
+      'lib/client.js',
+      'lib/probe-wechat.js',
+      'lib/probe-kim.js',
+      'scripts/smoke-install.mjs',
+      'tsdown.config.ts',
+    ]) {
+      const content = readFileSync(resolve(root, relativePath), 'utf8')
+      expect(content).not.toContain('probe-wechat-owned')
+      expect(content).not.toContain('scripts/source-owned')
+    }
   })
 
   it('isolates the built Kim probe artifact to the CLI entry point', async () => {

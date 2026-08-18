@@ -28,6 +28,7 @@
     "check:node": "node scripts/check-node.mjs",
     "probe:wechat": "node lib/probe-wechat.js",
     "probe:kim": "node lib/probe-kim.js",
+    "probe:wechat-owned": "node scripts/source-owned/probe-wechat-owned.mjs",
     "typecheck:pinned": "node scripts/typecheck-pinned.mjs",
     "smoke:pinned": "node scripts/smoke-install.mjs",
     "test:g1": "pnpm run check:node && pnpm test && node scripts/g1-pinned.mjs"
