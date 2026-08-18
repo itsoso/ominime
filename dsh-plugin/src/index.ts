@@ -1,6 +1,11 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-tools'
 
+import {
+  createEnvironmentKimChatGateway,
+  registerKimChatTools,
+} from './chatkim/tools.ts'
+
 export const name = 'personal-context'
 export const inject = ['tools']
 
@@ -61,4 +66,11 @@ export function apply(ctx: Context): void {
       return { status: 'scaffold', schemaVersion: 0, sources: [] }
     },
   })
+
+  const kimChat = createEnvironmentKimChatGateway()
+  registerKimChatTools(ctx, kimChat)
+  ctx.effect(
+    () => async () => kimChat.dispose(),
+    'personal-context: Kim chat reader',
+  )
 }
