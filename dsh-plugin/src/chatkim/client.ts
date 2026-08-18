@@ -6,11 +6,13 @@ import {
 
 import type { ResolvedChatkimExecutable } from './config.ts'
 
-export type ChatkimReaderTool =
+export type ChatkimQueryTool =
   | 'get_current_user'
   | 'list_conversations'
   | 'query_chat_log'
   | 'get_message_context'
+
+export type ChatkimReaderTool = ChatkimQueryTool | 'list_accounts'
 
 export type ChatkimClientErrorCode =
   | 'CHATKIM_ABORTED'

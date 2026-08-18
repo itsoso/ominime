@@ -1,6 +1,11 @@
 import type { Context } from '@deepseek-ai/cordis'
 
-import { ChatkimClient, ChatkimClientError, type ChatkimReaderTool } from './client.ts'
+import {
+  AccountScopedKimChatGateway,
+  type ChatkimProcessGateway,
+  KimChatAccountError,
+} from './account.ts'
+import { ChatkimClient, ChatkimClientError, type ChatkimQueryTool, type ChatkimReaderTool } from './client.ts'
 import { ChatkimConfigError, resolveChatkimExecutable } from './config.ts'
 import {
   KimChatProjectionError,
@@ -26,7 +31,7 @@ const CURSOR_PATTERN = /^(?:[a-fA-F0-9]{2})+$/
 
 export interface KimChatGateway {
   callTool(
-    name: ChatkimReaderTool,
+    name: ChatkimQueryTool,
     args: Readonly<Record<string, unknown>>,
     signal?: AbortSignal,
   ): Promise<unknown>
@@ -39,6 +44,7 @@ export type KimChatToolErrorCode =
   | 'KIM_CHAT_UNAVAILABLE'
   | ChatkimConfigError['code']
   | ChatkimClientError['code']
+  | KimChatAccountError['code']
 
 export class KimChatToolError extends Error {
   declare readonly code: KimChatToolErrorCode
@@ -66,7 +72,7 @@ export interface KimChatToolDefinition {
   execute(args: unknown, exec: ToolExecutionLike): Promise<unknown>
 }
 
-class EnvironmentKimChatGateway implements KimChatGateway {
+class EnvironmentChatkimProcessGateway implements ChatkimProcessGateway {
   private client: ChatkimClient | undefined
   private clientOpening: Promise<ChatkimClient> | undefined
   private disposed = false
@@ -164,6 +170,7 @@ function mapError(error: unknown): KimChatToolError {
   if (error instanceof ChatkimConfigError || error instanceof ChatkimClientError) {
     return new KimChatToolError(error.code)
   }
+  if (error instanceof KimChatAccountError) return new KimChatToolError(error.code)
   return new KimChatToolError('KIM_CHAT_UNAVAILABLE')
 }
 
@@ -200,7 +207,10 @@ async function selfUserId(source: KimChatGateway, signal: AbortSignal): Promise<
 export function createEnvironmentKimChatGateway(
   environment: NodeJS.ProcessEnv = process.env,
 ): KimChatGateway {
-  return new EnvironmentKimChatGateway(environment)
+  return new AccountScopedKimChatGateway(
+    new EnvironmentChatkimProcessGateway(environment),
+    environment.OMINIME_CHATKIM_ACCOUNT,
+  )
 }
 
 export function createKimChatToolDefinitions(source: KimChatGateway): KimChatToolDefinition[] {

@@ -34,6 +34,7 @@ describe('DSH bundle contract', () => {
     expect(manifest.files).toContain('lib/probe-wechat.js')
     expect(manifest.files).toContain('lib/probe-kim.js')
     expect(manifest.files).toContain('skills/kim-chat-history/SKILL.md')
+    expect(manifest.files).not.toContain('lib/chatkim-live-proof.js')
     expect(manifest.peerDependencies['@deepseek-ai/dsh-skill']).toBe('0.1.0-rc.5')
     expect(manifest.files).not.toContain('scripts/source-owned')
     expect(manifest.files.some((entry: string) => entry.startsWith('scripts/source-owned/'))).toBe(false)
@@ -73,6 +74,7 @@ describe('DSH bundle contract', () => {
     expect(paths).toContain('lib/probe-wechat.js')
     expect(paths).toContain('lib/probe-kim.js')
     expect(paths).toContain('skills/kim-chat-history/SKILL.md')
+    expect(paths).not.toContain('lib/chatkim-live-proof.js')
   })
 
   it('does not copy the source-owned investigation into build or installed-smoke artifacts', () => {

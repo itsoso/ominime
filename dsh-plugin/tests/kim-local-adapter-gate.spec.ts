@@ -19,13 +19,20 @@ describe('Kim user-authorized local adapter gate', () => {
 
     const gate = read('docs/verification/chat-source-gate.md')
     expect(gate).toContain('User-authorized Kim local adapter evidence path')
-    expect(gate).toContain('On-demand Kim Skill: `NOT YET PROVEN`')
+    expect(gate).toContain('On-demand Kim Skill: `PASS`')
     expect(gate).toContain('Kim production connector: `DISABLED`')
+    expect(gate).toContain('Durable Kim incremental synchronization: `NOT PROVEN / BLOCK`')
     expect(gate).toContain('G2 is **BLOCKED** overall')
+
+    const report = read('docs/verification/kim-source-feasibility.md')
+    expect(report).toContain('On-demand Skill gate: `PASS`')
+    expect(report).toContain('Adapter version class: `chatkimv2-mcp-v1`')
+    expect(report).toContain('| Final message text | `true` |')
+    expect(report).toContain('| Incremental change detection | `false` |')
 
     const dossier = read('docs/dossiers/2026-08-17-dsh-personal-context.md')
     expect(dossier).toContain('[Kim Chat Skill design](../plans/2026-08-18-kim-chat-skill-design.md)')
     expect(dossier).toContain('user-authorized local-database adapter')
-    expect(dossier).toContain('still BLOCKED at G2')
+    expect(dossier).toContain('on-demand Kim Skill PASS; overall still BLOCKED at G2')
   })
 })

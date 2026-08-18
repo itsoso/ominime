@@ -40,6 +40,17 @@ export default defineConfig([
     dts: false,
   },
   {
+    name: `${packageName}/chatkim-live-proof`,
+    entry: { 'chatkim-live-proof': 'src/chatkim/live-proof.ts' },
+    outDir: 'lib',
+    format: 'esm',
+    platform: 'node',
+    target: 'es2024',
+    fixedExtension: false,
+    clean: false,
+    dts: false,
+  },
+  {
     name: `${packageName}/client`,
     entry: { client: 'src/client/index.tsx' },
     outDir: 'lib',

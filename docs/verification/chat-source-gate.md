@@ -4,9 +4,10 @@ Pipeline entry: [DSH Personal Context dossier](../dossiers/2026-08-17-dsh-person
 
 ## Decision
 
-G2 is **BLOCKED** overall. WeChat and Kim are each **BLOCKED** because the
-approved safe probe cannot obtain an atomic, read-only source snapshot. The
-reports therefore do not prove any of the required source capabilities.
+G2 is **BLOCKED** overall. WeChat remains fully blocked. The user-authorized Kim
+local reader now passes the narrower on-demand Skill gate, but durable
+incremental synchronization is still unproven, so the Kim production connector
+also remains blocked.
 
 ## User-authorized Kim local adapter evidence path
 
@@ -16,28 +17,27 @@ design](../plans/2026-08-18-kim-chat-skill-design.md) restricts that reader behi
 four bounded DSH tools and a packaged Skill; it does not authorize a production
 connector, background synchronization, persistence, or legacy cutover.
 
-- On-demand Kim Skill: `NOT YET PROVEN`
+- On-demand Kim Skill: `PASS`
 - Kim production connector: `DISABLED`
 - Durable Kim incremental synchronization: `NOT PROVEN / BLOCK`
 - WeChat production connector: `DISABLED`
 
-This authorization changes which Kim prerequisite may be investigated; it does
-not pass G2. The on-demand Skill requires its own redacted live proof, and the
-production connector still requires durable incremental semantics and every
-capability in the Kim table below. G2 remains blocked overall while either
-required source remains blocked.
+The live redacted proof established the six bounded read capabilities used by
+the Skill. It did not establish a durable cursor, late-arrival behavior,
+mutation behavior, or automatic synchronization. G2 remains blocked overall
+while WeChat is blocked and durable Kim ingestion is unproven.
 
 This is a safety and evidence decision, not a claim that either application's
-business data is incapable of providing these capabilities. Without an atomic
-directory-descriptor/`openat` path helper or a source-owned read-only structured
-interface, the current adapters cannot safely evaluate or use the live stores.
+business data is incapable of providing the remaining capabilities. The legacy
+snapshot adapters still require an atomic directory-descriptor/`openat` path
+helper or a source-owned read-only structured interface.
 
 ## Evidence and reproduction
 
 - WeChat: [redacted feasibility report](./wechat-source-feasibility.md), proof
   commit `3b1ccec65889157a08cb0ab19a509b5d755044c6`.
-- Kim: [redacted feasibility report](./kim-source-feasibility.md), proof commit
-  `3df3eb78f3ba76ad2abf45f093aecdd2df44ce3a`.
+- Kim: [redacted feasibility report](./kim-source-feasibility.md), including the
+  earlier fail-closed snapshot result and the user-authorized on-demand proof.
 - Source-neutral contract: commit
   `a9b82b319d9fd62550542dfff4b597d6fbf0f892`.
 
@@ -134,8 +134,8 @@ Captured probe output is validated without being printed.
 
 The synthetic tests prove the source-neutral contract, parser behavior, path
 containment, redaction, cleanup, and safe failure behavior. They do **not** prove
-the real WeChat or Kim schema, field meanings, source stability, or any of the
-business capabilities below.
+the real WeChat schema or source stability. Kim's on-demand capability values
+come from the separate live redacted reader proof, not from these fixtures.
 
 ## WeChat capability decision
 
@@ -157,21 +157,23 @@ WeChat source decision: **BLOCK**. Its production connector remains disabled.
 
 ## Kim capability decision
 
-The redacted report exposes the single public failure code
-`KIM_ATOMIC_OPEN_UNAVAILABLE`. Its capability booleans are `false` and its
-field mappings are `null`, so every requirement remains unproven.
+The user-authorized local reader proves the first six bounded read capabilities.
+Incremental change detection remains unproven, so this is an on-demand Skill
+PASS and a production-connector BLOCK. The earlier structured-snapshot probe
+continues to fail closed with `KIM_ATOMIC_OPEN_UNAVAILABLE` and is not used by
+the Skill.
 
 | Required capability | Decision | Public failure code |
 |---|---|---|
-| Source account identity | `NOT PROVEN / BLOCK` | `KIM_ATOMIC_OPEN_UNAVAILABLE` |
-| Conversation and participant identity | `NOT PROVEN / BLOCK` | `KIM_ATOMIC_OPEN_UNAVAILABLE` |
-| Stable message identity | `NOT PROVEN / BLOCK` | `KIM_ATOMIC_OPEN_UNAVAILABLE` |
-| Final message text | `NOT PROVEN / BLOCK` | `KIM_ATOMIC_OPEN_UNAVAILABLE` |
-| Authoritative direction or sender | `NOT PROVEN / BLOCK` | `KIM_ATOMIC_OPEN_UNAVAILABLE` |
-| Timestamp or ordering key | `NOT PROVEN / BLOCK` | `KIM_ATOMIC_OPEN_UNAVAILABLE` |
-| Incremental change detection | `NOT PROVEN / BLOCK` | `KIM_ATOMIC_OPEN_UNAVAILABLE` |
+| Source account identity | `PROVEN for on-demand` | none |
+| Conversation and participant identity | `PROVEN for on-demand` | none |
+| Stable message identity | `PROVEN for on-demand` | none |
+| Final message text | `PROVEN for on-demand` | none |
+| Authoritative direction or sender | `PROVEN for on-demand` | none |
+| Timestamp or ordering key | `PROVEN for on-demand` | none |
+| Incremental change detection | `NOT PROVEN / BLOCK` | `KIM_CHAT_LIVE_PROOF_INCOMPLETE` |
 
-Kim source decision: **BLOCK**. Its production connector remains disabled.
+Kim decision: **on-demand Skill PASS; production connector BLOCK**.
 
 ## Risk disposition and unblock conditions
 
@@ -180,7 +182,7 @@ time-of-check/time-of-use race, or using a prohibited fallback. Any of those
 would violate the read-only safety boundary and could misattribute identities,
 direction, revisions, or conversation participation.
 
-To re-open this gate for either source:
+To re-open the WeChat gate:
 
 1. Provide a reviewed atomic directory-FD/`openat` helper, or a source-owned
    read-only structured interface. This is a prerequisite, not proof that the
@@ -189,15 +191,16 @@ To re-open this gate for either source:
 3. Produce authoritative and stable live evidence for every capability in its
    table. All requirements must pass; partial evidence remains `BLOCK`.
 
-For Kim only, the user-authorized local adapter is now an additional acceptable
-prerequisite when its executable provenance, read-only behavior, bounded output,
-and redacted live evidence pass the approved Skill design. It remains evidence,
+To re-open the Kim production-connector gate, prove a durable cursor or an
+equivalent bounded change-detection contract across restarts, late arrivals,
+edits, retractions, and source mutations. The current on-demand PASS is evidence,
 not an automatic production-connector approval.
 
 The local pinned DSH RC5 G1 result and this source G2 result are independent:
 G1 is `PASS` for the pinned local runtime, while portable npm RC5 distribution
 is separately `BLOCKED`. Neither result supplies missing live source evidence.
 
-No downstream implementation was executed. Storage, migration, and production
-connectors were not added; real services were not changed; and the existing
-legacy keyboard/OCR capture remains active and unchanged.
+The on-demand Kim Skill and its four restricted tools were implemented. Storage,
+migration, background scheduling, and production connectors were not added;
+real services were not changed; and the existing legacy keyboard/OCR capture
+remains active and unchanged.

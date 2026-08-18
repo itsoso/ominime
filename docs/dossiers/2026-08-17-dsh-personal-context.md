@@ -2,10 +2,10 @@
 
 ## Current status
 
-- Current stage: S3 feasibility and risk review, source-owned interface reframe.
-- Current decision: **Kim local-adapter reframe approved; still BLOCKED at G2**.
+- Current stage: S5 on-demand Kim vertical slice verification.
+- Current decision: **on-demand Kim Skill PASS; overall still BLOCKED at G2**.
 - Delivery guard: Task 7 and all downstream implementation are prohibited until
-  G2 passes for both required chat sources.
+  G2 passes for both required chat sources and durable ingestion.
 - Runtime guard: the existing legacy keyboard/OCR capture remains active and
   unchanged. No real service or deployment was modified.
 - Resume point: read this dossier, then the
@@ -101,22 +101,21 @@ being erased: [Kim source-owned catalog gate](../verification/kim-source-owned-c
 The implementation plan decomposes the approved design into an isolated bundle,
 source-neutral contract, source probes, gate decision, storage, normalization,
 retrieval, GUI, ASR, shadow synchronization, service cutover, and acceptance.
-Only the baseline, bundle scaffold, neutral contract, read-only feasibility
-spikes, and G2 decision have been executed. No downstream production connector,
-storage, migration, cutover, or deployment work was executed.
+The baseline, bundle scaffold, neutral contract, read-only feasibility spikes,
+G2 decision, and the separately approved on-demand Kim Skill slice have been
+executed. No production connector, storage, migration, cutover, or deployment
+work was executed.
 
 ## S5 Implementation state
 
-The branch contains only the pre-G2 scaffold, source-neutral interfaces,
-fail-closed source probes, synthetic fixtures, and verification documents. The
-production WeChat and Kim connectors remain disabled. Synthetic tests establish
-parser and safety behavior only; they do not prove live source schemas,
-semantics, stability, or business capability.
+The branch now includes the packaged `kim-chat-history` Skill, four restricted
+DSH tools, executable provenance verification, a bounded lifecycle-owned MCP
+client, private multi-account selection, and a redacted live proof. The live
+proof established the six capabilities required for explicit on-demand reads.
 
-The newly approved work may add an on-demand Skill, restricted DSH tools, and a
-locally verified child-process adapter. Until its redacted proof passes, the
-Skill remains unproven. Even after an on-demand proof, durable incremental sync
-and the production connector remain separately gated.
+The production WeChat and Kim connectors remain disabled. Durable incremental
+sync, storage, scheduling, automatic knowledge ingestion, and legacy cutover
+remain separately gated.
 
 ## Gate record
 
@@ -124,7 +123,7 @@ and the production connector remain separately gated.
 |---|---|---|
 | G1 local pinned DSH compatibility | `PASS` | [Compatibility report](../../dsh-plugin/DSH_COMPATIBILITY.md); limited to the pinned local runtime. |
 | Portable npm RC5 distribution | `BLOCK` | Independent distribution constraint in the compatibility report; it neither changes nor resolves G2. |
-| G2 source feasibility | **`BLOCKED at G2`** | [Source gate](../verification/chat-source-gate.md); both required sources lack safe live evidence. Stop before Task 7. |
+| G2 source feasibility | **`BLOCKED at G2`** | [Source gate](../verification/chat-source-gate.md); Kim on-demand reads pass, but WeChat and durable Kim ingestion remain blocked. Stop before the original hub Task 7. |
 | G3 data and privacy | `NOT STARTED` | Storage, participation filtering, normalization, and privacy implementation were not started. |
 | G4 feature review | `NOT STARTED` | No downstream feature implementation exists to review. |
 | G5 deployment health | `NOT STARTED` | No deployment was attempted. |
@@ -132,11 +131,11 @@ and the production connector remain separately gated.
 
 ## G2 risk decision
 
-The current adapters fail closed because they do not have an approved atomic
-directory-descriptor/`openat` path helper or a source-owned read-only structured
-interface. This does not prove that either application's business data lacks the
-required capabilities. It means the capabilities cannot currently be evaluated
-or used within the approved safety boundary.
+The legacy source adapters fail closed because they do not have an approved
+atomic directory-descriptor/`openat` path helper or a source-owned read-only
+structured interface. The separately approved Kim local reader proves bounded
+on-demand reads, but not durable synchronization. This does not prove that the
+remaining business capabilities are absent.
 
 Continuing would require unsafe or guessed source behavior and would violate the
 design. Therefore no work may pass G2 with partial or synthetic-only evidence.
@@ -167,18 +166,18 @@ No change to that process is authorized by this feature.
 
 ## Exact unblock conditions
 
-1. Provide a reviewed atomic directory-FD/`openat` helper, or a source-owned
-   read-only structured interface. Either is only a prerequisite, not a PASS.
-2. Re-run both live redacted probes through the reviewed path.
-3. Produce authoritative and stable live evidence for every required capability
-   for both sources. Partial evidence remains `BLOCK`.
+1. For WeChat, provide a reviewed atomic directory-FD/`openat` helper or a
+   source-owned read-only structured interface, then re-run its redacted probe.
+2. For Kim background ingestion, prove restart-safe change detection, late
+   arrivals, edits, retractions, and source mutation behavior.
+3. Re-evaluate overall G2 only after both remaining evidence sets pass. Partial
+   evidence remains `BLOCK`.
 
 ## Pending decision after reframe evidence
 
-No further product decision is required before writing the reframe investigation
-plan. After the isolated probes complete, the user must review the revised G2
-evidence. Continuing Task 7 or disabling the legacy capture path remains
-prohibited unless that review marks both sources `PASS`.
+No further product decision is required for the bounded on-demand Kim Skill.
+Continuing the original hub Task 7 or disabling the legacy capture path remains
+prohibited unless WeChat and durable Kim ingestion both pass G2.
 
 ## Deployment and acceptance
 
