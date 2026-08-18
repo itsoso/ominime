@@ -2,14 +2,15 @@
 
 ## Current status
 
-- Current stage: S3 feasibility and risk review.
-- Current decision: **BLOCKED at G2**.
+- Current stage: S3 feasibility and risk review, source-owned interface reframe.
+- Current decision: **G2 reframe approved; still BLOCKED at G2**.
 - Delivery guard: Task 7 and all downstream implementation are prohibited until
   G2 passes for both required chat sources.
 - Runtime guard: the existing legacy keyboard/OCR capture remains active and
   unchanged. No real service or deployment was modified.
 - Resume point: read this dossier, then the
   [source gate](../verification/chat-source-gate.md) and
+  [source-owned interface reframe](../plans/2026-08-18-source-owned-chat-interface-reframe-design.md), then the
   [implementation plan](../plans/2026-08-17-dsh-personal-context-hub-implementation.md).
 
 ## S0 Intake
@@ -59,6 +60,12 @@ connector contract, participation semantics, ASR integration, retrieval, GUI,
 and privacy constraints. It explicitly excludes OCR fallback, UI automation,
 event interception, clipboard modification, network capture, process injection,
 and guessed source facts.
+
+The approved
+[G2 reframe design](../plans/2026-08-18-source-owned-chat-interface-reframe-design.md)
+adds a feasibility-only investigation of the Kim internal open platform and
+WeChat-owned loopback listeners. It does not weaken the original exclusions or
+authorize downstream implementation.
 
 ## S3 Plan and feasibility evidence
 
@@ -117,6 +124,30 @@ or used within the approved safety boundary.
 Continuing would require unsafe or guessed source behavior and would violate the
 design. Therefore no work may pass G2 with partial or synthetic-only evidence.
 
+## Approved G2 reframe
+
+The user approved the following boundaries:
+
+- one-time enterprise SSO, application registration, and administrator approval
+  are acceptable if later operation is unattended;
+- dedicated test identities and an isolated macOS user are permitted;
+- an undocumented WeChat-owned loopback interface may receive bounded standard
+  protocol classification in the isolated environment;
+- protocol guessing, authentication bypass, process injection, and private
+  reverse engineering remain prohibited;
+- the selected approach is Kim internal-open-platform validation plus isolated
+  WeChat loopback classification.
+
+The reframe is documented in the
+[approved design](../plans/2026-08-18-source-owned-chat-interface-reframe-design.md).
+It creates a new evidence path but does not change the current G2 decision.
+
+Read-only research found no public personal-chat-history API for WeChat and no
+public local chat interface for Kim. The existing third-party Chatlog process is
+excluded because it is not source-owned, its upstream is unsupported after a
+compliance notice, and its observed launch model exposes sensitive arguments.
+No change to that process is authorized by this feature.
+
 ## Exact unblock conditions
 
 1. Provide a reviewed atomic directory-FD/`openat` helper, or a source-owned
@@ -125,12 +156,12 @@ design. Therefore no work may pass G2 with partial or synthetic-only evidence.
 3. Produce authoritative and stable live evidence for every required capability
    for both sources. Partial evidence remains `BLOCK`.
 
-## Pending user decision
+## Pending decision after reframe evidence
 
-The user must choose whether to keep the feature paused at G2 until a safe
-source-owned interface appears, or separately authorize a reviewed atomic-helper
-effort as a new feasibility scope. Continuing Task 7 or disabling the legacy
-capture path is not an available branch while G2 remains blocked.
+No further product decision is required before writing the reframe investigation
+plan. After the isolated probes complete, the user must review the revised G2
+evidence. Continuing Task 7 or disabling the legacy capture path remains
+prohibited unless that review marks both sources `PASS`.
 
 ## Deployment and acceptance
 
