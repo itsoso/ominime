@@ -198,7 +198,7 @@ function closedObject(required: readonly string[], properties: Record<string, un
 }
 
 const nullableStringSchema = {
-  anyOf: [{ type: 'string' }, { type: 'null' }],
+  oneOf: [{ type: 'string' }, { type: 'null' }],
 }
 
 const capabilityProperties = {
@@ -238,7 +238,7 @@ const statusSchema = closedObject(
     schemaVerified: { type: 'boolean' },
     capabilities: closedObject(Object.keys(capabilityProperties), capabilityProperties),
     error: {
-      anyOf: [
+      oneOf: [
         { type: 'null' },
         closedObject(['code'], { code: { type: 'string' } }),
       ],
@@ -251,7 +251,6 @@ const conversationsSchema = closedObject(
   {
     conversations: {
       type: 'array',
-      maxItems: 50,
       items: closedObject(
         ['conversationId', 'type', 'name', 'activeTimestampMs', 'activeAt', 'unreadCount'],
         {
@@ -273,7 +272,7 @@ const conversationsSchema = closedObject(
 const messagesSchema = closedObject(
   ['messages', 'page'],
   {
-    messages: { type: 'array', maxItems: 50, items: messageSchema },
+    messages: { type: 'array', items: messageSchema },
     page: closedObject(
       ['returned', 'hasMore', 'nextCursor'],
       {
@@ -292,7 +291,7 @@ const contextSchema = closedObject(
     beforeReturned: { type: 'integer' },
     afterReturned: { type: 'integer' },
     chronological: { type: 'boolean' },
-    messages: { type: 'array', maxItems: 101, items: messageSchema },
+    messages: { type: 'array', items: messageSchema },
   },
 )
 

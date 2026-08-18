@@ -173,6 +173,9 @@ describe('restricted Kim chat DSH tools', () => {
     for (const definition of tools.values()) {
       expect(definition.parameters).toMatchObject({ type: 'object', additionalProperties: false })
       expect(definition.output.schema).toMatchObject({ type: 'object', additionalProperties: false })
+      const outputSchema = JSON.stringify(definition.output.schema)
+      expect(outputSchema).not.toContain('"anyOf"')
+      expect(outputSchema).not.toContain('"maxItems"')
     }
   })
 

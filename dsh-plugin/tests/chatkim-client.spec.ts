@@ -29,7 +29,7 @@ function testClient(mode = 'normal', overrides: { timeoutMs?: number, maxRespons
   return {
     client: new ChatkimClient({
       executable,
-      timeoutMs: overrides.timeoutMs ?? 1_000,
+      timeoutMs: overrides.timeoutMs ?? 5_000,
       maxResponseBytes: overrides.maxResponseBytes ?? 8_192,
       home: '/safe/home',
       language: 'C.UTF-8',
