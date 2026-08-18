@@ -193,9 +193,112 @@ function identityVerifiedCapabilities() {
   }
 }
 
-function output() {
+function closedObject(required: readonly string[], properties: Record<string, unknown>) {
+  return { type: 'object', additionalProperties: false, required, properties }
+}
+
+const nullableStringSchema = {
+  anyOf: [{ type: 'string' }, { type: 'null' }],
+}
+
+const capabilityProperties = {
+  currentUserIdentity: { type: 'boolean' },
+  conversationIdentity: { type: 'boolean' },
+  stableMessageIdentity: { type: 'boolean' },
+  finalMessageText: { type: 'boolean' },
+  authoritativeSender: { type: 'boolean' },
+  timestampOrdering: { type: 'boolean' },
+  durableIncrementalSync: { type: 'boolean' },
+}
+
+const messageProperties = {
+  messageId: { type: 'string' },
+  providerMessageId: { type: 'string' },
+  timestampMs: { type: 'integer' },
+  timestamp: { type: 'string' },
+  authorId: { type: 'string' },
+  authorName: { type: 'string' },
+  direction: { type: 'string', enum: ['self', 'other', 'system'] },
+  conversationId: { type: 'string' },
+  conversationName: { type: 'string' },
+  conversationType: { type: 'string' },
+  text: { type: 'string' },
+  contentType: { type: 'integer' },
+  contentTypeName: { type: 'string' },
+}
+
+const messageSchema = closedObject(Object.keys(messageProperties), messageProperties)
+
+const statusSchema = closedObject(
+  ['status', 'adapterVersion', 'readOnly', 'schemaVerified', 'capabilities', 'error'],
+  {
+    status: { type: 'string', enum: ['healthy', 'disabled', 'degraded'] },
+    adapterVersion: { type: 'string' },
+    readOnly: { type: 'boolean' },
+    schemaVerified: { type: 'boolean' },
+    capabilities: closedObject(Object.keys(capabilityProperties), capabilityProperties),
+    error: {
+      anyOf: [
+        { type: 'null' },
+        closedObject(['code'], { code: { type: 'string' } }),
+      ],
+    },
+  },
+)
+
+const conversationsSchema = closedObject(
+  ['conversations', 'returned', 'hasMore', 'truncated'],
+  {
+    conversations: {
+      type: 'array',
+      maxItems: 50,
+      items: closedObject(
+        ['conversationId', 'type', 'name', 'activeTimestampMs', 'activeAt', 'unreadCount'],
+        {
+          conversationId: { type: 'string' },
+          type: { type: 'string' },
+          name: { type: 'string' },
+          activeTimestampMs: { type: 'integer' },
+          activeAt: nullableStringSchema,
+          unreadCount: { type: 'integer' },
+        },
+      ),
+    },
+    returned: { type: 'integer' },
+    hasMore: { type: 'boolean' },
+    truncated: { type: 'boolean' },
+  },
+)
+
+const messagesSchema = closedObject(
+  ['messages', 'page'],
+  {
+    messages: { type: 'array', maxItems: 50, items: messageSchema },
+    page: closedObject(
+      ['returned', 'hasMore', 'nextCursor'],
+      {
+        returned: { type: 'integer' },
+        hasMore: { type: 'boolean' },
+        nextCursor: nullableStringSchema,
+      },
+    ),
+  },
+)
+
+const contextSchema = closedObject(
+  ['anchorMessageId', 'beforeReturned', 'afterReturned', 'chronological', 'messages'],
+  {
+    anchorMessageId: { type: 'string' },
+    beforeReturned: { type: 'integer' },
+    afterReturned: { type: 'integer' },
+    chronological: { type: 'boolean' },
+    messages: { type: 'array', maxItems: 101, items: messageSchema },
+  },
+)
+
+function output(schema: Record<string, unknown>) {
   return {
-    schema: { type: 'object' },
+    schema,
     render: (_args: unknown, value: unknown) => [{ type: 'text' as const, text: JSON.stringify(value) }],
   }
 }
@@ -219,7 +322,7 @@ export function createKimChatToolDefinitions(source: KimChatGateway): KimChatToo
       name: 'kim_chat_status',
       description: 'Check whether the restricted local Kim chat reader is available and read-only.',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
-      output: output(),
+      output: output(statusSchema),
       timeoutMs: 10_000,
       async execute(args, exec) {
         exactObject(args, [])
@@ -259,7 +362,7 @@ export function createKimChatToolDefinitions(source: KimChatGateway): KimChatToo
           offset: { type: 'integer', minimum: 0, maximum: 10_000 },
         },
       },
-      output: output(),
+      output: output(conversationsSchema),
       timeoutMs: 10_000,
       async execute(args, exec) {
         try {
@@ -297,7 +400,7 @@ export function createKimChatToolDefinitions(source: KimChatGateway): KimChatToo
           cursor: { type: 'string', maxLength: 4_096 },
         },
       },
-      output: output(),
+      output: output(messagesSchema),
       timeoutMs: 10_000,
       async execute(args, exec) {
         try {
@@ -344,7 +447,7 @@ export function createKimChatToolDefinitions(source: KimChatGateway): KimChatToo
           after: { type: 'integer', minimum: 1, maximum: 50 },
         },
       },
-      output: output(),
+      output: output(contextSchema),
       timeoutMs: 10_000,
       async execute(args, exec) {
         try {

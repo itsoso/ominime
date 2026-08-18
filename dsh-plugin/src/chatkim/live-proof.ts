@@ -88,15 +88,20 @@ export async function probeKimChatCapabilities(
       }, signal), currentUser.userId)
       if (page.messages.length === 0) continue
 
-      capabilities.stableMessageIdentity = page.messages.every(message => message.messageId.length > 0)
-      capabilities.finalMessageText = page.messages.every(message => typeof message.text === 'string')
-      capabilities.authoritativeSender = page.messages.every(
-        message => message.direction === 'self' || message.direction === 'other' || message.direction === 'system',
+      capabilities.stableMessageIdentity ||= page.messages.every(message => message.messageId.length > 0)
+      capabilities.finalMessageText ||= page.messages.some(
+        message => message.contentType === 0 && message.text.trim().length > 0,
       )
-      capabilities.timestampOrdering = page.messages.every(
+      capabilities.authoritativeSender ||= page.messages.some(
+        message => message.direction !== 'system' && message.authorId.length > 0,
+      )
+      capabilities.timestampOrdering ||= page.messages.every(
         (message, index) => index === 0 || page.messages[index - 1]!.timestampMs <= message.timestampMs,
       )
-      break
+      if (capabilities.stableMessageIdentity
+        && capabilities.finalMessageText
+        && capabilities.authoritativeSender
+        && capabilities.timestampOrdering) break
     }
 
     const onDemandComplete = Object.entries(capabilities)

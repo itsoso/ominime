@@ -118,6 +118,36 @@ describe('redacted Kim chat live proof', () => {
     expect(report.failureCodes).toEqual(['KIM_CHAT_LIVE_PROOF_INCOMPLETE'])
   })
 
+  it('does not prove final text or sender from an empty system-only observation', async () => {
+    const source = gateway()
+    const original = source.callTool.getMockImplementation()!
+    source.callTool.mockImplementation(async (name: string, args: Record<string, unknown>, signal: AbortSignal) => {
+      if (name !== 'query_chat_log') return original(name, args, signal)
+      return {
+        messages: [{
+          id: 'private-message-id',
+          msg_id: 'provider-private-message-id',
+          timestamp_ms: 1_755_000_000_000,
+          date: '2025-08-10T00:00:00.000Z',
+          sender_id: '',
+          sender_name: '',
+          conversation_id: 'private-conversation-id',
+          conversation_name: 'Private Person',
+          conversation_type: 'private',
+          content: '',
+          content_type: 101,
+          content_type_name: 'system',
+        }],
+        pagination: { returned: 1, has_more: false, next_cursor: null },
+      }
+    })
+
+    const report = await probeKimChatCapabilities(source)
+    expect(report.gate).toBe('BLOCK')
+    expect(report.capabilities.finalMessageText).toBe(false)
+    expect(report.capabilities.authoritativeSender).toBe(false)
+  })
+
   it('converts unknown failures to one fixed redacted code', async () => {
     const source = gateway({ callTool: vi.fn(async () => { throw new Error('private failure detail') }) })
     const report = await probeKimChatCapabilities(source)

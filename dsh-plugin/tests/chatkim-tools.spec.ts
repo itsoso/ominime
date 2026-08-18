@@ -162,7 +162,7 @@ describe('restricted Kim chat DSH tools', () => {
     await cleanups[0]!()
   })
 
-  it('registers exactly four closed input schemas', () => {
+  it('registers exactly four closed input and output schemas', () => {
     const tools = definitions()
     expect([...tools.keys()].sort()).toEqual([
       'kim_chat_context',
@@ -172,6 +172,7 @@ describe('restricted Kim chat DSH tools', () => {
     ])
     for (const definition of tools.values()) {
       expect(definition.parameters).toMatchObject({ type: 'object', additionalProperties: false })
+      expect(definition.output.schema).toMatchObject({ type: 'object', additionalProperties: false })
     }
   })
 
