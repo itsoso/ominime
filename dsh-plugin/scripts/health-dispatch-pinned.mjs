@@ -38,7 +38,7 @@ export async function dispatchHealthPinned({ dshSource } = {}) {
     let call = 0
     const execute = argumentsValue => ctx.tools.execute({
       signal,
-      callId: llm.CallId(`personal-context-health-${call += 1}`),
+      callId: llm.ToolCallId(`personal-context-health-${call += 1}`),
       name: 'personal_context_health',
       arguments: argumentsValue,
     })
@@ -66,7 +66,7 @@ export async function dispatchHealthPinned({ dshSource } = {}) {
       dshVersion: PINNED_DSH_VERSION,
       dshCommit: PINNED_DSH_COMMIT,
       tool: 'personal_context_health',
-      dispatch: 'rc2 ToolRuntime',
+      dispatch: 'alpha ToolRuntime',
       invalidErrorInfo: 'absent',
       runtimeSkill: 'kim-chat-history',
     }

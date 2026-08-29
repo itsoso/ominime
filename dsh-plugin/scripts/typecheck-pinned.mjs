@@ -33,6 +33,9 @@ function compilerOptions(dshSource) {
       '@deepseek-ai/dsh-client-ui-conversation/client': [
         declaration(dshSource, 'packages/client/ui-conversation/lib/types/client/index.d.ts'),
       ],
+      '@deepseek-ai/dsh-client-ui-renderer/client': [
+        declaration(dshSource, 'packages/client/ui-renderer/lib/types/client/index.d.ts'),
+      ],
     },
   }
 }

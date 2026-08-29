@@ -1,11 +1,11 @@
 # DSH compatibility
 
-This scaffold targets DeepSeek Harness `0.1.1-rc.2` at source commit `73f7fe03bcf776e95f7840c7e398a90774290ac6`.
+This scaffold targets DeepSeek Harness `0.1.2-alpha.1` at source commit `7a0e4e30af7e9bcabe36f36bcafc71f217090aa9`.
 
 ## Verified extension points
 
-- The Host half follows `docs/cookbook/adding-a-tool.md` and registers the read-only `personal_context_health` definition through `ctx.tools.register(...)` with the `tools` service injected. The current rc2 G1 registered the definition with the real pinned `ToolRuntime` and executed both the success and invalid-argument paths.
-- The browser half contributes to the additive `conversation.view` list slot defined in `packages/client/ui-conversation/src/client/contract/slots.ts`. The pinned source describes this slot as one whole tab rendered one at a time and explicitly recommends it for adding a view without replacing `conversation.session`.
+- The Host half follows `docs/cookbook/adding-a-tool.md` and registers the read-only `personal_context_health` definition through `ctx.tools.register(...)` with the `tools` service injected. The current alpha G1 registers the definition with the real pinned `ToolRuntime` and executes both the success and invalid-argument paths.
+- The browser half imports the renderer-owned `ctx.slots` service type from `dsh-client-ui-renderer` and contributes to the additive `conversation.view` list slot defined in `packages/client/ui-conversation/src/client/contract/slots.ts`. The pinned source describes this slot as one whole tab rendered one at a time and explicitly recommends it for adding a view without replacing `conversation.session`.
 - Registration uses `ctx.slots.inject('conversation.view', ...)`, as required by `packages/client/AGENTS.md`, so it waits for the owner declaration and follows its lifecycle.
 - `lib/client.js` uses the `window.__ModuleLoader__.load({ id, factory })` handoff implemented by `packages/client/tsdown.client.ts` and consumed by `packages/client/modules/src/index.ts`.
 - The first out-of-tree view uses direct Chinese copy (`个人上下文`) rather than taking a dependency on the pinned locale service. This keeps the scaffold's dependency surface minimal; a complete locale namespace belongs with the later functional GUI, not this compatibility probe.
@@ -20,9 +20,9 @@ After `pnpm install`, run `pnpm run test:g1`. It deliberately continues past tra
 
 `pnpm run typecheck:pinned` and `pnpm run smoke:pinned` are also available as standalone proofs; each creates and removes its own fresh pinned build. Source discovery accepts `--dsh-source`, `DSH_SOURCE`, or the documented local default. No absolute path is committed.
 
-## Current rc2 verification
+## Current alpha verification
 
-On 2026-08-28, `pnpm run test:g1` passed against the clean pinned `0.1.1-rc.2` checkout with Node `24.19.0`:
+On 2026-08-29, `pnpm run test:g1` passed against the clean pinned `0.1.2-alpha.1` checkout with Node `24.19.0`:
 
 - The plugin build and all 312 unit tests passed.
 - Freshly built Host and client declarations accepted the production TypeScript sources.
@@ -30,7 +30,7 @@ On 2026-08-28, `pnpm run test:g1` passed against the clean pinned `0.1.1-rc.2` c
 - The local tarball installed into a unique temporary `DSH_HOME`; `--dump-config` exposed the `personal-context` Host row and package row, and the installed Host, client, probe, and Kim Skill artifacts were present.
 - The installed WeChat and legacy Kim snapshot probes returned only their expected fail-closed codes in the isolated home. This is artifact smoke evidence, not current Kim on-demand capability evidence.
 
-Therefore G1 is **PASS for local source and package compatibility with the pinned `0.1.1-rc.2` runtime**. All clone, typecheck, package, profile, and session roots used by the command were temporary and removed after completion. This run did not start a browser or claim a new rc2 GUI observation.
+Therefore G1 is **PASS for local source and package compatibility with the pinned `0.1.2-alpha.1` runtime**. All clone, typecheck, package, profile, and session roots used by the command were temporary and removed after completion. This run did not start a browser or claim a new alpha GUI observation.
 
 ## Historical rc5 GUI observation
 
@@ -54,7 +54,7 @@ See [`chat-source-gate.md`](../docs/verification/chat-source-gate.md) for the au
 
 ## Distribution constraint
 
-The manifest records every directly named DSH runtime package as an exact `0.1.1-rc.2` optional peer. G1 resolves the runtime from the clean local source commit above and builds it in a disposable clone; the repository does not commit a machine-specific `file:`/`link:` path. Build-time DSH imports remain type-only and runtime dependencies remain external.
+The manifest records every directly named DSH runtime package as an exact `0.1.2-alpha.1` optional peer. G1 resolves the runtime from the clean local source commit above and builds it in a disposable clone; the repository does not commit a machine-specific `file:`/`link:` path. Build-time DSH imports remain type-only and runtime dependencies remain external.
 
 Portable npm distribution remains **BLOCKED** until an independently verified registry or packaged-artifact path provides every exact peer. The PASS above is intentionally limited to the clean local checkout at the exact pinned commit and local tarball smoke; it is not a claim that a third party can reproduce the install from the public registry alone.
 

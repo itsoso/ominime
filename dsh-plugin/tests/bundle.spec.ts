@@ -40,17 +40,19 @@ describe('DSH bundle contract', () => {
       '@deepseek-ai/dsh-api-remotes',
       '@deepseek-ai/dsh-client-runtime',
       '@deepseek-ai/dsh-client-ui-conversation',
-      '@deepseek-ai/dsh-client-ui-slots',
+      '@deepseek-ai/dsh-client-ui-renderer',
       '@deepseek-ai/dsh-skill',
       '@deepseek-ai/dsh-tools',
     ]
     const directDshPeers = Object.entries(manifest.peerDependencies)
       .filter(([name]) => name === '@deepseek-ai/dsh' || name.startsWith('@deepseek-ai/dsh-'))
     expect(directDshPeers.map(([name]) => name).sort()).toEqual(expectedDshPeers.sort())
-    expect(directDshPeers.every(([, version]) => version === '0.1.1-rc.2')).toBe(true)
+    expect(directDshPeers.every(([, version]) => version === '0.1.2-alpha.1')).toBe(true)
     for (const name of expectedDshPeers) {
       expect(manifest.peerDependenciesMeta[name]).toEqual({ optional: true })
     }
+    expect(manifest.dsh.client.inject).toContain('@deepseek-ai/dsh-client-ui-renderer')
+    expect(manifest.dsh.client.inject).not.toContain('@deepseek-ai/dsh-client-ui-slots')
     expect(manifest.files).not.toContain('scripts/source-owned')
     expect(manifest.files.some((entry: string) => entry.startsWith('scripts/source-owned/'))).toBe(false)
     expect(manifest.exports['./probe-wechat']).toBeUndefined()
@@ -60,11 +62,11 @@ describe('DSH bundle contract', () => {
 
   it('pins the executable and documented DSH compatibility baseline', async () => {
     const { PINNED_DSH_COMMIT, PINNED_DSH_VERSION } = await import('../scripts/isolation.mjs')
-    expect(PINNED_DSH_VERSION).toBe('0.1.1-rc.2')
-    expect(PINNED_DSH_COMMIT).toBe('73f7fe03bcf776e95f7840c7e398a90774290ac6')
+    expect(PINNED_DSH_VERSION).toBe('0.1.2-alpha.1')
+    expect(PINNED_DSH_COMMIT).toBe('7a0e4e30af7e9bcabe36f36bcafc71f217090aa9')
     const text = readFileSync(resolve(root, 'DSH_COMPATIBILITY.md'), 'utf8')
-    expect(text).toContain('0.1.1-rc.2')
-    expect(text).toContain('73f7fe03bcf776e95f7840c7e398a90774290ac6')
+    expect(text).toContain('0.1.2-alpha.1')
+    expect(text).toContain('7a0e4e30af7e9bcabe36f36bcafc71f217090aa9')
   })
 
   it('builds the Host and browser artifacts at the exported paths', () => {
@@ -257,6 +259,9 @@ describe('DSH bundle contract', () => {
   it('provides a real pinned ToolRuntime health-dispatch proof', async () => {
     const proof = await import('../scripts/health-dispatch-pinned.mjs')
     expect(proof.dispatchHealthPinned).toBeTypeOf('function')
+    const source = readFileSync(resolve(root, 'scripts/health-dispatch-pinned.mjs'), 'utf8')
+    expect(source).toContain('llm.ToolCallId(')
+    expect(source).not.toContain('llm.CallId(')
   })
 
   it('collects every supported production TypeScript source with strict tree boundaries', async () => {
